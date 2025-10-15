@@ -1,0 +1,3 @@
+[submodule "aesthetic_evaluation"]
+	path = aesthetic_evaluation
+	url = https://github.com/domiciopereiraneto/aesthetic_evaluation
