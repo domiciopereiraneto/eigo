@@ -1,0 +1,20 @@
+seed_path: null  # Path to a file containing seeds (set to null if not using a file). If null, uses the 'seed' value below.
+seed: 42  # Default seed value for reproducibility
+prompt_per_categorie: 3  # Number of prompts to sample per category from the dataset
+prompt_sample_seed: 42  # Seed for sampling prompts from the dataset
+cuda: 0  # GPU device ID to use (e.g., 0 for the first GPU). If no GPU is available, falls back to CPU.
+predictor: 2  # Predictor type: 0 for SAM, 1 for LAION V1, 2 for LAION V2
+num_inference_steps: 4  # Number of inference steps for the diffusion model during image generation
+guidance_scale: 0  # Guidance scale for classifier-free guidance (set to 0 for no guidance)
+height: 512  # Height of the generated image in pixels
+width: 512  # Width of the generated image in pixels
+num_generations: 100  # Number of generations for the CMA-ES optimization process
+pop_size: 20  # Population size for CMA-ES optimization
+cmaes_variant: "sep"  # Variant of CMA-ES to use: "cmaes" (standard), "sep" (sep-CMA-ES), or "vd" (VD-CMA)
+sigma: 0.5  # Initial standard deviation for CMA-ES optimization
+alpha: 1.0  # Weight for the aesthetic score in the combined fitness function
+beta: 0.0  # Weight for the CLIP score in the combined fitness function
+max_aesthetic_score: 10  # Maximum possible aesthetic score (used for normalization)
+max_clip_score: 0.5  # Maximum possible CLIP score (used for normalization)
+model_id: "stabilityai/sdxl-turbo"  # Model ID for the Stable Diffusion XL pipeline
+results_folder: "results"  # Folder to save results, including
