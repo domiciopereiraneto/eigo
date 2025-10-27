@@ -1,9 +1,31 @@
 """
 CMA-ES-based optimization of text embeddings for image generation using SDXL.
-Uses CMA-ES (including standard CMA-ES, sep-CMA-ES, or VD-CMA) optimizer to modify 
-text embeddings while maximizing aesthetic and CLIP scores.
+
+This script employs the CMA-ES optimizer (including standard CMA-ES, sep-CMA-ES, or VD-CMA variants) to modify text embeddings while maximizing aesthetic and CLIP scores. It supports configuration through a YAML file and provides functionality for prompt sampling, image generation, and evaluation.
+
+Main Features:
+- Loads configuration parameters from a YAML file.
+- Samples prompts from a dataset and groups them by category.
+- Generates images using Stable Diffusion XL with optimized text embeddings.
+- Evaluates images using aesthetic and CLIP scores.
+- Saves results, including metrics and generated images, to an output folder.
+- Provides visualization of score evolution over generations.
+
+Dependencies:
+- PyTorch for deep learning operations.
+- diffusers for Stable Diffusion pipelines.
+- PIL for image processing.
+- datasets for loading prompt datasets.
+- matplotlib for plotting results.
+- pptx for generating PowerPoint presentations.
+- cma for CMA-ES optimization.
+
+Usage:
+Run the script with a configuration file specifying the parameters:
+    python cmaes.py --config path/to/config.yaml
 """
 
+# System imports
 import sys
 import os
 import shutil
@@ -15,6 +37,7 @@ parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 # Add the parent directory to sys.path to obtain access to the submodules
 sys.path.insert(0, parent_dir)
 
+# External imports - grouped by functionality
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -34,7 +57,8 @@ from datasets import load_dataset
 import clip
 import argparse
 
-# Add argument parsing
+# Argument parsing for configuration file
+# Allows specifying a custom configuration file path.
 parser = argparse.ArgumentParser(description='Run optimization with configuration file')
 parser.add_argument('--config', type=str, default="algorithms/config/config_cmaes.yaml",
                    help='Path to configuration YAML file')
@@ -43,7 +67,8 @@ args = parser.parse_args()
 # Use the provided config path or default
 config_path = args.config
 
-# Load configuration from YAML file
+# Load configuration parameters
+# Reads the YAML configuration file and extracts parameters for the optimization process.
 with open(config_path, 'r') as file:
     config = yaml.safe_load(file)
 
@@ -65,6 +90,8 @@ max_clip_score = config['max_clip_score']
 model_id = config['model_id']
 cmaes_variant = config['cmaes_variant']
 
+# Determine the predictor and CMA-ES variant names based on the configuration
+# Maps predictor indices and CMA-ES variants to their corresponding names.
 if predictor == 0:
     predictor_name = 'simulacra'
 elif predictor == 1:
@@ -83,6 +110,8 @@ elif cmaes_variant == "vd":
 else:
     raise ValueError(f"Unknown CMA-ES variant: {cmaes_variant}")
 
+# Set up the output folder
+# Creates the output directory and saves the configuration file for reproducibility.
 OUTPUT_FOLDER = f"{OUTPUT_FOLDER}/{method_save_name}_clip_{predictor_name}_sdxlturbo_{SEED}_a{int(alpha*100)}_b{int(beta*100)}"
 
 # Save the selected prompts and their categories to a text file in the results folder
@@ -90,10 +119,12 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 # Copy the YAML configuration file to the output folder
 shutil.copy(config_path, os.path.join(OUTPUT_FOLDER, "config_used.yaml"))
 
-# Check if a GPU is available and if not, use the CPU
+# Check device availability
+# Uses GPU if available, otherwise defaults to CPU.
 device = "cuda:" + cuda_n if torch.cuda.is_available() else "cpu"
 
 # Load the SDXL pipeline
+# Initializes the pipeline for image generation with gradient computation enabled.
 pipe = StableDiffusionXLPipeline.from_pretrained(
     model_id,
     torch_dtype=torch.float32,
@@ -101,9 +132,13 @@ pipe = StableDiffusionXLPipeline.from_pretrained(
 ).to(device)
 pipe.set_progress_bar_config(disable=True)
 
+# CLIP model setup
+# Loads the CLIP model for evaluating image-text similarity.
 clip_model_name = "ViT-L/14"  # CLIP model name
 clip_model, clip_preprocess = clip.load(clip_model_name, device=device)
 
+# Prompt dataset loading and preprocessing
+# Groups prompts by category and samples a specified number per category.
 prompt_dataset = load_dataset("nateraw/parti-prompts")["train"]
 
 N_PER_CATEGORY = config['prompt_per_categorie']  # Number of prompts to sample per category
@@ -126,8 +161,8 @@ for category, prompts in category_prompts.items():
     for prompt in sampled:
         selected_prompts_with_category.append((prompt, category))
 
-# Save the selected prompts and their categories to a text file in the results folder
-os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+# Save selected prompts to a file
+# Stores the sampled prompts and their categories for reference.
 prompt_list_path = os.path.join(OUTPUT_FOLDER, "selected_prompts.txt")
 with open(prompt_list_path, "w", encoding="utf-8") as f:
     for prompt, category in selected_prompts_with_category:
@@ -137,6 +172,7 @@ print(f"Saved selected prompts to {prompt_list_path}")
 print(f"Selected {len(selected_prompts_with_category)} prompts from {len(category_prompts)} categories.")
 
 # Initialize the aesthetic model
+# Loads the appropriate aesthetic model based on the predictor configuration.
 if predictor == 0:
     from aesthetic_evaluation.src import simulacra_rank_image
     aesthetic_model = simulacra_rank_image.SimulacraAesthetic(device)
@@ -152,6 +188,8 @@ elif predictor == 2:
 else:
     raise ValueError("Invalid predictor option.")
 
+# Seed handling
+# Initializes the random seed for reproducibility.
 if SEED_PATH is None:
     seed_list = [SEED]
 else:
@@ -160,6 +198,17 @@ else:
         seed_list = [int(line.strip()) for line in file]
 
 def generate_image_from_embeddings(prompt_embeds, pooled_prompt_embeds, seed):
+    """
+    Generate an image from the given prompt and pooled prompt embeddings.
+
+    Args:
+        prompt_embeds (torch.Tensor): The prompt embeddings.
+        pooled_prompt_embeds (torch.Tensor): The pooled prompt embeddings.
+        seed (int): The seed for random number generation.
+
+    Returns:
+        torch.Tensor: The generated image tensor.
+    """
     generator = torch.Generator(device=device).manual_seed(seed)
 
     out = pipe(
@@ -177,6 +226,15 @@ def generate_image_from_embeddings(prompt_embeds, pooled_prompt_embeds, seed):
     return image.to(device)
 
 def aesthetic_evaluation(image):
+    """
+    Evaluate the aesthetic quality of an image.
+
+    Args:
+        image (torch.Tensor): The image tensor of shape [H, W, C].
+
+    Returns:
+        torch.Tensor: The aesthetic score of the image.
+    """
     # image is a tensor of shape [H, W, C]
     # Convert to [N, C, H, W] and ensure it's in float32
     image_input = image.permute(2, 0, 1).to(torch.float32)  # [1, C, H, W]
@@ -229,6 +287,15 @@ def evaluate_clip_score(image_tensor, prompt):
     return clip_score
 
 def format_time(seconds):
+    """
+    Format the elapsed time in seconds to a human-readable string.
+
+    Args:
+        seconds (float): The elapsed time in seconds.
+
+    Returns:
+        str: The formatted time string.
+    """
     seconds = int(seconds)
     hours = seconds // 3600
     minutes = (seconds % 3600) // 60
@@ -241,6 +308,19 @@ def format_time(seconds):
         return f"{seconds}s"
 
 def evaluate(input_embedding, seed, embedding_shape, selected_prompt, save_path=None):
+    """
+    Evaluate the fitness of the given input embedding.
+
+    Args:
+        input_embedding (np.ndarray): The input embedding as a NumPy array.
+        seed (int): The random seed.
+        embedding_shape (list): The original shape of the text embeddings.
+        selected_prompt (str): The selected text prompt.
+        save_path (str): The path to save the generated image (optional).
+
+    Returns:
+        tuple: A tuple containing the fitness value and individual scores (aesthetic, CLIP, fitness_1, fitness_2).
+    """
     # x is a NumPy array representing the embedding vector
     # Convert it to a torch tensor
 
@@ -271,6 +351,16 @@ def evaluate(input_embedding, seed, embedding_shape, selected_prompt, save_path=
     return -fitness, aesthetic_score, clip_score, fitness_1, fitness_2 
 
 def main(seed, seed_number, selected_prompt, category, prompt_number):
+    """
+    The main function for optimizing text embeddings and generating images.
+
+    Args:
+        seed (int): The random seed.
+        seed_number (int): The seed number for tracking.
+        selected_prompt (str): The selected text prompt.
+        category (str): The category of the prompt.
+        prompt_number (int): The prompt number for tracking.
+    """
     torch.manual_seed(seed)
     np.random.seed(seed)
     random.seed(seed)
@@ -517,6 +607,18 @@ def main(seed, seed_number, selected_prompt, category, prompt_number):
     pil_image.save(f"{results_folder}/best_all.png")
 
 def plot_mean_std(x_axis, m_vec, std_vec, description, title=None, y_label=None, x_label=None):
+    """
+    Plot the mean and standard deviation with optional labels and title.
+
+    Args:
+        x_axis (iterable): The x-axis values.
+        m_vec (iterable): The mean values.
+        std_vec (iterable): The standard deviation values.
+        description (str): A description for the plot legend.
+        title (str): The title of the plot (optional).
+        y_label (str): The label for the y-axis (optional).
+        x_label (str): The label for the x-axis (optional).
+    """
     lower_bound = [M_new - Sigma for M_new, Sigma in zip(m_vec, std_vec)]
     upper_bound = [M_new + Sigma for M_new, Sigma in zip(m_vec, std_vec)]
 
@@ -530,6 +632,13 @@ def plot_mean_std(x_axis, m_vec, std_vec, description, title=None, y_label=None,
         plt.xlabel(x_label)
 
 def save_plot_results(results, results_folder):
+    """
+    Generate and save plots for the evolution of scores and losses over generations.
+
+    Args:
+        results (pd.DataFrame): The DataFrame containing the results data.
+        results_folder (str): The folder path to save the plots.
+    """
     # Plot main fitness evolution
     plt.figure(figsize=(10, 6))  # Increase figure size
     plot_mean_std(results['generation'], results['avg_fitness'], results['std_fitness'], "Fitness")
@@ -571,6 +680,12 @@ def save_plot_results(results, results_folder):
     plt.savefig(results_folder + "/clip_score_evolution.png")
 
 def aggregate_results():
+    """
+    Combine results from multiple runs and calculate summary statistics.
+
+    Aggregates fitness, aesthetic, and CLIP scores across different seeds and prompts.
+    Saves the aggregated results to an Excel file and generates summary plots.
+    """
     # Initialize aggregated_data as None
     aggregated_data = None
 
@@ -854,6 +969,8 @@ def aggregate_results():
     print(f"Presentation saved as {output_filename}")
 
 if __name__ == "__main__":
+    # Entry point for the script
+    # Parses arguments, loads configuration, and starts the optimization process.
     seed_number = 1
     for seed in seed_list:
         prompt_number = 1
@@ -864,4 +981,3 @@ if __name__ == "__main__":
             aggregate_results()
             prompt_number += 1
         seed_number += 1
-    

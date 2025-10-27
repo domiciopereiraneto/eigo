@@ -1,6 +1,27 @@
 """
 Gradient-based optimization of text embeddings for image generation using SDXL.
-Uses Adam optimizer to modify text embeddings while maximizing aesthetic and CLIP scores.
+
+This script uses the Adam optimizer to modify text embeddings while maximizing aesthetic and CLIP scores. It supports configuration through a YAML file and provides functionality for prompt sampling, image generation, and evaluation.
+
+Main Features:
+- Loads configuration parameters from a YAML file.
+- Samples prompts from a dataset and groups them by category.
+- Generates images using Stable Diffusion XL with optimized text embeddings.
+- Evaluates images using aesthetic and CLIP scores.
+- Saves results, including metrics and generated images, to an output folder.
+- Provides visualization of score evolution over iterations.
+
+Dependencies:
+- PyTorch for deep learning operations.
+- diffusers for Stable Diffusion pipelines.
+- PIL for image processing.
+- datasets for loading prompt datasets.
+- matplotlib for plotting results.
+- pptx for generating PowerPoint presentations.
+
+Usage:
+Run the script with a configuration file specifying the parameters:
+    python adam.py --config path/to/config.yaml
 """
 
 # System imports
@@ -9,10 +30,11 @@ import os
 import shutil
 
 # Add parent directory to Python path for module imports
+# This allows importing modules from the parent directory.
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, parent_dir)
 
-# External imports - consider grouping by functionality
+# External imports - grouped by functionality
 import yaml 
 import torch
 import torch.nn.functional as F
@@ -31,7 +53,8 @@ from pptx import Presentation
 from pptx.util import Inches
 import argparse
 
-# Add argument parsing
+# Argument parsing for configuration file
+# Allows specifying a custom configuration file path.
 parser = argparse.ArgumentParser(description='Run optimization with configuration file')
 parser.add_argument('--config', type=str, default="algorithms/config/config_adam.yaml",
                    help='Path to configuration YAML file')
@@ -40,6 +63,8 @@ args = parser.parse_args()
 # Use the provided config path or default
 config_path = args.config
 
+# Load configuration parameters
+# Reads the YAML configuration file and extracts parameters for the optimization process.
 with open(config_path, 'r') as file:
     config = yaml.safe_load(file)
 
@@ -64,6 +89,8 @@ adam_eps = float(config['adam_eps'])
 adam_beta1 = float(config['adam_beta1'])
 adam_beta2 = float(config['adam_beta2'])
 
+# Determine the predictor name based on the configuration
+# Maps predictor indices to their corresponding names.
 if predictor == 0:
     predictor_name = 'simulacra'
 elif predictor == 1:
@@ -73,6 +100,8 @@ elif predictor == 2:
 else:
     raise ValueError("Invalid predictor option.")
 
+# Set up the output folder
+# Creates the output directory and saves the configuration file for reproducibility.
 OUTPUT_FOLDER = f"{OUTPUT_FOLDER}/adam_clip_{predictor_name}_sdxlturbo_{SEED}_a{int(alpha*100)}_b{int(beta*100)}"
 
 # Save the loaded config to a txt file in the output folder
@@ -80,10 +109,12 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 # Copy the YAML configuration file to the output folder
 shutil.copy(config_path, os.path.join(OUTPUT_FOLDER, "config_used.yaml"))
 
-# Check if a GPU is available and if not, use the CPU
+# Check device availability
+# Uses GPU if available, otherwise defaults to CPU.
 device = "cuda:" + cuda_n if torch.cuda.is_available() else "cpu"
 
 # Load the Stable Diffusion pipeline
+# Initializes the pipeline for image generation with gradient computation enabled.
 pipe = StableDiffusionXLPipeline.from_pretrained(
     model_id,
     torch_dtype=torch.float32,
@@ -97,11 +128,13 @@ call_with_grad = pipe.__class__.__call__.__wrapped__.__get__(pipe, pipe.__class_
 # Add warning about computational overhead
 #torch.autograd.set_detect_anomaly(True)  # Warning: This may impact performance
 
-# CLIP setup
+# CLIP model setup
+# Loads the CLIP model for evaluating image-text similarity.
 clip_model_name = "ViT-L/14"
 clip_model, clip_preprocess = clip.load(clip_model_name, device=device)
 
 # Prompt dataset loading and preprocessing
+# Groups prompts by category and samples a specified number per category.
 prompt_dataset = load_dataset("nateraw/parti-prompts")["train"]
 
 N_PER_CATEGORY = config['prompt_per_categorie']  # Number of prompts to sample per category
@@ -133,6 +166,7 @@ with open(prompt_list_path, "w", encoding="utf-8") as f:
 print(f"Saved selected prompts to {prompt_list_path}")
 
 # Initialize the aesthetic model
+# Loads the appropriate aesthetic model based on the predictor configuration.
 if predictor == 0:
     from aesthetic_evaluation.src import simulacra_rank_image
     aesthetic_model = simulacra_rank_image.SimulacraAesthetic(device)
@@ -154,6 +188,8 @@ else:
     with open(SEED_PATH, 'r') as file:
         seed_list = [int(line.strip()) for line in file]
 
+# Generate images from text embeddings
+# Defines a function to create images using the Stable Diffusion pipeline.
 def generate_image_from_embeddings(text_embeddings, seed):
     generator = torch.Generator(device=device).manual_seed(seed)
 
@@ -174,6 +210,8 @@ def generate_image_from_embeddings(text_embeddings, seed):
     image = out.clamp(0, 1).squeeze(0).permute(1, 2, 0)      # HWC
     return image.to(device)
 
+# Evaluate aesthetic score
+# Computes the aesthetic score for a given image tensor.
 def aesthetic_evaluation(image):
     # image is a tensor of shape [H, W, C]
     image_input = image.permute(2, 0, 1).to(torch.float32)  # [1, C, H, W]
@@ -192,6 +230,8 @@ def aesthetic_evaluation(image):
 # CLIP (ViT-L/14) image norm
 _CLIP_MEAN = torch.tensor([0.48145466, 0.4578275, 0.40821073]).view(1,3,1,1)
 _CLIP_STD  = torch.tensor([0.26862954, 0.26130258, 0.27577711]).view(1,3,1,1)
+# Evaluate CLIP score
+# Computes the similarity between image and text features using the CLIP model.
 def evaluate_clip_score(image_tensor, text_features):
     """
     image_tensor: [H, W, C], float in [0,1], requires_grad=True
@@ -215,6 +255,8 @@ def evaluate_clip_score(image_tensor, text_features):
     sim = (image_features @ text_features.T).squeeze()  # scalar
     return sim
 
+# Format time for logging
+# Converts elapsed time in seconds to a human-readable format.
 def format_time(seconds):
     seconds = int(seconds)
     hours = seconds // 3600
@@ -227,6 +269,8 @@ def format_time(seconds):
     else:
         return f"{seconds}s"
 
+# Main optimization loop
+# Iterates through the optimization process, updating text embeddings to maximize scores.
 def main(seed, seed_number, selected_prompt, category, prompt_number):
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -355,6 +399,8 @@ def main(seed, seed_number, selected_prompt, category, prompt_number):
     pil_image = Image.fromarray(best_image_np)
     pil_image.save(f"{results_folder}/best_all.png")
 
+# Plot results
+# Generates and saves plots for the evolution of scores and losses over iterations.
 def plot_results(results, results_folder):
     plt.figure(figsize=(10, 6))  # Increase figure size
     plt.plot(results['iteration'], results['aesthetic_score'], label="Aesthetic Score")
@@ -403,6 +449,8 @@ def plot_mean_std(x_axis, m_vec, std_vec, description, title=None, y_label=None,
     if x_label is not None:
         plt.xlabel(x_label)
 
+# Aggregate results
+# Combines results from multiple runs and calculates summary statistics.
 def aggregate_results():
     # Initialize aggregated_data as None
     aggregated_data = None
@@ -671,6 +719,8 @@ def aggregate_results():
     print(f"Presentation saved as {output_filename}")
 
 if __name__ == "__main__":
+    # Entry point for the script
+    # Parses arguments, loads configuration, and starts the optimization process.
     seed_number = 1
     for seed in seed_list:
         prompt_number = 1
