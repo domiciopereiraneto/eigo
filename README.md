@@ -40,7 +40,7 @@ Ensure you have [Conda](https://docs.conda.io/) installed on your system.
 For an interactive introduction and demonstration, see the provided Jupyter notebook:
 
 ```bash
-jupyter notebook EIGO_demo.ipynb
+jupyter notebook eigo_ex.ipynb
 ```
 
 The notebook walks through setting up the environment, running optimization algorithms, and visualizing results. It is ideal for experimentation and understanding EIGO's workflow without writing code from scratch.
