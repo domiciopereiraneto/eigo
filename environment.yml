@@ -25,3 +25,4 @@ dependencies:
       - torch==2.8.0
       - transformers==4.55.2
       - torchvision==0.23.*
+      - deap==1.4.3
