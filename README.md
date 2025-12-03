@@ -47,19 +47,26 @@ The notebook walks through setting up the environment, running optimization algo
 
 The repository contains two main optimization algorithms for text-to-image generation using SDXL:
 
-1. Adam optimization ([adam.py](algorithms/adam.py))
-2. CMA-ES-based optimization ([cmaes.py](algorithms/cmaes.py))
+1. Adam optimization 
+2. CMA-ES-based optimization
+
+Run 
+```` bash
+# Set the configurations in algorithms/config/config_eigo.yaml
+
+python algorithms/config/config_eigo.yaml
+````
 
 ### Running Optimization Experiments
 
-Each algorithm can be run using its respective Python script with a configuration file:
+Each algorithm can be run for a set of Parti Prompts (P2) prompts using its respective Python script with a configuration file:
 
 ```bash
 # Run Adam optimization
-python algorithms/adam.py --config algorithms/config/config_adam.yaml
+python algorithms/adam_p2.py --config algorithms/config/config_adam_p2.yaml
 
 # Run CMA-ES optimization
-python algorithms/cmaes.py --config algorithms/config/config_cmaes.yaml
+python algorithms/cmaes_p2.py --config algorithms/config/config_cmaes_p2.yaml
 ```
 
 These experiments are set to execute a number of runs (one per seed) for a set of 

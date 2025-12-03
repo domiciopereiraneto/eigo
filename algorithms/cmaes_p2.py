@@ -60,7 +60,7 @@ import argparse
 # Argument parsing for configuration file
 # Allows specifying a custom configuration file path.
 parser = argparse.ArgumentParser(description='Run optimization with configuration file')
-parser.add_argument('--config', type=str, default="algorithms/config/config_cmaes.yaml",
+parser.add_argument('--config', type=str, default="algorithms/config/config_cmaes_p2.yaml",
                    help='Path to configuration YAML file')
 args = parser.parse_args()
 

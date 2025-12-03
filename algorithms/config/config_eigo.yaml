@@ -1,0 +1,32 @@
+# Primary configuration parameters
+"selected_prompt": "an astrounat riding a horse in mars" # Text prompt to guide image generation
+"optimization_method": "cmaes" #"cmaes" for CMA-ES variants "adam" for Adam
+
+# General parameters
+"seed": 42  # Default seed value for reproducibility
+"cuda": 0  # GPU device ID to use (e.g. 0 for the first GPU). If no GPU is available falls back to CPU.
+"predictor": 2  # Predictor type= 0 for SAM 1 for LAION V1 2 for LAION V2
+"num_inference_steps": 1  # Number of inference steps for the diffusion model during image generation
+"guidance_scale": 0  # Guidance scale for classifier-free guidance (set to 0 for no guidance)
+"height": 512  # Height of the generated image in pixels
+"width": 512  # Width of the generated image in pixels
+"alpha": 0.7  # Weight for the aesthetic score in the combined fitness function
+"beta": 0.3  # Weight for the CLIP score in the combined fitness function
+"max_aesthetic_score": 10  # Maximum possible aesthetic score (used for normalization)
+"max_clip_score": 0.5  # Maximum possible CLIP score (used for normalization)
+"model_id": "stabilityai/sdxl-turbo"  # Model ID for the Stable Diffusion XL pipeline
+"results_folder": "results"  # Folder to save results including
+
+# CMA-ES specific parameters (if selected)
+"num_generations": 50  # Number of generations for the CMA-ES optimization process
+"pop_size": 10  # Population size for CMA-ES optimization
+"cmaes_variant": "sep"  # Variant of CMA-ES to use: "cmaes" (standard) "sep" (sep-CMA-ES) or "vd" (VD-CMA)
+"sigma": 0.5  # Initial standard deviation for CMA-ES optimization
+
+# Adam specific parameters (if selected)
+"num_iterations": 1000  # Number of iterations for the Adam optimization process
+"adam_lr": 5e-3  # Learning rate for the Adam optimizer
+"adam_weight_decay": 1e-05  # Weight decay for the Adam optimizer
+"adam_eps": 1e-8  # Epsilon value for numerical stability in the Adam
+"adam_beta1": 0.85  # Beta1 parameter for the Adam optimizer
+"adam_beta2": 0.98  # Beta2 parameter for the Adam optimizer
