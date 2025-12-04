@@ -8,19 +8,12 @@ num_inference_steps: 1  # Number of inference steps for the diffusion model duri
 guidance_scale: 0  # Guidance scale for classifier-free guidance (set to 0 for no guidance)
 height: 512  # Height of the generated image in pixels
 width: 512  # Width of the generated image in pixels
-num_generations: 100  # Number of generations for the optimization process
-pop_size: 20  # Population size for the genetic algorithm
-pop_init: "random"  # Population initialization method: "empty" or "mutated"
+model_id: "stabilityai/sdxl-turbo"  # Model ID for the Stable Diffusion XL pipeline
+results_folder: "results"  # Folder to save results
+
+# Comparison-specific parameters
 alpha: 0.6  # Weight for the aesthetic score in the combined fitness function
 beta: 0.4  # Weight for the CLIP score in the combined fitness function
 max_aesthetic_score: 10  # Maximum possible aesthetic score (used for normalization)
 max_clip_score: 0.5  # Maximum possible CLIP score (used for normalization)
-model_id: "stabilityai/sdxl-turbo"  # Model ID for the Stable Diffusion XL pipeline
-results_folder: "results"  # Folder to save results
-
-# Genetic Algorithm-specific parameters
-ind_mutation_prob: 0.2  # Probability of mutating each individual
-tournment_size: 3  # Tournament size for selection
-elitism: 1  # Number of elite individuals to retain per generation
-mutation_prob: 0.9  # Probability of applying mutation to offspring
-crossover_prob: 0.7  # Probability of applying crossover to offspring
+clip_model_name: "ViT-L/14"  # CLIP model name used for evaluation

@@ -1,40 +1,25 @@
 # Define source directories containing the result folders
 source_dirs: [
-  "results_v4/adam_clip_laionv2_sdxlturbo_42_a100_b0",
-  "results_v4/adam_clip_laionv2_sdxlturbo_42_a50_b50",
-  "results_v4/adam_clip_laionv2_sdxlturbo_42_a0_b100",
-  "results_v4/sepcmaes_clip_laionv2_sdxlturbo_42_a100_b0",
-  "results_v4/sepcmaes_clip_laionv2_sdxlturbo_42_a50_b50",
-  "results_v4/sepcmaes_clip_laionv2_sdxlturbo_42_a0_b100",
-  "results_v4/hybridsep_20adamsteps_clip_laionv2_sdxlturbo_42_a100_b0",
-  "results_v4/hybridsep_20adamsteps_clip_laionv2_sdxlturbo_42_a50_b50",
-  "results_v4/hybridsep_20adamsteps_clip_laionv2_sdxlturbo_42_a0_b100",
+  "results/ga_mutated_clip_laionv2_sdxlturbo_42_a60_b40",
+  "results/ga_empty_clip_laionv2_sdxlturbo_42_a60_b40",
+  "results/promptist_clip_laionv2_sdxlturbo_42_a60_b40",
   ]
 # Define display names for each of the above methods
 method_names: [
-  "Initial Embedding", # Baseline, do not change
-  #"Adam",
-  "Adam a=1.0, b=0.0",
-  "Adam a=0.5, b=0.5",
-  "Adam a=0.0, b=1.0",
-  #"sep-CMA-ES",
-  "sep-CMA-ES a=1.0, b=0.0",
-  "sep-CMA-ES a=0.5, b=0.5",
-  "sep-CMA-ES a=0.0, b=1.0",
-  #"Hybrid (20 steps)",
-  "Hybrid (20 steps) a=1.0, b=0.0",
-  "Hybrid (20 steps) a=0.5, b=0.5",
-  "Hybrid (20 steps) a=0.0, b=1.0",
+  "Initial Prompt", # Baseline, do not change
+  "GA Mutated",
+  "GA Empty",
+  "Promptist",
 ]
 
 algorithm_labels: [
     ["baseline", "SDXL Turbo (no optimization)"],
-    ["adam", "Adam"],
-    ["sepcmaes", "sep-CMA-ES"],
-    ["hybridsep_20", "Hybrid (20 steps)"],
+    ["ga_mutated", "GA Mutated"],
+    ["ga_empty", "GA Empty"],
+    ["promptist", "Promptist"],
 ]
 
-save_folder: "results_processed_v4"
+save_folder: "results_processed_tokens"
 
 aesthetic_max: 10.0
 clip_max: 0.5

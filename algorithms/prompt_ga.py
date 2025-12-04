@@ -54,6 +54,7 @@ height = config['height']
 width = config['width']
 OUTPUT_FOLDER = config['results_folder']
 NUM_GENERATIONS = config['num_generations']
+POP_INIT = config['pop_init']
 POP_SIZE = config['pop_size']
 IND_MUTATION_PROB = config['ind_mutation_prob']
 TOURNMENT_SIZE = config['tournment_size']
@@ -81,7 +82,7 @@ method_save_name = 'ga'
 
 # Set up the output folder
 # Creates the output directory and saves the configuration file for reproducibility.
-OUTPUT_FOLDER = f"{OUTPUT_FOLDER}/{method_save_name}_clip_{predictor_name}_sdxlturbo_{SEED}_a{int(alpha*100)}_b{int(beta*100)}"
+OUTPUT_FOLDER = f"{OUTPUT_FOLDER}/{method_save_name}_{POP_INIT}_clip_{predictor_name}_sdxlturbo_{SEED}_a{int(alpha*100)}_b{int(beta*100)}"
 
 # Save the selected prompts and their categories to a text file in the results folder
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
@@ -376,8 +377,28 @@ def main(seed, seed_number, selected_prompt, category, prompt_number):
         mutated_individual = mutated_individual[:VECTOR_SIZE]
         return creator.Individual(mutated_individual)
 
+    def create_empty_individual():
+        # Create a VECTOR_SIZE sized individual with padding tokens
+        padding_token = pipe.tokenizer.pad_token_id
+        individual = [padding_token] * VECTOR_SIZE
+        return creator.Individual(individual)
+
+    def create_random_individual():
+        individual = [random.randint(MIN_VALUE, MAX_VALUE) for _ in range(VECTOR_SIZE)]
+        return creator.Individual(individual)
+
+    if POP_INIT == 'empty':
+        # Register the population initialization function with empty individuals
+        toolbox.register("individual", create_empty_individual)
+    elif POP_INIT == 'mutated':
+        # Register the population initialization function with mutated individuals
+        toolbox.register("individual", create_individual_from_initial_vector, initial_token_vector["input_ids"])
+    elif POP_INIT == 'random':
+        toolbox.register("individual", create_random_individual)
+    else:
+        raise ValueError("Invalid POP_INIT option. Choose 'empty' or 'mutated'.")
+    
     # Register the population initialization function
-    toolbox.register("individual", create_individual_from_initial_vector, initial_token_vector["input_ids"])
     toolbox.register("population", tools.initRepeat, list, toolbox.individual)
     toolbox.register("evaluate", evaluate, seed=seed, selected_prompt=selected_prompt)
 
@@ -546,7 +567,7 @@ def main(seed, seed_number, selected_prompt, category, prompt_number):
             "elapsed_time": time_list
         })
 
-        results.to_csv(f"{results_folder}/fitness_results.csv", index=False, na_rep='nan')
+        results.to_csv(f"{results_folder}/fitness_results.csv", index=False, na_rep='nan', escapechar='\\')
 
         # Plot and save the fitness evolution
         save_plot_results(results, results_folder)
@@ -941,3 +962,4 @@ if __name__ == "__main__":
             aggregate_results()
             prompt_number += 1
         seed_number += 1
+        #aggregate_results()

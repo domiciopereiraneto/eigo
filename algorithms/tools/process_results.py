@@ -12,6 +12,7 @@ from algorithms.tools.src.image_grid import create_image_grid
 from algorithms.tools.src.prompt_category_analysis import create_prompt_category_results_comparison
 from algorithms.tools.src.distance_table import create_distance_table_and_plots
 from algorithms.tools.src.evolution_plots import create_evolution_plots
+from algorithms.tools.src.final_prompts import create_best_prompts_table
 
 # Add argument parsing
 parser = argparse.ArgumentParser(description='Process results with configuration file')
@@ -37,22 +38,26 @@ clip_max = config.get('clip_max', 0.5)
 if not os.path.exists(save_folder):
     os.makedirs(save_folder)
 
+# GENERATE BEST PROMPTS COMPARISON TABLE
+# ===============================
+create_best_prompts_table(source_dirs, save_folder, algo_labels)
+
 # GENERATE TABLE WITH AESTHETIC, CLIP AND FITNESS RESULTS AMONG DIFFERENT METHODS
 # ===============================
-create_summary_table(source_dirs, save_folder, algo_labels, aesthetic_max, clip_max)
+#create_summary_table(source_dirs, save_folder, algo_labels, aesthetic_max, clip_max)
 
 # GENERATE EVOLUTION PLOTS PER WEIGHT COMBINATION
 # ===============================
-create_evolution_plots(source_dirs, save_folder, algo_labels, aesthetic_max, clip_max)
+#create_evolution_plots(source_dirs, save_folder, algo_labels, aesthetic_max, clip_max)
 
 # GENERATE IMAGE GRID WITH THE BEST IMAGES FOR EACH METHOD
 # ===============================
-create_image_grid(source_dirs, method_names, save_folder)
+#create_image_grid(source_dirs, method_names, save_folder)
 
 # GENERATE COMPARISON OF PROMPTS AND CATEGORIES
 # ===============================
-create_prompt_category_results_comparison(source_dirs, save_folder)
+#create_prompt_category_results_comparison(source_dirs, save_folder)
 
 # GENERATE DISTANCE TABLE + GROUPED PLOTS
 # ===============================
-create_distance_table_and_plots(source_dirs, save_folder, algo_labels)
+#create_distance_table_and_plots(source_dirs, save_folder, algo_labels)
