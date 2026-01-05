@@ -40,7 +40,7 @@ if not os.path.exists(save_folder):
 
 # GENERATE BEST PROMPTS COMPARISON TABLE
 # ===============================
-create_best_prompts_table(source_dirs, save_folder, algo_labels)
+#create_best_prompts_table(source_dirs, save_folder, algo_labels)
 
 # GENERATE TABLE WITH AESTHETIC, CLIP AND FITNESS RESULTS AMONG DIFFERENT METHODS
 # ===============================
@@ -48,7 +48,7 @@ create_best_prompts_table(source_dirs, save_folder, algo_labels)
 
 # GENERATE EVOLUTION PLOTS PER WEIGHT COMBINATION
 # ===============================
-#create_evolution_plots(source_dirs, save_folder, algo_labels, aesthetic_max, clip_max)
+create_evolution_plots(source_dirs, save_folder, algo_labels, aesthetic_max, clip_max)
 
 # GENERATE IMAGE GRID WITH THE BEST IMAGES FOR EACH METHOD
 # ===============================

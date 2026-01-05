@@ -1,14 +1,18 @@
 # Define source directories containing the result folders
 source_dirs: [
-  "results/ga_mutated_clip_laionv2_sdxlturbo_42_a60_b40",
-  "results/ga_empty_clip_laionv2_sdxlturbo_42_a60_b40",
-  "results/promptist_clip_laionv2_sdxlturbo_42_a60_b40",
+  "results/ga_mutated_clip_laionv2_sdxlturbo_42_a40_b60",
+  "results/ga_empty_clip_laionv2_sdxlturbo_42_a40_b60",
+  "results/ga_random_clip_laionv2_sdxlturbo_42_a40_b60",
+  "results/random_search_clip_laionv2_sdxlturbo_42_a40_b60",
+  "results/promptist_clip_laionv2_sdxlturbo_42_a40_b60",
   ]
 # Define display names for each of the above methods
 method_names: [
   "Initial Prompt", # Baseline, do not change
   "GA Mutated",
   "GA Empty",
+  "GA Random",
+  "Random Search",
   "Promptist",
 ]
 
@@ -16,10 +20,12 @@ algorithm_labels: [
     ["baseline", "SDXL Turbo (no optimization)"],
     ["ga_mutated", "GA Mutated"],
     ["ga_empty", "GA Empty"],
+    ["ga_random", "GA Random"],
+    ["random_search", "Random Search"],
     ["promptist", "Promptist"],
 ]
 
-save_folder: "results_processed_tokens"
+save_folder: "results_processed_tokens_v2"
 
 aesthetic_max: 10.0
 clip_max: 0.5

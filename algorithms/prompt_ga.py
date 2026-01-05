@@ -425,8 +425,8 @@ def main(seed, seed_number, selected_prompt, category, prompt_number):
 
     best_prompt_list = [selected_prompt]
 
-    max_fit_list = [-initial_fitness]
-    avg_fit_list = [-initial_fitness]
+    max_fit_list = [initial_fitness]
+    avg_fit_list = [initial_fitness]
     std_fit_list = [0]
 
     max_aesthetic_score_list = [initial_aesthetic_score]
@@ -448,7 +448,7 @@ def main(seed, seed_number, selected_prompt, category, prompt_number):
     for gen in range(NUM_GENERATIONS):
         print(f"Generation {generation+1}/{NUM_GENERATIONS}")
 
-        os.makedirs(results_folder+"/gen_%d" % (generation+1), exist_ok=True)
+        #os.makedirs(results_folder+"/gen_%d" % (generation+1), exist_ok=True)
 
         # Evaluation metrics storage
         tmp_fitnesses = []
@@ -543,6 +543,12 @@ def main(seed, seed_number, selected_prompt, category, prompt_number):
 
         time_list.append(elapsed_time)
 
+        # Clean any embedded NUL characters that might appear after detokenization
+        def _sanitize_prompt(text):
+            if isinstance(text, str):
+                return text.replace('\x00', '')
+            return text
+
         # Save the metrics
         results = pd.DataFrame({
             "generation": list(range(0, generation + 1)),
@@ -563,11 +569,17 @@ def main(seed, seed_number, selected_prompt, category, prompt_number):
             "avg_clip_score": avg_clip_score_list,
             "std_clip_score": std_clip_score_list,
             "max_clip_score": max_clip_score_list,
-            "best_prompt": best_prompt_list,
+            "best_prompt": [_sanitize_prompt(p) for p in best_prompt_list],
             "elapsed_time": time_list
         })
 
-        results.to_csv(f"{results_folder}/fitness_results.csv", index=False, na_rep='nan', escapechar='\\')
+        results.to_csv(
+            f"{results_folder}/fitness_results.csv",
+            index=False,
+            na_rep='nan',
+            quoting=csv.QUOTE_NONNUMERIC,
+            escapechar='\\'  # ensure special characters can be escaped when quoting
+        )
 
         # Plot and save the fitness evolution
         save_plot_results(results, results_folder)
