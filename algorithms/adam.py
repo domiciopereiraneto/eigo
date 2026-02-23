@@ -88,6 +88,7 @@ adam_weight_decay = float(config['adam_weight_decay'])
 adam_eps = float(config['adam_eps'])
 adam_beta1 = float(config['adam_beta1'])
 adam_beta2 = float(config['adam_beta2'])
+time_limit_seconds = config.get('time_limit_seconds')
 
 # Determine the predictor name based on the configuration
 # Maps predictor indices to their corresponding names.
@@ -329,6 +330,14 @@ def main(seed, seed_number, selected_prompt, category, prompt_number):
     clip_score_list = [clip_score.item()]
 
     for iteration in range(1, NUM_ITERATIONS + 1):
+        elapsed_time = time.time() - start_time
+        if time_limit_seconds is not None and elapsed_time >= time_limit_seconds:
+            print(
+                "Time limit reached before starting iteration "
+                f"{iteration}/{NUM_ITERATIONS} (elapsed: {format_time(elapsed_time)})."
+            )
+            break
+
         print(f"Iteration {iteration}/{NUM_ITERATIONS}")
 
         optimizer.zero_grad()
@@ -356,10 +365,11 @@ def main(seed, seed_number, selected_prompt, category, prompt_number):
         combined_score_list.append(combined_score.item())
         combined_loss_list.append(combined_loss.item())
 
-        image_np = image.detach().clone().cpu().numpy()
-        image_np = (image_np * 255).astype(np.uint8)
-        pil_image = Image.fromarray(image_np)
-        pil_image.save(f"{results_folder}/it_{iteration}.png")
+        #temp
+        #image_np = image.detach().clone().cpu().numpy()
+        #image_np = (image_np * 255).astype(np.uint8)
+        #pil_image = Image.fromarray(image_np)
+        #pil_image.save(f"{results_folder}/it_{iteration}.png")
 
         elapsed_time = time.time() - start_time
         iterations_done = iteration

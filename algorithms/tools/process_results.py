@@ -33,6 +33,7 @@ algo_labels = config.get('algorithm_labels', [])
 algo_labels = [tuple(label) for label in algo_labels] 
 aesthetic_max = config.get('aesthetic_max', 10.0)
 clip_max = config.get('clip_max', 0.5)
+prompt_indices = config.get('prompt_indices', [])
 
 
 if not os.path.exists(save_folder):
@@ -48,11 +49,11 @@ if not os.path.exists(save_folder):
 
 # GENERATE EVOLUTION PLOTS PER WEIGHT COMBINATION
 # ===============================
-create_evolution_plots(source_dirs, save_folder, algo_labels, aesthetic_max, clip_max)
+#create_evolution_plots(source_dirs, save_folder, algo_labels, aesthetic_max, clip_max, method_names)
 
 # GENERATE IMAGE GRID WITH THE BEST IMAGES FOR EACH METHOD
 # ===============================
-#create_image_grid(source_dirs, method_names, save_folder)
+create_image_grid(source_dirs, method_names, save_folder, prompt_indices=prompt_indices)
 
 # GENERATE COMPARISON OF PROMPTS AND CATEGORIES
 # ===============================

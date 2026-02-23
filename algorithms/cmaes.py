@@ -89,6 +89,7 @@ max_aesthetic_score = config['max_aesthetic_score']
 max_clip_score = config['max_clip_score']
 model_id = config['model_id']
 cmaes_variant = config['cmaes_variant']
+time_limit_seconds = config.get('time_limit_seconds')
 
 # Determine the predictor and CMA-ES variant names based on the configuration
 # Maps predictor indices and CMA-ES variants to their corresponding names.
@@ -454,9 +455,17 @@ def main(seed, seed_number, selected_prompt, category, prompt_number):
     std_fitness_2_list = [0]
 
     while not es.stop():
+        elapsed_time = time.time() - start_time
+        if time_limit_seconds is not None and elapsed_time >= time_limit_seconds:
+            print(
+                "Time limit reached before starting generation "
+                f"{generation + 1}/{NUM_GENERATIONS} (elapsed: {format_time(elapsed_time)})."
+            )
+            break
+
         print(f"Generation {generation+1}/{NUM_GENERATIONS}")
 
-        os.makedirs(results_folder+"/gen_%d" % (generation+1), exist_ok=True)
+        #os.makedirs(results_folder+"/gen_%d" % (generation+1), exist_ok=True)
 
         # Ask for new candidate solutions
         solutions = es.ask()
@@ -469,7 +478,8 @@ def main(seed, seed_number, selected_prompt, category, prompt_number):
 
         ind_id = 1
         for x in solutions:
-            save_path = results_folder + "/gen_%d/id_%d.png" % (generation+1, ind_id)
+            #save_path = results_folder + "/gen_%d/id_%d.png" % (generation+1, ind_id)
+            save_path = None
             fitness, aesthetic_score, clip_score, fitness_1, fitness_2 = evaluate(x, seed, text_embeddings_init_shape, selected_prompt, save_path)
             tmp_fitnesses.append(fitness)
             tmp_fitness_1.append(fitness_1)
@@ -527,16 +537,16 @@ def main(seed, seed_number, selected_prompt, category, prompt_number):
         best_x = es.result.xbest
         best_fitness = -es.result.fbest  # Convert back to positive score
 
-        with torch.no_grad():
-            # Generate and save the best image
-            split = np.prod(text_embeddings_init_shape[0])
-            best_pe  = torch.tensor(best_x[:split],  dtype=torch.float32, device=device).view(text_embeddings_init_shape[0])
-            best_ppe = torch.tensor(best_x[split:], dtype=torch.float32, device=device).view(text_embeddings_init_shape[1])
-            best_image = generate_image_from_embeddings(best_pe, best_ppe, seed)
-            image_np = best_image.detach().clone().cpu().numpy()
-            image_np = (image_np * 255).astype(np.uint8)
-            pil_image = Image.fromarray(image_np)
-            pil_image.save(results_folder + "/best_%d.png" % (generation+1))
+        # with torch.no_grad():
+        #     # Generate and save the best image
+        #     split = np.prod(text_embeddings_init_shape[0])
+        #     best_pe  = torch.tensor(best_x[:split],  dtype=torch.float32, device=device).view(text_embeddings_init_shape[0])
+        #     best_ppe = torch.tensor(best_x[split:], dtype=torch.float32, device=device).view(text_embeddings_init_shape[1])
+        #     best_image = generate_image_from_embeddings(best_pe, best_ppe, seed)
+        #     image_np = best_image.detach().clone().cpu().numpy()
+        #     image_np = (image_np * 255).astype(np.uint8)
+        #     pil_image = Image.fromarray(image_np)
+        #     pil_image.save(results_folder + "/best_%d.png" % (generation+1))
 
         if best_fitness > best_fitness_overall:
             best_fitness_overall = best_fitness

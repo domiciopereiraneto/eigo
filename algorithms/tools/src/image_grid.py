@@ -15,10 +15,13 @@ def prompt_num(name: str) -> int:
 def get_scores(folder_path, csv_name, idx=-1):
     csv_path = os.path.join(folder_path, csv_name)
     prompt = None
+    category = None
     if os.path.isfile(csv_path):
         df = pd.read_csv(csv_path)
         if 'prompt' in df.columns:
             prompt = df.iloc[0]['prompt']
+        if 'category' in df.columns:
+            category = df.iloc[0]['category']
         if 'aesthetic_score' in df.columns and 'clip_score' in df.columns:
             row = df.iloc[idx]
             aesthetic_score = float(row['aesthetic_score'])
@@ -30,9 +33,9 @@ def get_scores(folder_path, csv_name, idx=-1):
             clip_score = float(row['max_clip_score'])
             fitness = float(row['max_fitness'])
         else:
-            return None, None, prompt
-        return aesthetic_score, clip_score, fitness, prompt
-    return None, None, None, prompt
+            return None, None, None, prompt, category
+        return aesthetic_score, clip_score, fitness, prompt, category
+    return None, None, None, prompt, category
 
 def load_font(size: int, fallback: bool = True) -> ImageFont.FreeTypeFont:
     # Try common fonts, then default bitmap font
@@ -46,20 +49,22 @@ def load_font(size: int, fallback: bool = True) -> ImageFont.FreeTypeFont:
     raise RuntimeError("No usable font found. Install DejaVuSans.ttf or provide a path.")
 
 def wrap_text_to_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_width: int) -> List[str]:
-    words = text.split()
-    if not words:
-        return [""]
     lines = []
-    line = words[0]
-    for w in words[1:]:
-        test = line + " " + w
-        if draw.textlength(test, font=font) <= max_width:
-            line = test
-        else:
-            lines.append(line)
-            line = w
-    lines.append(line)
-    return lines
+    for paragraph in text.splitlines():
+        words = paragraph.split()
+        if not words:
+            lines.append("")
+            continue
+        line = words[0]
+        for w in words[1:]:
+            test = line + " " + w
+            if draw.textlength(test, font=font) <= max_width:
+                line = test
+            else:
+                lines.append(line)
+                line = w
+        lines.append(line)
+    return lines if lines else [""]
 
 def line_height(font: ImageFont.FreeTypeFont) -> int:
     ascent, descent = font.getmetrics()
@@ -82,23 +87,33 @@ def paste_centered_text(draw: ImageDraw.ImageDraw, lines: List[str], font, x_lef
 def create_image_grid(source_dirs: List[str],
                       method_names: List[str],
                       save_path: str,
-                      prompt_fontsize: int = 16,
-                      title_fontsize: int = 14,
+                      prompt_fontsize: int = 20,
+                      title_fontsize: int = 20,
                       resize_to: Tuple[int,int] = None,
                       col_gap: int = 12,
                       row_gap: int = 18,
                       margin: int = 18,
                       prompt_max_width: int = None,
-                      header_bg: Tuple[int,int,int] = (255,255,255)):
+                      header_bg: Tuple[int,int,int] = (255,255,255),
+                      prompt_indices: List[int] = None):
     """
     Compose a grid using Pillow and place the corresponding prompt above each row.
     - First column is baseline it_0.png from the first method dir.
     - Remaining columns use best_all.png from each method dir.
     - Titles show Aes/CLIP. First row also shows method names.
+    - If prompt_indices is provided, only those indices in the sorted prompt list are included (0-based).
     """
     base = source_dirs[0]
     subdirs = [n for n in os.listdir(base) if os.path.isdir(os.path.join(base, n))]
     subdirs = sorted(subdirs, key=prompt_num)
+    if prompt_indices is not None:
+        if not prompt_indices:
+            raise ValueError("prompt_indices was provided but empty; nothing to render.")
+        max_idx = len(subdirs) - 1
+        invalid = [i for i in prompt_indices if i < 0 or i > max_idx]
+        if invalid:
+            raise ValueError(f"prompt_indices out of range: {invalid}. Valid range is 0..{max_idx}.")
+        subdirs = [subdirs[i] for i in prompt_indices]
 
     cols = len(source_dirs) + 1
     if not subdirs:
@@ -119,19 +134,21 @@ def create_image_grid(source_dirs: List[str],
             continue
 
         # Scores and prompt
-        aes0, clip0, fit0, pr = get_scores(folder_paths[0], "score_results.csv", idx=0)
+        aes0, clip0, fit0, pr, cat = get_scores(folder_paths[0], "score_results.csv", idx=0)
         if aes0 is None or clip0 is None or pr is None:
-            aes0, clip0, fit0, pr = get_scores(folder_paths[0], "fitness_results.csv", idx=0)
+            aes0, clip0, fit0, pr, cat = get_scores(folder_paths[0], "fitness_results.csv", idx=0)
 
         scores = [(aes0, clip0, fit0)]
         for p in folder_paths:
-            aes, clip, fit, _ = get_scores(p, "fitness_results.csv")
+            aes, clip, fit, _, _ = get_scores(p, "fitness_results.csv")
             if aes is None or clip is None:
-                aes, clip, fit, _ = get_scores(p, "score_results.csv")
+                aes, clip, fit, _, _ = get_scores(p, "score_results.csv")
             scores.append((aes, clip, fit))
 
         rows.append((it0_path, best_paths, scores))
-        prompts.append(pr if isinstance(pr, str) and pr.strip() else folder_name)
+        prompt_text = pr if isinstance(pr, str) and str(pr).strip() else folder_name
+        category_text = cat if isinstance(cat, str) and str(cat).strip() else "Unknown"
+        prompts.append(f"Category: {category_text}\nPrompt: {prompt_text}")
 
     if not rows:
         raise FileNotFoundError("No rows with valid images and scores found.")

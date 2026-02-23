@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 _W_PAT    = re.compile(r"_a(\d+)_b(\d+)")
 _SEED_PAT = re.compile(r"_(\d+)_a(\d+)_b(\d+)")
 _PROMPT_DIR_PAT = re.compile(r"^results_.*_(\d+)$")
+_BEST_PAT = re.compile(r"^best_(\d+)\.png$")
 
 def parse_weights(name: str) -> Tuple[int, int] | None:
     m = _W_PAT.search(name)
@@ -75,18 +76,16 @@ def _load_gray(img_path: Path, max_side: int = 256):
         im = cv2.resize(im, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
     return im
 
-def _cosine_distance(u: np.ndarray, v: np.ndarray) -> float:
-    # sklearn.cosine_distances without import
+def _cosine_similarity(u: np.ndarray, v: np.ndarray) -> float:
+    # sklearn.cosine_similarity without import
     num = float(np.dot(u, v))
     den = float(np.linalg.norm(u) * np.linalg.norm(v))
     if den == 0.0:
         return np.nan
-    cosine_sim = num / den
-    # distance = 1 - similarity
-    return float(1.0 - cosine_sim)
+    return float(num / den)
 
 def _compute_distances_for_run(run_dir, model, preprocess, device):
-    """Return per‑prompt (cosine_distance, ssim) lists for a single algorithm run folder."""
+    """Return per‑prompt (cosine_similarity, ssim) lists for a single algorithm run folder."""
     from skimage.metrics import structural_similarity as ssim
 
     cos_vals, ssim_vals = [], []
@@ -94,12 +93,22 @@ def _compute_distances_for_run(run_dir, model, preprocess, device):
     for pdir in find_prompt_dirs(run_dir):
         base = pdir / "it_0.png"
         best = pdir / "best_all.png"
+        if not best.exists():
+            best_candidates = []
+            for p in pdir.iterdir():
+                if not p.is_file():
+                    continue
+                m = _BEST_PAT.match(p.name)
+                if m:
+                    best_candidates.append((int(m.group(1)), p))
+            if best_candidates:
+                best = max(best_candidates, key=lambda x: x[0])[1]
         if not base.exists() or not best.exists():
             continue
         # CLIP distance
         v_base = _img_to_vec(base, model, preprocess, device)
         v_best = _img_to_vec(best, model, preprocess, device)
-        cos_vals.append(_cosine_distance(v_best, v_base))
+        cos_vals.append(_cosine_similarity(v_best, v_base))
         # SSIM
         g_base = _load_gray(base)
         g_best = _load_gray(best)
@@ -121,9 +130,9 @@ def create_distance_table_and_plots(
     algo_labels: List[Tuple[str, str]],
 ) -> None:
     """
-    Build an Excel like 'summary_results.xlsx' but for CLIP‑cosine distance to baseline
-    and SSIM to baseline. Also emit two grouped‑bar plots across weight pairs
-    (one for cosine distance, one for SSIM).
+    Build an Excel like 'summary_results.xlsx' but for CLIP‑cosine similarity to baseline
+    and SSIM to baseline. Also emit two grouped‑box plots across weight pairs
+    (one for cosine similarity, one for SSIM).
     
     Parameters
     ----------
@@ -135,7 +144,7 @@ def create_distance_table_and_plots(
         Output directory.
     algo_labels : list of (prefix, label)
         Same format used by summary_table.py. The first tuple is assumed to be the baseline
-        label; it will appear in the table as zero distance (cos=0, ssim=1) but is not plotted.
+        label; it will appear in the table as baseline (cos=1, ssim=1) but is not plotted.
     """
     out_dir = Path(save_folder)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -178,7 +187,7 @@ def create_distance_table_and_plots(
     # Prepare Excel table rows
     hdr_top = [
         "", "", "", "",
-        "Cosine distance to baseline [0–2]", "", "",
+        "Cosine similarity to baseline [-1, 1]", "", "",
         "SSIM to baseline [-1, 1]", "", "",
         ""
     ]
@@ -190,17 +199,17 @@ def create_distance_table_and_plots(
     ]
     rows = [hdr_top, hdr_sub]
 
-    # DataFrame for plotting means
-    plot_rows = []  # dicts with a,b,algorithm,cosine_mean,ssim_mean
+    # DataFrame for plotting distributions
+    plot_rows = []  # dicts with a,b,algorithm,metric,value
 
     # Sorted weight pairs like summary_table
     weight_pairs = sorted(grid.keys(), key=lambda x: (-x[0], x[1]))
 
     for a_int, b_int in weight_pairs:
-        # Baseline row (cos=0, ssim=1)
+        # Baseline row (cos=1, ssim=1)
         rows.append([
             algo_labels[0][1], a_int/100.0, b_int/100.0, "",
-            0.0, 0.0, 0.0,
+            1.0, 0.0, 1.0,
             1.0, 0.0, 1.0,
             np.nan
         ])
@@ -223,12 +232,20 @@ def create_distance_table_and_plots(
                 round(ssim_mean, 6), round(ssim_std, 6), round(ssim_max, 6),
                 run["name"]
             ])
-            plot_rows.append({
-                "a": a_int/100.0, "b": b_int/100.0,
-                "algorithm": label,
-                "cosine_mean": cos_mean,
-                "ssim_mean": ssim_mean
-            })
+            for v in cos_vals:
+                plot_rows.append({
+                    "a": a_int/100.0, "b": b_int/100.0,
+                    "algorithm": label,
+                    "metric": "cosine",
+                    "value": float(v)
+                })
+            for v in ssim_vals:
+                plot_rows.append({
+                    "a": a_int/100.0, "b": b_int/100.0,
+                    "algorithm": label,
+                    "metric": "ssim",
+                    "value": float(v)
+                })
 
     # Write Excel
     out_xlsx = out_dir / "distance_summary.xlsx"
@@ -236,21 +253,43 @@ def create_distance_table_and_plots(
     with pd.ExcelWriter(out_xlsx, engine="openpyxl") as writer:
         df_out.to_excel(writer, sheet_name="distance_summary", index=False, header=False)
 
-    # Create grouped bar plots across weight pairs
+    # Create compact combined box plot (cosine on top, ssim on bottom)
     if plot_rows:
         plot_df = pd.DataFrame(plot_rows)
-        _grouped_bars(plot_df, out_dir, value_col="cosine_mean",
-                      title="Cosine Distance to Baseline by Weighting and Algorithm",
-                      ylabel="Cosine Distance [1,1]")
-        _grouped_bars(plot_df, out_dir, value_col="ssim_mean",
-                      title="SSIM to Baseline by Weighting and Algorithm",
-                      ylabel="SSIM [-1, 1]")
+        cosine_df = plot_df[plot_df["metric"] == "cosine"]
+        ssim_df = plot_df[plot_df["metric"] == "ssim"]
+        if not cosine_df.empty and not ssim_df.empty:
+            _combined_boxplots(
+                cosine_df,
+                ssim_df,
+                out_dir,
+                value_col="value",
+                top_title="Cosine Similarity to Baseline",
+                bottom_title="SSIM to Baseline",
+            )
+        else:
+            if not cosine_df.empty:
+                _grouped_boxplots(
+                    cosine_df,
+                    out_dir,
+                    value_col="value",
+                    title="Cosine Similarity to Baseline by Weighting and Algorithm",
+                    ylabel="Cosine Similarity [-1, 1]",
+                )
+            if not ssim_df.empty:
+                _grouped_boxplots(
+                    ssim_df,
+                    out_dir,
+                    value_col="value",
+                    title="SSIM to Baseline by Weighting and Algorithm",
+                    ylabel="SSIM [-1, 1]",
+                )
 
     print(f"Saved: {out_xlsx}")
 
 
-def _grouped_bars(df: pd.DataFrame, out_dir: Path, value_col: str, title: str, ylabel: str):
-    """One plot. Groups=weight pairs, bars=algorithms. Saves PNG next to Excel."""
+def _grouped_boxplots(df: pd.DataFrame, out_dir: Path, value_col: str, title: str, ylabel: str):
+    """One plot. Groups=weight pairs, boxplots=algorithms. Saves PNG next to Excel."""
     # Build x labels as 'a=0.5, b=0.5'
     df = df.copy()
     df["group"] = df.apply(lambda r: f"a={r['a']:.1f}, b={r['b']:.1f}", axis=1)
@@ -263,17 +302,36 @@ def _grouped_bars(df: pd.DataFrame, out_dir: Path, value_col: str, title: str, y
     x = np.arange(len(groups))
     width = 0.8 / max(1, len(algos))
 
-    for j, algo in enumerate(algos):
-        vals = []
-        for g in groups:
-            row = df[(df["group"] == g) & (df["algorithm"] == algo)]
-            vals.append(float(row.iloc[0][value_col]) if not row.empty else np.nan)
-        vals = np.array(vals, dtype=float)
-        bars = ax.bar(x + j*width, vals, width, label=algo)
-        # annotate
-        for bx, v in zip(bars, vals):
-            if np.isfinite(v):
-                ax.text(bx.get_x() + bx.get_width()/2, v, f"{v:.3f}", ha="center", va="bottom", fontsize=8)
+    data = []
+    positions = []
+    for i, g in enumerate(groups):
+        for j, algo in enumerate(algos):
+            vals = df[(df["group"] == g) & (df["algorithm"] == algo)][value_col].dropna().values
+            if len(vals) == 0:
+                vals = np.array([np.nan], dtype=float)
+            data.append(vals)
+            positions.append(x[i] + j * width)
+
+    bp = ax.boxplot(
+        data,
+        positions=positions,
+        widths=width * 0.9,
+        patch_artist=True,
+        showfliers=True,
+    )
+
+    colors = plt.cm.tab10.colors
+    for idx, box in enumerate(bp["boxes"]):
+        algo_idx = idx % max(1, len(algos))
+        box.set_facecolor(colors[algo_idx % len(colors)])
+        box.set_alpha(0.7)
+
+    for whisker in bp["whiskers"]:
+        whisker.set_color("#444444")
+    for cap in bp["caps"]:
+        cap.set_color("#444444")
+    for median in bp["medians"]:
+        median.set_color("#111111")
 
     ax.set_title(title)
     ax.set_xlabel("Weight Combination")
@@ -282,11 +340,98 @@ def _grouped_bars(df: pd.DataFrame, out_dir: Path, value_col: str, title: str, y
     ax.set_xticklabels(groups)
     ax.grid(True, axis="y", linestyle="--", linewidth=0.5)
     # place legend outside
-    ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), borderaxespad=0.)
+    handles = [
+        plt.Line2D([0], [0], color=colors[i % len(colors)], lw=6, label=algo)
+        for i, algo in enumerate(algos)
+    ]
+    ax.legend(handles=handles, loc="center left", bbox_to_anchor=(1.02, 0.5), borderaxespad=0.)
     fig.tight_layout()
     # filename by metric
-    metric = "cosine" if "cos" in value_col else "ssim"
+    metric = str(df["metric"].iloc[0]) if "metric" in df.columns and not df.empty else "metric"
     out_path = out_dir / f"{metric}_grouped_by_weight.png"
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {out_path}")
+
+
+def _combined_boxplots(
+    cosine_df: pd.DataFrame,
+    ssim_df: pd.DataFrame,
+    out_dir: Path,
+    value_col: str,
+    top_title: str,
+    bottom_title: str,
+):
+    """Compact figure with cosine boxplots on top and SSIM on bottom."""
+    # Use shared ordering across metrics
+    df_all = pd.concat([cosine_df, ssim_df], ignore_index=True)
+    df_all["group"] = df_all.apply(lambda r: f"a={r['a']:.1f}, b={r['b']:.1f}", axis=1)
+    groups = sorted(
+        df_all["group"].unique().tolist(),
+        key=lambda s: (-float(s.split(",")[0].split("=")[1]), float(s.split(",")[1].split("=")[1])),
+    )
+    algos = sorted(df_all["algorithm"].unique().tolist())
+
+    def _plot(ax, df, title, ylabel, show_legend: bool):
+        data = []
+        positions = []
+        x = np.arange(len(groups))
+        width = 0.8 / max(1, len(algos))
+        for i, g in enumerate(groups):
+            for j, algo in enumerate(algos):
+                vals = df[(df["group"] == g) & (df["algorithm"] == algo)][value_col].dropna().values
+                if len(vals) == 0:
+                    vals = np.array([np.nan], dtype=float)
+                data.append(vals)
+                positions.append(x[i] + j * width)
+
+        bp = ax.boxplot(
+            data,
+            positions=positions,
+            widths=width * 0.9,
+            patch_artist=True,
+            showfliers=True,
+        )
+
+        colors = plt.cm.tab10.colors
+        for idx, box in enumerate(bp["boxes"]):
+            algo_idx = idx % max(1, len(algos))
+            box.set_facecolor(colors[algo_idx % len(colors)])
+            box.set_alpha(0.7)
+
+        for whisker in bp["whiskers"]:
+            whisker.set_color("#444444")
+        for cap in bp["caps"]:
+            cap.set_color("#444444")
+        for median in bp["medians"]:
+            median.set_color("#111111")
+
+        ax.set_title(title)
+        ax.set_ylabel(ylabel)
+        ax.set_xticks(x + (len(algos) - 1) * width / 2)
+        ax.set_xticklabels(groups)
+        ax.grid(True, axis="y", linestyle="--", linewidth=0.5)
+
+        if show_legend:
+            handles = [
+                plt.Line2D([0], [0], color=colors[i % len(colors)], lw=6, label=algo)
+                for i, algo in enumerate(algos)
+            ]
+            ax.legend(handles=handles, loc="center left", bbox_to_anchor=(1.02, 0.5), borderaxespad=0.)
+
+    fig, (ax_top, ax_bot) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+
+    cos_df = cosine_df.copy()
+    cos_df["group"] = cos_df.apply(lambda r: f"a={r['a']:.1f}, b={r['b']:.1f}", axis=1)
+    ssim_df = ssim_df.copy()
+    ssim_df["group"] = ssim_df.apply(lambda r: f"a={r['a']:.1f}, b={r['b']:.1f}", axis=1)
+
+    _plot(ax_top, cos_df, top_title, "Cosine Similarity [-1, 1]", show_legend=True)
+    _plot(ax_bot, ssim_df, bottom_title, "SSIM [-1, 1]", show_legend=False)
+    ax_bot.set_xlabel("Weight Combination")
+
+    fig.tight_layout()
+    out_path = out_dir / "distance_grouped_by_weight.png"
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved: {out_path}")

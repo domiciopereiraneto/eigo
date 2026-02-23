@@ -28,30 +28,38 @@ def summarise(vals: pd.Series):
     return float(v.mean()), float(v.std(ddof=0)), float(v.max())
 
 def load_first_row_arrays(xls_path: Path, is_adam: bool):
-    """Return baseline per-prompt arrays (iteration 0) for aesthetic and clip."""
+    """Return baseline per-prompt arrays (first available values) for aesthetic and clip."""
     df = pd.read_excel(xls_path)
-    first = df.iloc[0]
+
+    def first_valid(col: str):
+        series = pd.to_numeric(df[col], errors="coerce").dropna()
+        return float(series.iloc[0]) if not series.empty else np.nan
+
     if is_adam:
-        aes = pd.Series([float(first[c]) for c in df.columns if str(c).startswith("aesthetic_score_")])
-        cli = pd.Series([float(first[c]) for c in df.columns if str(c).startswith("clip_score_")])
+        aes = pd.Series([first_valid(c) for c in df.columns if str(c).startswith("aesthetic_score_")])
+        cli = pd.Series([first_valid(c) for c in df.columns if str(c).startswith("clip_score_")])
     else:
-        aes = pd.Series([float(first[c]) for c in df.columns if str(c).startswith("max_aesthetic_score_")])
-        cli = pd.Series([float(first[c]) for c in df.columns if str(c).startswith("max_clip_score_")])
-    time = pd.Series([float(first[c]) for c in df.columns if str(c).startswith("elapsed_time_")])
+        aes = pd.Series([first_valid(c) for c in df.columns if str(c).startswith("max_aesthetic_score_")])
+        cli = pd.Series([first_valid(c) for c in df.columns if str(c).startswith("max_clip_score_")])
+    time = pd.Series([first_valid(c) for c in df.columns if str(c).startswith("elapsed_time_")])
 
     return aes.reset_index(drop=True), cli.reset_index(drop=True), time.reset_index(drop=True)
 
 def last_row_arrays(xls_path: Path, is_adam: bool):
-    """Return final per-prompt arrays for aesthetic and clip from the last row."""
+    """Return final per-prompt arrays for aesthetic and clip using last valid values."""
     df = pd.read_excel(xls_path)
-    last = df.iloc[-1]
+
+    def last_valid(col: str):
+        series = pd.to_numeric(df[col], errors="coerce").dropna()
+        return float(series.iloc[-1]) if not series.empty else np.nan
+
     if is_adam:
-        aes = pd.Series([float(last[c]) for c in df.columns if str(c).startswith("aesthetic_score_")])
-        cli = pd.Series([float(last[c]) for c in df.columns if str(c).startswith("clip_score_")])
+        aes = pd.Series([last_valid(c) for c in df.columns if str(c).startswith("aesthetic_score_")])
+        cli = pd.Series([last_valid(c) for c in df.columns if str(c).startswith("clip_score_")])
     else:
-        aes = pd.Series([float(last[c]) for c in df.columns if str(c).startswith("max_aesthetic_score_")])
-        cli = pd.Series([float(last[c]) for c in df.columns if str(c).startswith("max_clip_score_")])
-    time = pd.Series([float(last[c]) for c in df.columns if str(c).startswith("elapsed_time_")])
+        aes = pd.Series([last_valid(c) for c in df.columns if str(c).startswith("max_aesthetic_score_")])
+        cli = pd.Series([last_valid(c) for c in df.columns if str(c).startswith("max_clip_score_")])
+    time = pd.Series([last_valid(c) for c in df.columns if str(c).startswith("elapsed_time_")])
 
     return aes.reset_index(drop=True), cli.reset_index(drop=True), time.reset_index(drop=True)
 

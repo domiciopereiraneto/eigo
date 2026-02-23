@@ -1,31 +1,39 @@
 # Define source directories containing the result folders
 source_dirs: [
-  "results/ga_mutated_clip_laionv2_sdxlturbo_42_a40_b60",
-  "results/ga_empty_clip_laionv2_sdxlturbo_42_a40_b60",
-  "results/ga_random_clip_laionv2_sdxlturbo_42_a40_b60",
-  "results/random_search_clip_laionv2_sdxlturbo_42_a40_b60",
-  "results/promptist_clip_laionv2_sdxlturbo_42_a40_b60",
+#"results/adam_clip_laionv2_sdxlturbo_42_a0_b100",
+#"results/adam_clip_laionv2_sdxlturbo_42_a50_b50",
+"results/adam_clip_laionv2_sdxlturbo_42_a100_b0",
+#"results/sepcmaes_clip_laionv2_sdxlturbo_42_a0_b100",
+#"results/sepcmaes_clip_laionv2_sdxlturbo_42_a50_b50",
+"results/sepcmaes_clip_laionv2_sdxlturbo_42_a100_b0",
   ]
 # Define display names for each of the above methods
 method_names: [
   "Initial Prompt", # Baseline, do not change
-  "GA Mutated",
-  "GA Empty",
-  "GA Random",
-  "Random Search",
-  "Promptist",
+  "Adam",
+  "sep-CMA-ES",
+  #"Adam (a=0 b=1)",
+  #"Adam (a=0.5 b=0.5)",
+  #"Adam (a=1 b=0)",
+  #"sep-CMA-ES (a=0 b=1)",
+  #"sep-CMA-ES (a=0.5 b=0.5)",
+  #"sep-CMA-ES (a=1 b=0)",
 ]
 
 algorithm_labels: [
     ["baseline", "SDXL Turbo (no optimization)"],
-    ["ga_mutated", "GA Mutated"],
-    ["ga_empty", "GA Empty"],
-    ["ga_random", "GA Random"],
-    ["random_search", "Random Search"],
-    ["promptist", "Promptist"],
+    ["adam", "Adam"],
+    ["sepcmaes", "sep-CMA-ES"],
 ]
 
-save_folder: "results_processed_tokens_v2"
+#prompt_indices: [0,1,2,3,4,5]
+#prompt_indices: [6,7,8,9,10,11]
+#prompt_indices: [12,13,14,15,16,17]
+#prompt_indices: [18,19,20,21,22,23]
+#prompt_indices: [24,25,26,27,28,29]
+prompt_indices: [30,31,32,33,34,35]
+
+save_folder: "results_processed_gecco_grids"
 
 aesthetic_max: 10.0
 clip_max: 0.5

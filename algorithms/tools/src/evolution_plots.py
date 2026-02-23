@@ -1,6 +1,6 @@
 import re
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -27,9 +27,29 @@ def _is_evolutionary(folder_name: str) -> bool:
     # Adam is iterative. Everything else we consider evolutionary here.
     return not low.startswith('adam')
 
-def _load_df_metrics(df: pd.DataFrame, evolutionary: bool):
-    '''Return dict with x, aes_mean, aes_std, clip_mean, clip_std, elapsed_mean, fitness_mean.'''
+def _load_df_metrics(df: pd.DataFrame, evolutionary: bool, target_len: int = 101):
+    '''Return dict with x, aes_mean, aes_std, clip_mean, clip_std, elapsed_mean, fitness_mean.
+
+    Metrics are interpolated per column onto a common x grid, then averaged.
+    '''
     out = {}
+
+    def _interp_columns(cols: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
+        if cols.empty:
+            return np.array([], dtype=float), np.array([], dtype=float)
+        xq = np.linspace(0, 1, target_len)
+        series_list = []
+        for c in cols.columns:
+            vals = pd.to_numeric(cols[c], errors="coerce").dropna().to_numpy(dtype=float)
+            if len(vals) < 2:
+                continue
+            xp = np.linspace(0, 1, len(vals))
+            series_list.append(np.interp(xq, xp, vals))
+        if not series_list:
+            return np.array([], dtype=float), np.array([], dtype=float)
+        data = np.vstack(series_list)
+        return data.mean(axis=0), data.std(axis=0, ddof=0)
+
     if evolutionary:
         aes = df.filter(like='max_aesthetic_score_')
         cli = df.filter(like='max_clip_score_')
@@ -38,18 +58,16 @@ def _load_df_metrics(df: pd.DataFrame, evolutionary: bool):
         aes = df.filter(like='aesthetic_score_')
         cli = df.filter(like='clip_score_')
         fit = df.filter(like='combined_score_')
-    # means and stds over prompts/seeds at each iteration
-    out['aes_mean']  = aes.mean(axis=1).astype(float).to_numpy()
-    out['aes_std']   = aes.std(axis=1).astype(float).to_numpy()
-    out['clip_mean'] = cli.mean(axis=1).astype(float).to_numpy()
-    out['clip_std']  = cli.std(axis=1).astype(float).to_numpy()
-    out['fitness_mean'] = fit.mean(axis=1).astype(float).to_numpy()
-    # elapsed time averaged across columns per iteration
-    tm  = df.filter(like='elapsed_time_')
-    out['elapsed_mean'] = (tm.mean(axis=1).astype(float).to_numpy()
-                           if not tm.empty else np.zeros(len(out['aes_mean']), dtype=float))
+
+    out['aes_mean'], out['aes_std'] = _interp_columns(aes)
+    out['clip_mean'], out['clip_std'] = _interp_columns(cli)
+    out['fitness_mean'], _ = _interp_columns(fit)
+
+    tm = df.filter(like='elapsed_time_')
+    out['elapsed_mean'], _ = _interp_columns(tm) if not tm.empty else (np.array([], dtype=float), np.array([], dtype=float))
+
     # x as percent
-    n = len(out['aes_mean'])
+    n = target_len if len(out['aes_mean']) == target_len else len(out['fitness_mean'])
     out['x_percent'] = np.linspace(0, 100, n)
     return out
 
@@ -92,15 +110,16 @@ def _plot_block(block: Dict[str, Dict], labels: Dict[str,str], save_dir: Path,
     }
     x_norm, aes_norm, clip_norm, time_norm, fitness_norm = [_normalize_to_min_len(v) for v in arrays.values()]
 
-    # common legend placement
-    leg = dict(bbox_to_anchor=(1.02, 1), loc='upper left', borderaxespad=0.)
+    # common legend placement (below plot)
+    leg = dict(loc='upper center', bbox_to_anchor=(0.5, -0.18),
+               ncol=min(4, len(prefixes)), frameon=False)
 
     # Aesthetic evolution
     fig, ax = plt.subplots(figsize=(10, 6))
     for i, p in enumerate(prefixes):
         if x_norm[i] is None:
             continue
-        ax.plot(x_norm[i], aes_norm[i], '--', label=labels[p])
+        ax.plot(x_norm[i], aes_norm[i], '-', label=labels[p])
     ax.set_ylim(1, 10)
     ax.set_xlabel('Iteration (%)')
     ax.set_ylabel('Aesthetic score')
@@ -118,8 +137,9 @@ def _plot_block(block: Dict[str, Dict], labels: Dict[str,str], save_dir: Path,
     for i, p in enumerate(prefixes):
         if x_norm[i] is None:
             continue
-        ax.plot(x_norm[i], clip_norm[i], '--', label=labels[p])
-    ax.set_ylim(0, 1)
+        ax.plot(x_norm[i], clip_norm[i], '-', label=labels[p])
+    ax.set_xlim(left=0)
+    ax.set_ylim(0.5, 0.85)
     ax.set_xlabel('Iteration (%)')
     ax.set_ylabel('CLIP score')
     ax.set_title(f'Evolution of CLIP Score (a={a_int}, b={b_int})')
@@ -136,7 +156,7 @@ def _plot_block(block: Dict[str, Dict], labels: Dict[str,str], save_dir: Path,
     for i, p in enumerate(prefixes):
         if x_norm[i] is None:
             continue
-        ax.plot(x_norm[i], time_norm[i], '--', label=labels[p])
+        ax.plot(x_norm[i], time_norm[i], '-', label=labels[p])
     ax.set_xlabel('Iteration (%)')
     ax.set_ylabel('Elapsed time (s)')
     ax.set_title(f'Elapsed Time per Iteration (a={a_int}, b={b_int})')
@@ -153,7 +173,7 @@ def _plot_block(block: Dict[str, Dict], labels: Dict[str,str], save_dir: Path,
     for i, p in enumerate(prefixes):
         if x_norm[i] is None:
             continue
-        ax.plot(x_norm[i], fitness_norm[i], '--', label=labels[p])
+        ax.plot(x_norm[i], fitness_norm[i], '-', label=labels[p])
     ax.set_ylim(0, 1)
     ax.set_xlabel('Iteration (%)')
     ax.set_ylabel('Fitness')
@@ -168,11 +188,39 @@ def _plot_block(block: Dict[str, Dict], labels: Dict[str,str], save_dir: Path,
 
     return paths
 
+def _plot_combined_metric(runs: List[Dict], out_dir: Path, metric_key: str,
+                          title: str, ylabel: str, weight_count: int):
+    out_dir.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(10, 6))
+    for r in runs:
+        metrics = r['metrics']
+        x = metrics['x_percent']
+        y = metrics.get(metric_key)
+        if y is None or len(y) == 0:
+            continue
+        ax.plot(x, y, '-', label=r['label'])
+    ax.set_xlabel('Iteration (%)')
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    if metric_key == "fitness_mean":
+        ax.set_xlim(left=0)
+        ax.set_ylim(0.5, 0.85)
+    ax.grid(alpha=0.3)
+    ncol = max(1, min(weight_count, len(runs)))
+    ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.18),
+              ncol=ncol, frameon=False)
+    fig.tight_layout()
+    out_path = out_dir / f'{metric_key}_all_weights.png'
+    fig.savefig(out_path, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    return out_path
+
 def create_evolution_plots(source_dirs: List[str],
                            save_folder: str,
                            algo_labels: List[Tuple[str, str]],
                            aesthetic_max: float,
-                           clip_max: float) -> None:
+                           clip_max: float,
+                           method_names: Optional[List[str]] = None) -> None:
     '''
     Generate evolution comparison plots per weight combination using the aggregated
     XLSX files produced by each run.
@@ -236,5 +284,83 @@ def create_evolution_plots(source_dirs: List[str],
     # make plots per weight pair
     for (a_int, b_int), block in sorted(blocks.items(), key=lambda x: (-x[0][0], x[0][1])):
         _plot_block(block, labels, out_root, a_int, b_int, aesthetic_max, clip_max)
+
+    # Combined plots across all weights (one line per configured method/source_dir)
+    if source_dirs:
+        combined_runs = []
+        weight_keys = set()
+        algo_order = [p for p, _ in algo_labels]
+        for idx, src in enumerate(source_dirs):
+            root = Path(src)
+            if not root.exists():
+                continue
+            xlsx_list = _scan_aggregated_xlsx(root)
+            if not xlsx_list:
+                continue
+            xlsx = xlsx_list[0]
+            folder = xlsx.parent.name
+            ab = _parse_weights(folder)
+            if not ab:
+                continue
+            weight_keys.add(ab)
+            evo = _is_evolutionary(folder)
+            df = pd.read_excel(xlsx)
+            metrics = _load_df_metrics(df, evolutionary=evo)
+            label = None
+            if method_names:
+                if len(method_names) == len(source_dirs) + 1:
+                    label_idx = idx + 1
+                else:
+                    label_idx = idx
+                if label_idx < len(method_names):
+                    label = method_names[label_idx]
+            if label is None:
+                label = folder
+            algo_rank = next((i for i, p in enumerate(algo_order) if folder.startswith(p)), len(algo_order))
+            combined_runs.append({
+                "label": label,
+                "metrics": metrics,
+                "weight": ab,
+                "algo_rank": algo_rank,
+            })
+
+        if combined_runs:
+            weight_count = len(weight_keys)
+            def _w_key(w):
+                return (-w[0], w[1])
+            combined_runs.sort(key=lambda r: (r["algo_rank"], _w_key(r["weight"])))
+            combined_dir = out_root / "all_weights"
+            _plot_combined_metric(
+                combined_runs,
+                combined_dir,
+                "aes_mean",
+                "Aesthetic Score (All Weights)",
+                "Aesthetic score",
+                weight_count,
+            )
+            _plot_combined_metric(
+                combined_runs,
+                combined_dir,
+                "clip_mean",
+                "CLIP Score (All Weights)",
+                "CLIP score",
+                weight_count,
+            )
+            _plot_combined_metric(
+                combined_runs,
+                combined_dir,
+                "fitness_mean",
+                "Fitness (All Weights)",
+                "Fitness",
+                weight_count,
+            )
+            _plot_combined_metric(
+                combined_runs,
+                combined_dir,
+                "elapsed_mean",
+                "Elapsed Time (All Weights)",
+                "Elapsed time (s)",
+                weight_count,
+            )
     print(f'Plots saved under: {out_root}')
     return None
