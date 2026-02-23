@@ -1,20 +1,31 @@
 # Primary configuration parameters
 "selected_prompt": "an astrounat riding a horse in mars" # Text prompt to guide image generation
-"optimization_method": "cmaes" #"cmaes" for CMA-ES variants "adam" for Adam
+"optimization_method": "adam" #"cmaes" for CMA-ES variants "adam" for Adam
 
 # General parameters
 "seed": 42  # Default seed value for reproducibility
 "cuda": 0  # GPU device ID to use (e.g. 0 for the first GPU). If no GPU is available falls back to CPU.
 "predictor": 2  # Predictor type= 0 for SAM 1 for LAION V1 2 for LAION V2
-"num_inference_steps": 1  # Number of inference steps for the diffusion model during image generation
+"num_inference_steps": 20  # Number of inference steps for the diffusion model during image generation
 "guidance_scale": 0  # Guidance scale for classifier-free guidance (set to 0 for no guidance)
 "height": 512  # Height of the generated image in pixels
 "width": 512  # Width of the generated image in pixels
-"alpha": 0.7  # Weight for the aesthetic score in the combined fitness function
-"beta": 0.3  # Weight for the CLIP score in the combined fitness function
+"alpha": 0.4  # Weight for the aesthetic score in the combined fitness function
+"beta": 0.6  # Weight for the CLIP score in the combined fitness function
 "max_aesthetic_score": 10  # Maximum possible aesthetic score (used for normalization)
 "max_clip_score": 0.5  # Maximum possible CLIP score (used for normalization)
-"model_id": "stabilityai/sdxl-turbo"  # Model ID for the Stable Diffusion XL pipeline
+"model_id": "PixArt-alpha/PixArt-XL-2-1024-MS" # Model ID (e.g., "black-forest-labs/FLUX.1-schnell", "PixArt-alpha/PixArt-XL-2-1024-MS", "stabilityai/sdxl-turbo")
+"model_backend": "auto"  # Diffusion backend: "auto", "sdxl", "flux", or "pixart"
+"torch_dtype": "float32"  # "auto", "float32", "float16", or "bfloat16" (FLUX on GPU usually benefits from bfloat16)
+"max_sequence_length": 512  # Max token length for FLUX text encoding (ignored for SDXL)
+"use_safetensors": true  # Load model weights from safetensors when available
+"use_multi_gpu": false  # If true and multiple CUDA devices exist, shard the diffusion pipeline across GPUs
+"pipeline_device_map": "balanced"  # Device-map strategy for multi-GPU sharding (e.g., "balanced", "auto")
+"max_memory": null  # Optional per-device memory map, e.g. {"cuda:0":"22GiB","cuda:1":"22GiB","cpu":"64GiB"}
+"enable_gradient_checkpointing": false  # Recommended true for Adam with FLUX/PixArt to reduce activation memory
+"enable_attention_slicing": false  # Enable attention slicing for lower VRAM usage (slower)
+"enable_vae_slicing": false  # Enable VAE slicing for lower VRAM usage
+"enable_vae_tiling": false  # Enable VAE tiling for high-resolution/low-VRAM decoding
 "results_folder": "results"  # Folder to save results including
 
 # CMA-ES specific parameters (if selected)
@@ -24,7 +35,7 @@
 "sigma": 0.5  # Initial standard deviation for CMA-ES optimization
 
 # Adam specific parameters (if selected)
-"num_iterations": 1000  # Number of iterations for the Adam optimization process
+"num_iterations": 100  # Number of iterations for the Adam optimization process
 "adam_lr": 5e-3  # Learning rate for the Adam optimizer
 "adam_weight_decay": 1e-05  # Weight decay for the Adam optimizer
 "adam_eps": 1e-8  # Epsilon value for numerical stability in the Adam

@@ -97,7 +97,18 @@ Common parameters across all algorithms (set in config file):
 - `height`: Output image height
 - `width`: Output image width
 - `results_folder`: Output directory for results
-- `model_id`: SDXL model identifier
+- `model_id`: Diffusion model identifier (e.g., `stabilityai/sdxl-turbo`, `black-forest-labs/FLUX.1-schnell`, or `PixArt-alpha/PixArt-XL-2-1024-MS`)
+- `model_backend`: `"auto"`, `"sdxl"`, `"flux"`, or `"pixart"` (recommended: `"auto"` unless explicit override is needed)
+- `torch_dtype`: `"auto"`, `"float32"`, `"float16"`, or `"bfloat16"`
+- `max_sequence_length`: FLUX tokenizer max length (ignored by SDXL)
+- `use_safetensors`: Whether to request safetensors weights
+- `use_multi_gpu`: Enable model sharding across multiple GPUs
+- `pipeline_device_map`: Sharding strategy (e.g. `"balanced"` or `"auto"`)
+- `max_memory`: Optional memory budget map per device for sharded loading
+- `enable_gradient_checkpointing`: Reduce activation memory for Adam (slower)
+- `enable_attention_slicing`: Reduce attention memory (slower)
+- `enable_vae_slicing`: Reduce VAE decode memory
+- `enable_vae_tiling`: Reduce VAE decode memory for larger images
 
 Algorithm-specific parameters:
 
