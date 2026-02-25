@@ -29,6 +29,7 @@ import clip
 import argparse
 import re
 import ast
+from contextlib import nullcontext
 
 class Eigo:
     _MODEL_CACHE = {}
@@ -100,8 +101,10 @@ class Eigo:
         os.makedirs(self.OUTPUT_FOLDER, exist_ok=True)
 
         # Check if a GPU is available and if not, use the CPU
-        #self.device = "cuda:" + str(config_parameters["cuda"]) if torch.cuda.is_available() else "cpu"
-        self.device = "cpu"
+        if config_parameters["cuda"] == "cpu":
+            self.device = "cpu"
+        else:
+            self.device = "cuda:" + str(config_parameters["cuda"]) if torch.cuda.is_available() else "cpu"
 
         cache_key = (
             config_parameters["model_id"],
@@ -380,6 +383,25 @@ class Eigo:
         image = out.clamp(0, 1).squeeze(0).permute(1, 2, 0)      # HWC
         return image.to(self.device)
 
+    def _adam_autocast_context(self):
+        autocast_dtype = self.model_dtype
+        if autocast_dtype not in (torch.float16, torch.bfloat16):
+            return nullcontext()
+
+        pipeline_device = str(self._pipeline_input_device())
+        if pipeline_device.startswith("cuda"):
+            return torch.autocast(device_type="cuda", dtype=autocast_dtype)
+        if pipeline_device.startswith("cpu") and autocast_dtype == torch.bfloat16:
+            return torch.autocast(device_type="cpu", dtype=autocast_dtype)
+        return nullcontext()
+
+    @staticmethod
+    def _tensor_to_uint8_image(image_tensor):
+        image_np = image_tensor.detach().to(torch.float32).cpu().numpy()
+        image_np = np.nan_to_num(image_np, nan=0.0, posinf=1.0, neginf=0.0)
+        image_np = np.clip(image_np, 0.0, 1.0)
+        return (image_np * 255).astype(np.uint8)
+
     def aesthetic_evaluation(self, image):
         # image is a tensor of shape [H, W, C]
         # Convert to [N, C, H, W] and ensure it's in float32
@@ -480,7 +502,7 @@ class Eigo:
 
         return -fitness, aesthetic_score, clip_score, fitness_1, fitness_2 
 
-    def run_cmaes_optimization(self):
+    def run_cmaes_optimization(self, seed = None, seed_number = None, prompt = None, category = None, prompt_number = None):
 
         def plot_mean_std(x_axis, m_vec, std_vec, description, title=None, y_label=None, x_label=None):
             lower_bound = [M_new - Sigma for M_new, Sigma in zip(m_vec, std_vec)]
@@ -535,16 +557,27 @@ class Eigo:
             plt.savefig(results_folder + "/clip_score_evolution.png") 
             plt.close()   
 
-        seed = self.parameters["seed"]
-        selected_prompt = self.parameters["selected_prompt"]
+        if seed is None:
+            seed = self.parameters["seed"]
+        if prompt is None:
+            selected_prompt = self.parameters["selected_prompt"]
+        else:
+            selected_prompt = prompt
 
         torch.manual_seed(seed)
         np.random.seed(seed)
         random.seed(seed)
 
-        print(f"Selected prompt: {selected_prompt}")
+        if category is not None:
+            print(f"Selected prompt: {selected_prompt} (Category: {category})")
+        else:
+            print(f"Selected prompt: {selected_prompt}")
 
         results_folder = f"{self.OUTPUT_FOLDER}/results_{self.model_name}_{seed}"
+
+        if prompt_number is not None:
+            results_folder += f"_{prompt_number}"
+
         os.makedirs(results_folder, exist_ok=True)
 
         with torch.no_grad():
@@ -622,6 +655,14 @@ class Eigo:
         std_fitness_2_list = [0]
 
         while not es.stop():
+            elapsed_time = time.time() - start_time
+            if self.parameters['time_limit_seconds'] is not None and elapsed_time >= self.parameters['time_limit_seconds']:
+                print(
+                    "Time limit reached before starting generation "
+                    f"{generation + 1}/{self.parameters['num_generations']} (elapsed: {self.format_time(elapsed_time)})."
+                )
+                break
+
             print(f"Generation {generation+1}/{self.parameters['num_generations']}")
 
             os.makedirs(results_folder+"/gen_%d" % (generation+1), exist_ok=True)
@@ -738,6 +779,9 @@ class Eigo:
                 "elapsed_time": time_list
             })
 
+            if category is not None:
+                results["category"] = [category] + [''] * generation
+
             results.to_csv(f"{results_folder}/fitness_results.csv", index=False, na_rep='nan')
 
             save_plot_results(results, results_folder)
@@ -758,7 +802,7 @@ class Eigo:
 
         return results_folder
 
-    def run_adam_optimization(self):
+    def run_adam_optimization(self, seed = None, seed_number = None, prompt = None, category = None, prompt_number = None):
 
         def plot_results(results, results_folder):
             plt.figure(figsize=(10, 6))  # Increase figure size
@@ -808,8 +852,14 @@ class Eigo:
             if x_label is not None:
                 plt.xlabel(x_label)
     
-        seed = int(self.parameters["seed"])
-        selected_prompt = self.parameters["selected_prompt"]
+        if seed is None:
+            seed = self.parameters["seed"]
+        if prompt is None:
+            selected_prompt = self.parameters["selected_prompt"]
+        else:
+            selected_prompt = prompt
+
+        seed = int(seed)
         num_iterations = int(self.parameters["num_iterations"])
         adam_lr = float(self.parameters["adam_lr"])
         adam_weight_decay = float(self.parameters["adam_weight_decay"])
@@ -821,9 +871,14 @@ class Eigo:
         np.random.seed(seed)
         random.seed(seed)
 
-        print(f"Selected prompt: {selected_prompt}")
+        if category is not None:
+            print(f"Selected prompt: {selected_prompt} (Category: {category})")
+        else:
+            print(f"Selected prompt: {selected_prompt}")
 
         results_folder = f"{self.OUTPUT_FOLDER}/results_{self.model_name}_{seed}"
+        if prompt_number is not None:
+            results_folder += f"_{prompt_number}"
         os.makedirs(results_folder, exist_ok=True)
 
         # Text features don't depend on your params; compute w/o grad
@@ -833,13 +888,19 @@ class Eigo:
             text_features = F.normalize(text_features, dim=-1, eps=1e-6)
 
         prompt_embeds, pooled_prompt_embeds = self._encode_prompt_embeddings(selected_prompt)
-        text_embeddings_init = [prompt_embeds.detach().clone(), pooled_prompt_embeds.detach().clone()]
-        text_embeddings = [torch.nn.Parameter(prompt_embeds.clone()), torch.nn.Parameter(pooled_prompt_embeds.clone())]
+        text_embeddings_init = [
+            prompt_embeds.detach().clone().to(torch.float32),
+            pooled_prompt_embeds.detach().clone().to(torch.float32),
+        ]
+        text_embeddings = [
+            torch.nn.Parameter(text_embeddings_init[0].clone()),
+            torch.nn.Parameter(text_embeddings_init[1].clone()),
+        ]
 
         with torch.no_grad():
-            initial_image = self.generate_image_from_embeddings_adam(text_embeddings_init, seed)
-            image_np = initial_image.detach().clone().to(torch.float32).cpu().numpy()
-            image_np = (image_np * 255).astype(np.uint8)
+            with self._adam_autocast_context():
+                initial_image = self.generate_image_from_embeddings_adam(text_embeddings_init, seed)
+            image_np = self._tensor_to_uint8_image(initial_image)
             pil_image = Image.fromarray(image_np)
             pil_image.save(f"{results_folder}/it_0.png")
 
@@ -849,12 +910,16 @@ class Eigo:
 
         initial_combined_score = self.parameters["alpha"] * aesthetic_score / self.parameters["max_aesthetic_score"] + self.parameters["beta"] * clip_score / self.parameters["max_clip_score"]
         initial_combined_loss = 1 - initial_combined_score
+        if not torch.isfinite(initial_combined_loss):
+            raise RuntimeError(
+                "Initial ADAM objective is non-finite. Try lowering adam_lr or using a more stable torch_dtype."
+            )
 
         combined_score_list = [initial_combined_score.item()]
         combined_loss_list = [initial_combined_loss.item()]
         time_list = [0]
-        best_score = initial_combined_score
-        best_text_embeddings = text_embeddings_init.copy()
+        best_score = initial_combined_score.item()
+        best_text_embeddings = [t.detach().clone() for t in text_embeddings_init]
 
         optimizer = torch.optim.Adam(
             text_embeddings,
@@ -865,22 +930,35 @@ class Eigo:
         )
 
         start_time = time.time()
+        elapsed_time = 0.0
 
         # Add lists to store the metrics
         aesthetic_score_list = [aesthetic_score.item()]
         clip_score_list = [clip_score.item()]
 
         for iteration in range(1, num_iterations + 1):
+            if self.parameters['time_limit_seconds'] is not None and elapsed_time >= self.parameters['time_limit_seconds']:
+                print(
+                    "Time limit reached before starting iteration "
+                    f"{iteration}/{num_iterations} (elapsed: {self.format_time(elapsed_time)})."
+                )
+                break
             print(f"Iteration {iteration}/{num_iterations}")
 
             optimizer.zero_grad()
 
-            #with torch.autocast(device_type=device, dtype=torch.float16):
-            image = self.generate_image_from_embeddings_adam(text_embeddings, seed)
+            with self._adam_autocast_context():
+                image = self.generate_image_from_embeddings_adam(text_embeddings, seed)
             aesthetic_score = self.aesthetic_evaluation(image)
             clip_score = self.evaluate_clip_score_adam(image, text_features)
             combined_score = self.parameters["alpha"] * aesthetic_score / self.parameters["max_aesthetic_score"] + self.parameters["beta"] * clip_score / self.parameters["max_clip_score"]
             combined_loss = 1 - combined_score
+            if not torch.isfinite(combined_loss):
+                print(
+                    f"Non-finite objective at iteration {iteration}. "
+                    "Stopping early and keeping best finite embedding found so far."
+                )
+                break
 
             # Calculate gradients
             combined_loss.backward()
@@ -893,13 +971,12 @@ class Eigo:
 
             if combined_score.item() > best_score:
                 best_score = combined_score.item()
-                best_text_embeddings = text_embeddings.copy()
+                best_text_embeddings = [t.detach().clone() for t in text_embeddings]
 
             combined_score_list.append(combined_score.item())
             combined_loss_list.append(combined_loss.item())
 
-            image_np = image.detach().clone().to(torch.float32).cpu().numpy()
-            image_np = (image_np * 255).astype(np.uint8)
+            image_np = self._tensor_to_uint8_image(image)
             pil_image = Image.fromarray(image_np)
             pil_image.save(f"{results_folder}/it_{iteration}.png")
 
@@ -924,6 +1001,9 @@ class Eigo:
                 "elapsed_time": time_list
             })
 
+            if category is not None:
+                results["category"] = [category] + [''] * iteration
+
             results.to_csv(f"{results_folder}/score_results.csv", index=False, na_rep='nan')
 
             # Plot and save the fitness evolution
@@ -934,9 +1014,9 @@ class Eigo:
 
         # Save the overall best image
         with torch.no_grad():
-            best_image = self.generate_image_from_embeddings_adam(best_text_embeddings, seed)
-        best_image_np = best_image.detach().to(torch.float32).cpu().numpy()
-        best_image_np = (best_image_np * 255).astype(np.uint8)
+            with self._adam_autocast_context():
+                best_image = self.generate_image_from_embeddings_adam(best_text_embeddings, seed)
+        best_image_np = self._tensor_to_uint8_image(best_image)
         pil_image = Image.fromarray(best_image_np)
         pil_image.save(f"{results_folder}/best_all.png")
 

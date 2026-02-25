@@ -1,0 +1,54 @@
+# Primary configuration parameters
+"optimization_method": "adam" #"cmaes" for CMA-ES variants "adam" for Adam
+
+# Prompt dataset parameters (used by cmaes_p2.py)
+seed_path: null  # Path to a file with seeds; if null, uses the 'seed' below
+seed: 42  # Default seed value for reproducibility
+prompt_per_categorie: 3  # Number of prompts sampled per category from the dataset
+prompt_sample_seed: 42  # Seed for prompt sampling from the dataset
+
+# General generation/scoring parameters
+cuda: 0  # GPU device ID to use (e.g., 0 for first GPU); falls back to CPU if unavailable
+predictor: 2  # 0: SAM, 1: LAION V1, 2: LAION V2
+num_inference_steps: 4  # Diffusion inference steps during image generation
+guidance_scale: 0  # Classifier-free guidance scale (0 means disabled)
+height: 512  # Generated image height (pixels)
+width: 512  # Generated image width (pixels)
+alpha: 1.0  # Weight for aesthetic score in combined fitness
+beta: 0.0  # Weight for CLIP score in combined fitness
+max_aesthetic_score: 10  # Maximum aesthetic score (normalization)
+max_clip_score: 0.5  # Maximum CLIP score (normalization)
+results_folder: "results"  # Output directory for runs and artifacts
+
+# Diffusion model parameters
+model_id: "black-forest-labs/FLUX.1-schnell"  # Model ID (e.g., "black-forest-labs/FLUX.1-schnell", "PixArt-alpha/PixArt-LCM-XL-2-1024-MS", "stabilityai/sdxl-turbo")
+model_backend: "auto"  # "auto", "sdxl", "flux", or "pixart"
+torch_dtype: "bfloat16"  # "auto", "float32", "float16", or "bfloat16"
+max_sequence_length: 256  # FLUX text encoder token limit (ignored for SDXL)
+use_safetensors: true  # Prefer safetensors weights when available
+
+# Pipeline memory/performance options
+use_multi_gpu: false  # If true and multiple CUDA devices exist, shard pipeline across GPUs
+pipeline_device_map: "balanced"  # Device map strategy (e.g. "balanced", "auto")
+max_memory: null  # Optional memory map, e.g. {"cuda:0":"22GiB","cuda:1":"22GiB","cpu":"64GiB"}
+enable_gradient_checkpointing: true  # Lower memory use at the cost of speed
+enable_attention_slicing: true  # Lower VRAM use (slower)
+enable_vae_slicing: true  # Lower VRAM use for VAE
+enable_vae_tiling: true  # Useful for high-res decode on limited VRAM
+
+# CMA-ES specific parameters
+num_generations: 10 # Number of CMA-ES generations
+pop_size: 6  # CMA-ES population size
+cmaes_variant: "sep"  # "cmaes" (standard), "sep", or "vd"
+sigma: 0.5  # Initial CMA-ES standard deviation
+
+# Adam specific parameters (if selected)
+"num_iterations": 30  # Number of iterations for the Adam optimization process
+"adam_lr": 5e-3  # Learning rate for the Adam optimizer
+"adam_weight_decay": 1e-05  # Weight decay for the Adam optimizer
+"adam_eps": 1e-8  # Epsilon value for numerical stability in the Adam
+"adam_beta1": 0.85  # Beta1 parameter for the Adam optimizer
+"adam_beta2": 0.98  # Beta2 parameter for the Adam optimizer
+
+# Time limit specification
+time_limit_seconds: null # Time limit in seconds, if null then it follows the number of generations/iterations

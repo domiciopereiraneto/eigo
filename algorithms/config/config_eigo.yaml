@@ -41,3 +41,6 @@
 "adam_eps": 1e-8  # Epsilon value for numerical stability in the Adam
 "adam_beta1": 0.85  # Beta1 parameter for the Adam optimizer
 "adam_beta2": 0.98  # Beta2 parameter for the Adam optimizer
+
+# Time limit specification
+time_limit_seconds: 1000 # Time limit in seconds, if null then it follows the number of generations/iterations
