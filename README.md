@@ -72,6 +72,18 @@ python algorithms/cmaes_p2.py --config algorithms/config/config_cmaes_p2.yaml
 These experiments are set to execute a number of runs (one per seed) for a set of 
 Parti Prompt prompts.
 
+### Running Scheduled P2 Batches
+
+To run `algorithms/p2_experiments.py` multiple times with different parameter overrides, use:
+
+```bash
+python algorithms/p2_schedule.py \
+  --base-config algorithms/config/config_p2_experiments.yaml \
+  --schedule algorithms/config/p2_schedule.yaml
+```
+
+`algorithms/config/p2_schedule.yaml` contains a list of run dictionaries (under `runs`), where each dictionary overrides fields from the base config for one run.
+
 ### Processing Results
 
 After running the optimization experiments, you can process and analyze the results using:

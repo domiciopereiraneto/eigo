@@ -33,6 +33,7 @@
 "pop_size": 10  # Population size for CMA-ES optimization
 "cmaes_variant": "sep"  # Variant of CMA-ES to use: "cmaes" (standard) "sep" (sep-CMA-ES) or "vd" (VD-CMA)
 "sigma": 0.5  # Initial standard deviation for CMA-ES optimization
+save_gens: false # Save individuals of each generation to the results folder
 
 # Adam specific parameters (if selected)
 "num_iterations": 100  # Number of iterations for the Adam optimization process

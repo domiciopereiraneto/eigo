@@ -580,6 +580,8 @@ class Eigo:
 
         os.makedirs(results_folder, exist_ok=True)
 
+        save_path = None
+
         with torch.no_grad():
             prompt_embeds, pooled_prompt_embeds = self._encode_prompt_embeddings(selected_prompt)
 
@@ -678,7 +680,8 @@ class Eigo:
 
             ind_id = 1
             for x in solutions:
-                save_path = results_folder + "/gen_%d/id_%d.png" % (generation+1, ind_id)
+                if self.parameters["save_gens"]:
+                    save_path = results_folder + "/gen_%d/id_%d.png" % (generation+1, ind_id)
                 fitness, aesthetic_score, clip_score, fitness_1, fitness_2 = self.evaluate(x, seed, text_embeddings_init_shape, selected_prompt, save_path)
                 tmp_fitnesses.append(fitness)
                 tmp_fitness_1.append(fitness_1)
