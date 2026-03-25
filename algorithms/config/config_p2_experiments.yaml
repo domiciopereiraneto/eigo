@@ -11,17 +11,17 @@ prompt_sample_seed: 42  # Seed for prompt sampling from the dataset
 cuda: 1  # GPU device ID to use (e.g., 0 for first GPU); falls back to CPU if unavailable
 predictor: 2  # 0: SAM, 1: LAION V1, 2: LAION V2
 num_inference_steps: 4  # Diffusion inference steps during image generation
-guidance_scale: 0  # Classifier-free guidance scale (0 means disabled)
+guidance_scale: 0 # Classifier-free guidance scale (0 means disabled)
 height: 512  # Generated image height (pixels)
 width: 512  # Generated image width (pixels)
-alpha: 1.0  # Weight for aesthetic score in combined fitness
-beta: 0.0  # Weight for CLIP score in combined fitness
+alpha: 0.4  # Weight for aesthetic score in combined fitness
+beta: 0.6  # Weight for CLIP score in combined fitness
 max_aesthetic_score: 10  # Maximum aesthetic score (normalization)
 max_clip_score: 0.5  # Maximum CLIP score (normalization)
-results_folder: "results"  # Output directory for runs and artifacts
+results_folder: "results_adam_flux_new"  # Output directory for runs and artifacts
 
 # Diffusion model parameters
-model_id: "black-forest-labs/FLUX.1-schnell"  # Model ID (e.g., "black-forest-labs/FLUX.1-schnell", "PixArt-alpha/PixArt-LCM-XL-2-1024-MS", "stabilityai/sdxl-turbo")
+model_id: "black-forest-labs/FLUX.1-schnell" # Model ID (e.g., "black-forest-labs/FLUX.1-schnell", "PixArt-alpha/PixArt-LCM-XL-2-1024-MS", "stabilityai/sdxl-turbo")
 model_backend: "auto"  # "auto", "sdxl", "flux", or "pixart"
 torch_dtype: "bfloat16"  # "auto", "float32", "float16", or "bfloat16"
 max_sequence_length: 256  # FLUX text encoder token limit (ignored for SDXL)
@@ -40,16 +40,17 @@ enable_vae_tiling: true  # Useful for high-res decode on limited VRAM
 num_generations: 500 # Number of CMA-ES generations
 pop_size: 20  # CMA-ES population size
 cmaes_variant: "sep"  # "cmaes" (standard), "sep", or "vd"
-sigma: 0.1  # Initial CMA-ES standard deviation
+sigma: 0.005  # Initial CMA-ES standard deviation
 save_gens: false # Save individuals of each generation to the results folder
 
 # Adam specific parameters (if selected)
 "num_iterations": 2000  # Number of iterations for the Adam optimization process
-"adam_lr": 5e-3  # Learning rate for the Adam optimizer
-"adam_weight_decay": 1e-05  # Weight decay for the Adam optimizer
+"adam_lr": 1e-4  # Learning rate for the Adam optimizer
+"adam_weight_decay": 0  # Weight decay for the Adam optimizer
 "adam_eps": 1e-8  # Epsilon value for numerical stability in the Adam
-"adam_beta1": 0.85  # Beta1 parameter for the Adam optimizer
-"adam_beta2": 0.98  # Beta2 parameter for the Adam optimizer
+"adam_beta1": 0.9  # Beta1 parameter for the Adam optimizer
+"adam_beta2": 0.999  # Beta2 parameter for the Adam optimizer
+"adam_max_grad_norm": null  # Gradient norm clipping threshold for Adam; set to null or <=0 to disable
 
 # Time limit specification
 time_limit_seconds: 3000 # Time limit in seconds, if null then it follows the number of generations/iterations

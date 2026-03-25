@@ -27,3 +27,4 @@ dependencies:
       - torchvision==0.23.*
       - protobuf>=4.25.3
       - sentencepiece>=0.2.0
+      - beautifulsoup4 >= 4.14.3

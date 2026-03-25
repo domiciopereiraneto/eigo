@@ -109,10 +109,12 @@ Common parameters across all algorithms (set in config file):
 - `height`: Output image height
 - `width`: Output image width
 - `results_folder`: Output directory for results
-- `model_id`: Diffusion model identifier (e.g., `stabilityai/sdxl-turbo`, `black-forest-labs/FLUX.1-schnell`, or `PixArt-alpha/PixArt-XL-2-1024-MS`)
-- `model_backend`: `"auto"`, `"sdxl"`, `"flux"`, or `"pixart"` (recommended: `"auto"` unless explicit override is needed)
+- `model_id`: Diffusion model identifier (e.g., `stabilityai/sdxl-turbo`, `black-forest-labs/FLUX.1-schnell`, `PixArt-alpha/PixArt-XL-2-1024-MS`, or a Z Image checkpoint)
+- `model_backend`: `"auto"`, `"sdxl"`, `"flux"`, `"pixart"`, or `"zimage"` (recommended: `"auto"` unless explicit override is needed)
 - `torch_dtype`: `"auto"`, `"float32"`, `"float16"`, or `"bfloat16"`
-- `max_sequence_length`: FLUX tokenizer max length (ignored by SDXL)
+- `max_sequence_length`: Tokenizer max length for FLUX and Z Image (ignored by SDXL/PixArt)
+- `cfg_normalization`: Z Image CFG normalization toggle
+- `cfg_truncation`: Z Image CFG truncation factor
 - `use_safetensors`: Whether to request safetensors weights
 - `use_multi_gpu`: Enable model sharding across multiple GPUs
 - `pipeline_device_map`: Sharding strategy (e.g. `"balanced"` or `"auto"`)

@@ -4,10 +4,9 @@ import numpy as np
 import pandas as pd
 
 def create_summary_table(results_dirs, save_folder, labels, aesthetic_norm, clip_norm):
-    EXCEL_NAME    = "aggregated_score_results.xlsx"
     OUT_NAME      = "summary_results.xlsx" 
 
-    build_summary(results_dirs, save_folder, EXCEL_NAME, OUT_NAME, aesthetic_norm, clip_norm, labels)
+    build_summary(results_dirs, save_folder, OUT_NAME, aesthetic_norm, clip_norm, labels)
 
 def parse_weights(name: str):
     W_PAT    = re.compile(r"_a(\d+)_b(\d+)")
@@ -27,35 +26,76 @@ def summarise(vals: pd.Series):
     v = pd.Series(vals, dtype=float)
     return float(v.mean()), float(v.std(ddof=0)), float(v.max())
 
-def load_first_row_arrays(xls_path: Path, is_adam: bool):
-    """Return baseline per-prompt arrays (iteration 0) for aesthetic and clip."""
-    df = pd.read_excel(xls_path)
-    first = df.iloc[0]
-    if is_adam:
-        aes = pd.Series([float(first[c]) for c in df.columns if str(c).startswith("aesthetic_score_")])
-        cli = pd.Series([float(first[c]) for c in df.columns if str(c).startswith("clip_score_")])
+def _extract_arrays_from_prompt_csv(prompt_dir: Path):
+    score_csv = prompt_dir / "score_results.csv"
+    fitness_csv = prompt_dir / "fitness_results.csv"
+
+    if score_csv.exists():
+        df = pd.read_csv(score_csv)
+        step_col = "iteration"
+        aes_col = "aesthetic_score"
+        clip_col = "clip_score"
+    elif fitness_csv.exists():
+        df = pd.read_csv(fitness_csv)
+        step_col = "generation"
+        aes_col = "max_aesthetic_score"
+        clip_col = "max_clip_score"
     else:
-        aes = pd.Series([float(first[c]) for c in df.columns if str(c).startswith("max_aesthetic_score_")])
-        cli = pd.Series([float(first[c]) for c in df.columns if str(c).startswith("max_clip_score_")])
-    time = pd.Series([float(first[c]) for c in df.columns if str(c).startswith("elapsed_time_")])
+        return None
 
-    return aes.reset_index(drop=True), cli.reset_index(drop=True), time.reset_index(drop=True)
+    if df.empty:
+        return None
 
-def last_row_arrays(xls_path: Path, is_adam: bool):
-    """Return final per-prompt arrays for aesthetic and clip from the last row."""
-    df = pd.read_excel(xls_path)
-    last = df.iloc[-1]
-    if is_adam:
-        aes = pd.Series([float(last[c]) for c in df.columns if str(c).startswith("aesthetic_score_")])
-        cli = pd.Series([float(last[c]) for c in df.columns if str(c).startswith("clip_score_")])
-    else:
-        aes = pd.Series([float(last[c]) for c in df.columns if str(c).startswith("max_aesthetic_score_")])
-        cli = pd.Series([float(last[c]) for c in df.columns if str(c).startswith("max_clip_score_")])
-    time = pd.Series([float(last[c]) for c in df.columns if str(c).startswith("elapsed_time_")])
+    if step_col in df.columns:
+        df = df.sort_values(step_col)
 
-    return aes.reset_index(drop=True), cli.reset_index(drop=True), time.reset_index(drop=True)
+    aes = pd.to_numeric(df[aes_col], errors="coerce")
+    cli = pd.to_numeric(df[clip_col], errors="coerce")
+    time = pd.to_numeric(df["elapsed_time"], errors="coerce")
+    valid = aes.notna() & cli.notna() & time.notna()
+    if not valid.any():
+        return None
 
-def build_summary(results_dir, save_folder, excel_name, out_name, aesthetic_norm, clip_norm, algo_labels):
+    v = df.loc[valid]
+    return {
+        "aes_first": float(v.iloc[0][aes_col]),
+        "cli_first": float(v.iloc[0][clip_col]),
+        "time_first": float(v.iloc[0]["elapsed_time"]),
+        "aes_last": float(v.iloc[-1][aes_col]),
+        "cli_last": float(v.iloc[-1][clip_col]),
+        "time_last": float(v.iloc[-1]["elapsed_time"]),
+    }
+
+def load_prompt_level_arrays(experiment_dir: Path):
+    aes_first, cli_first, time_first = [], [], []
+    aes_last, cli_last, time_last = [], [], []
+
+    for prompt_dir in sorted(experiment_dir.iterdir()):
+        if not prompt_dir.is_dir() or not prompt_dir.name.startswith("results_"):
+            continue
+        vals = _extract_arrays_from_prompt_csv(prompt_dir)
+        if vals is None:
+            continue
+        aes_first.append(vals["aes_first"])
+        cli_first.append(vals["cli_first"])
+        time_first.append(vals["time_first"])
+        aes_last.append(vals["aes_last"])
+        cli_last.append(vals["cli_last"])
+        time_last.append(vals["time_last"])
+
+    if not aes_last:
+        return None
+
+    return (
+        pd.Series(aes_first, dtype=float).reset_index(drop=True),
+        pd.Series(cli_first, dtype=float).reset_index(drop=True),
+        pd.Series(time_first, dtype=float).reset_index(drop=True),
+        pd.Series(aes_last, dtype=float).reset_index(drop=True),
+        pd.Series(cli_last, dtype=float).reset_index(drop=True),
+        pd.Series(time_last, dtype=float).reset_index(drop=True),
+    )
+
+def build_summary(results_dir, save_folder, out_name, aesthetic_norm, clip_norm, algo_labels):
     # Scan runs
     runs = []
     baseline_source = None
@@ -64,24 +104,20 @@ def build_summary(results_dir, save_folder, excel_name, out_name, aesthetic_norm
         folder = Path(folder)
         if not folder.is_dir():
             continue
-        # Find the Excel file
-        matches = list(folder.rglob(excel_name))
-        if not matches:
-            continue
-        xls = matches[0]
         name = folder.name
-        is_adam = name.startswith("adam")
+        arr = load_prompt_level_arrays(folder)
+        if arr is None:
+            continue
+        aes_first, cli_first, time_first, aes_last, cli_last, time_last = arr
 
         # capture baseline source once from the first found run
         if baseline_source is None:
-            baseline_source = load_first_row_arrays(xls, is_adam=is_adam)
-
+            baseline_source = (aes_first, cli_first, time_first)
         a_b = parse_weights(name)
         if not a_b:
             continue
         a, b = a_b
         seed = parse_seed(name)
-        aes_last, cli_last, time_last = last_row_arrays(xls, is_adam=is_adam)
         runs.append({
             "folder": name,
             "seed": seed,
@@ -92,7 +128,7 @@ def build_summary(results_dir, save_folder, excel_name, out_name, aesthetic_norm
         })
 
     if not runs:
-        raise FileNotFoundError(f"No runs with '{excel_name}' found under the given directories.")
+        raise FileNotFoundError("No runs with prompt CSVs found under the given directories.")
 
     # Unique weights
     weight_pairs = sorted({(r["a"], r["b"]) for r in runs}, key=lambda x: (-x[0], x[1]))

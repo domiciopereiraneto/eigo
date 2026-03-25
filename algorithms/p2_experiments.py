@@ -39,12 +39,10 @@ sys.path.insert(0, parent_dir)
 
 # External imports - grouped by functionality
 import pandas as pd
+import numpy as np
 import random
 import matplotlib.pyplot as plt
 from collections import defaultdict
-import csv
-from pptx import Presentation
-from pptx.util import Inches
 from datasets import load_dataset
 import argparse
 
@@ -113,686 +111,305 @@ else:
         seed_list = [int(line.strip()) for line in file]
 
 
-def aggregate_results_cmaes():
-    """
-    Combine results from multiple runs and calculate summary statistics.
 
-    Aggregates fitness, aesthetic, and CLIP scores across different seeds and prompts.
-    Saves the aggregated results to an Excel file and generates summary plots.
-    """
+def _first_non_empty(series):
+    for value in series.dropna():
+        text = str(value).strip()
+        if text:
+            return text
+    return None
 
-    def plot_mean_std(x_axis, m_vec, std_vec, description, title=None, y_label=None, x_label=None):
-        """
-        Plot the mean and standard deviation with optional labels and title.
 
-        Args:
-            x_axis (iterable): The x-axis values.
-            m_vec (iterable): The mean values.
-            std_vec (iterable): The standard deviation values.
-            description (str): A description for the plot legend.
-            title (str): The title of the plot (optional).
-            y_label (str): The label for the y-axis (optional).
-            x_label (str): The label for the x-axis (optional).
-        """
-        lower_bound = [M_new - Sigma for M_new, Sigma in zip(m_vec, std_vec)]
-        upper_bound = [M_new + Sigma for M_new, Sigma in zip(m_vec, std_vec)]
+def _find_experiment_dirs(output_folder):
+    experiment_dirs = set()
+    for root, _, files in os.walk(output_folder):
+        has_csv = "score_results.csv" in files or "fitness_results.csv" in files
+        if not has_csv:
+            continue
+        prompt_dir = os.path.abspath(root)
+        prompt_name = os.path.basename(prompt_dir)
+        if not prompt_name.startswith("results_"):
+            continue
+        experiment_dirs.add(os.path.dirname(prompt_dir))
+    return sorted(experiment_dirs)
 
-        plt.plot(x_axis, m_vec, '--', label=description + " Avg.")
-        plt.fill_between(x_axis, lower_bound, upper_bound, alpha=.3, label=description + " Avg. ± SD")
-        if title is not None:
-            plt.title(title)
-        if y_label is not None:
-            plt.ylabel(y_label)
-        if x_label is not None:
-            plt.xlabel(x_label)
 
-    def save_plot_results(results, results_folder):
-        """
-        Generate and save plots for the evolution of scores and losses over generations.
+def _load_result_runs(experiment_dir):
+    runs = []
+    for entry in sorted(os.listdir(experiment_dir)):
+        prompt_dir = os.path.join(experiment_dir, entry)
+        if not os.path.isdir(prompt_dir) or not entry.startswith("results_"):
+            continue
 
-        Args:
-            results (pd.DataFrame): The DataFrame containing the results data.
-            results_folder (str): The folder path to save the plots.
-        """
-        # Plot main fitness evolution
-        plt.figure(figsize=(10, 6))  # Increase figure size
-        plot_mean_std(results['generation'], results['avg_fitness'], results['std_fitness'], "Fitness")
-        plt.plot(results['generation'], results['max_fitness'], 'r-', label="Best Fitness")
-        #plot_mean_std(results['generation'], results['avg_fitness_1'], results['std_fitness_1'], "F1 (Aesthetic Score)")
-        #plt.plot(results['generation'], results['max_fitness_1'], 'orange', label="Best F1")
-        #plot_mean_std(results['generation'], results['avg_fitness_2'], results['std_fitness_2'], "F2 (CLIP Score)")
-        #plt.plot(results['generation'], results['max_fitness_2'], 'green', label="Best F2")
-        plt.ylim(0, 1.1)
-        plt.xlabel('Generation')
-        plt.ylabel('Fitness')
-        plt.grid()
-        plt.legend(loc="upper left", bbox_to_anchor=(1, 1))  # Move legend outside the plot
-        plt.tight_layout()  # Adjust layout
-        plt.savefig(results_folder + "/fitness_evolution.png")
+        score_csv = os.path.join(prompt_dir, "score_results.csv")
+        fitness_csv = os.path.join(prompt_dir, "fitness_results.csv")
 
-        # Plot aesthetic score evolution
-        plt.figure(figsize=(10, 6))  # Increase figure size
-        plot_mean_std(results['generation'], results['avg_aesthetic_score'], results['std_aesthetic_score'], "Population")
-        plt.plot(results['generation'], results['max_aesthetic_score'], 'r-', label="Best")
-        plt.ylim(0, 10)
-        plt.xlabel('Generation')
-        plt.ylabel('Aesthetic Score')
-        plt.grid()
-        plt.legend(loc="upper left", bbox_to_anchor=(1, 1))  # Move legend outside the plot
-        plt.tight_layout()  # Adjust layout
-        plt.savefig(results_folder + "/aesthetic_score_evolution.png")
+        if os.path.exists(score_csv):
+            csv_path = score_csv
+            df = pd.read_csv(csv_path)
+            if df.empty:
+                continue
+            df = df.sort_values("iteration").drop_duplicates(subset=["iteration"], keep="last")
+            prompt = _first_non_empty(df["prompt"]) if "prompt" in df.columns else None
+            category = _first_non_empty(df["category"]) if "category" in df.columns else None
+            runs.append({
+                "path": csv_path,
+                "prompt_dir": prompt_dir,
+                "prompt": prompt or os.path.basename(prompt_dir),
+                "category": category or "",
+                "x_label": "iteration",
+                "x": pd.to_numeric(df["iteration"], errors="coerce").to_numpy(dtype=float),
+                "time": pd.to_numeric(df["elapsed_time"], errors="coerce").to_numpy(dtype=float),
+                "aesthetic": pd.to_numeric(df["aesthetic_score"], errors="coerce").to_numpy(dtype=float),
+                "clip": pd.to_numeric(df["clip_score"], errors="coerce").to_numpy(dtype=float),
+                "objective": pd.to_numeric(df["combined_loss"], errors="coerce").to_numpy(dtype=float),
+                "objective_name": "loss",
+            })
 
-        # Plot clip score evolution
-        plt.figure(figsize=(10, 6))  # Increase figure size
-        plot_mean_std(results['generation'], results['avg_clip_score'], results['std_clip_score'], "Population")
-        plt.plot(results['generation'], results['max_clip_score'], 'r-', label="Best")
-        plt.ylim(0, 0.6)
-        plt.xlabel('Generation')
-        plt.ylabel('CLIP Score')
-        plt.grid()
-        plt.legend(loc="upper left", bbox_to_anchor=(1, 1))  # Move legend outside the plot
-        plt.tight_layout()  # Adjust layout
-        plt.savefig(results_folder + "/clip_score_evolution.png")
+        if os.path.exists(fitness_csv):
+            csv_path = fitness_csv
+            df = pd.read_csv(csv_path)
+            if df.empty:
+                continue
+            df = df.sort_values("generation").drop_duplicates(subset=["generation"], keep="last")
+            prompt = _first_non_empty(df["prompt"]) if "prompt" in df.columns else None
+            category = _first_non_empty(df["category"]) if "category" in df.columns else None
+            runs.append({
+                "path": csv_path,
+                "prompt_dir": prompt_dir,
+                "prompt": prompt or os.path.basename(prompt_dir),
+                "category": category or "",
+                "x_label": "generation",
+                "x": pd.to_numeric(df["generation"], errors="coerce").to_numpy(dtype=float),
+                "time": pd.to_numeric(df["elapsed_time"], errors="coerce").to_numpy(dtype=float),
+                "aesthetic": pd.to_numeric(df["max_aesthetic_score"], errors="coerce").to_numpy(dtype=float),
+                "clip": pd.to_numeric(df["max_clip_score"], errors="coerce").to_numpy(dtype=float),
+                "objective": pd.to_numeric(df["max_fitness"], errors="coerce").to_numpy(dtype=float),
+                "objective_name": "fitness",
+            })
 
-    # Initialize aggregated_data as None
-    aggregated_data = None
+    cleaned_runs = []
+    for run in runs:
+        valid = np.isfinite(run["x"]) & np.isfinite(run["time"])
+        valid = valid & np.isfinite(run["aesthetic"]) & np.isfinite(run["clip"]) & np.isfinite(run["objective"])
+        if valid.sum() == 0:
+            continue
+        cleaned_runs.append({
+            **run,
+            "x": run["x"][valid],
+            "time": run["time"][valid],
+            "aesthetic": run["aesthetic"][valid],
+            "clip": run["clip"][valid],
+            "objective": run["objective"][valid],
+        })
+    return cleaned_runs
 
-    # Iterate over all subdirectories
-    for folder_name in os.listdir(OUTPUT_FOLDER):
-        if folder_name.startswith(f"results_"):
-            seed = folder_name.split("_")[-2]  # Extract the seed number
-            prompt_number = folder_name.split("_")[-1]  # Extract the prompt number
 
-            file_path = os.path.join(OUTPUT_FOLDER, folder_name, "fitness_results.csv")
+def _stack_on_axis(runs, key, axis_key, axis_values):
+    stacked = []
+    for run in runs:
+        if axis_key == "x":
+            idx = run["x"].astype(int)
+            series = pd.Series(run[key], index=idx)
+            row = series.reindex(axis_values).to_numpy(dtype=float)
+        else:
+            row = np.interp(axis_values, run["time"], run[key], left=np.nan, right=np.nan)
+            mask = (axis_values >= run["time"].min()) & (axis_values <= run["time"].max())
+            row = np.where(mask, row, np.nan)
+        stacked.append(row)
+    return np.array(stacked, dtype=float)
 
-            if os.path.exists(file_path):
-                # Read the CSV file
-                df = pd.read_csv(file_path)
 
-                df = df.drop(columns=["prompt", "category"]) 
+def _compute_similarity_for_run(prompt_dir, clip_model, clip_preprocess, clip_device):
+    from PIL import Image
+    from skimage.metrics import structural_similarity as ssim
+    import torch
 
-                df = df.rename(columns={"avg_fitness": f"avg_fitness_{seed}_{prompt_number}"})
-                df = df.rename(columns={"max_fitness": f"max_fitness_{seed}_{prompt_number}"})
-                df = df.rename(columns={"std_fitness": f"std_fitness_{seed}_{prompt_number}"})
-                #df = df.rename(columns={"avg_fitness_1": f"avg_fitness_1_{seed}_{prompt_number}"})
-                #df = df.rename(columns={"max_fitness_1": f"max_fitness_1_{seed}_{prompt_number}"})
-                #df = df.rename(columns={"std_fitness_1": f"std_fitness_1_{seed}_{prompt_number}"})
-                #df = df.rename(columns={"avg_fitness_2": f"avg_fitness_2_{seed}_{prompt_number}"})
-                #df = df.rename(columns={"max_fitness_2": f"max_fitness_2_{seed}_{prompt_number}"})
-                #df = df.rename(columns={"std_fitness_2": f"std_fitness_2_{seed}_{prompt_number}"})
-                df = df.rename(columns={"avg_aesthetic_score": f"avg_aesthetic_score_{seed}_{prompt_number}"})
-                df = df.rename(columns={"max_aesthetic_score": f"max_aesthetic_score_{seed}_{prompt_number}"})
-                df = df.rename(columns={"std_aesthetic_score": f"std_aesthetic_score_{seed}_{prompt_number}"})
-                df = df.rename(columns={"avg_clip_score": f"avg_clip_score_{seed}_{prompt_number}"})
-                df = df.rename(columns={"max_clip_score": f"max_clip_score_{seed}_{prompt_number}"})
-                df = df.rename(columns={"std_clip_score": f"std_clip_score_{seed}_{prompt_number}"})
-                df = df.rename(columns={"elapsed_time": f"elapsed_time_{seed}_{prompt_number}"})
+    base_path = os.path.join(prompt_dir, "it_0.png")
+    best_path = os.path.join(prompt_dir, "best_all.png")
+    if not (os.path.exists(base_path) and os.path.exists(best_path)):
+        return np.nan, np.nan
 
-                if aggregated_data is None:
-                    aggregated_data = df
+    with Image.open(base_path).convert("RGB") as img0:
+        t0 = clip_preprocess(img0).unsqueeze(0).to(clip_device)
+    with Image.open(best_path).convert("RGB") as img1:
+        t1 = clip_preprocess(img1).unsqueeze(0).to(clip_device)
 
-                aggregated_data = pd.merge(aggregated_data, df, on="generation", how="outer")
-            else:
-                print(f"File not found: {file_path}")
+    with torch.no_grad():
+        v0 = clip_model.encode_image(t0).float().cpu().numpy().flatten()
+        v1 = clip_model.encode_image(t1).float().cpu().numpy().flatten()
 
-    # Ensure aggregated_data is not None before saving
-    if aggregated_data is not None:
-        # Save the aggregated data to an Excel file
-        output_file = os.path.join(OUTPUT_FOLDER, "aggregated_score_results.xlsx")
-        aggregated_data.to_excel(output_file, index=False)
-        print(f"Aggregated results saved to {output_file}")
-    else:
-        print("No data was aggregated. Check the input folders and files.")
+    den = float(np.linalg.norm(v0) * np.linalg.norm(v1))
+    cosine_similarity = float(np.dot(v0, v1) / den) if den > 0 else np.nan
 
-    data = pd.read_excel(output_file)
+    with Image.open(base_path).convert("L") as img0:
+        g0 = np.array(img0, dtype=np.uint8)
+    with Image.open(best_path).convert("L") as img1:
+        g1 = np.array(img1, dtype=np.uint8)
 
-    # Calculate the average fitness across all seeds for each iteration
-    data['avg_fitness'] = data.filter(like='avg_fitness_').mean(axis=1)
-    # Calculate the standard deviation of fitness across all seeds for each iteration
-    data['std_fitness'] = data.filter(like='std_fitness_').std(axis=1)
-    # Calculate the average fitness across all seeds for each iteration
-    data['best_avg_fitness'] = data.filter(like='max_fitness_').mean(axis=1)
-    # Calculate the average fitness across all seeds for each iteration
-    data['best_std_fitness'] = data.filter(like='max_fitness_').std(axis=1)
-    # Calculate the average fitness across all seeds for each iteration
-    data['max_fitness'] = data.filter(like='max_fitness_').max(axis=1)
-    # Calculate the average fitness across all seeds for each iteration
-    data['avg_aesthetic_score'] = data.filter(like='avg_aesthetic_score_').mean(axis=1)
-    # Calculate the standard deviation of fitness across all seeds for each iteration
-    data['std_aesthetic_score'] = data.filter(like='std_aesthetic_score_').std(axis=1)
-    # Calculate the average fitness across all seeds for each iteration
-    data['best_avg_aesthetic_score'] = data.filter(like='max_aesthetic_score_').mean(axis=1)
-    # Calculate the average fitness across all seeds for each iteration
-    data['best_std_aesthetic_score'] = data.filter(like='max_aesthetic_score_').std(axis=1)
-    # Calculate the average fitness across all seeds for each iteration
-    data['max_aesthetic_score'] = data.filter(like='max_aesthetic_score_').max(axis=1)
-    # Calculate the average fitness across all seeds for each iteration
-    data['avg_clip_score'] = data.filter(like='avg_clip_score_').mean(axis=1)
-    # Calculate the standard deviation of fitness across all seeds for each iteration
-    data['std_clip_score'] = data.filter(like='std_clip_score_').std(axis=1)
-    # Calculate the average fitness across all seeds for each iteration
-    data['best_avg_clip_score'] = data.filter(like='max_clip_score_').mean(axis=1)
-    # Calculate the average fitness across all seeds for each iteration
-    data['best_std_clip_score'] = data.filter(like='max_clip_score_').std(axis=1)
-    # Calculate the average fitness across all seeds for each iteration
-    data['max_clip_score'] = data.filter(like='max_clip_score_').max(axis=1)
+    h = min(g0.shape[0], g1.shape[0])
+    w = min(g0.shape[1], g1.shape[1])
+    ssim_value = float(ssim(g0[:h, :w], g1[:h, :w], data_range=255))
+    return cosine_similarity, ssim_value
 
-    # Fitness Evolution
-    plt.figure(figsize=(10, 6))
-    plot_mean_std(data['generation'], data['avg_fitness'], data['std_fitness'], "Population")
-    plot_mean_std(data['generation'], data['best_avg_fitness'], data['best_std_fitness'], "Bests")
-    plt.plot(data['generation'], data['max_fitness'], 'r-', label="Best")
-    plt.ylim(0, 1.1)
-    plt.xlabel('Generation')
-    plt.ylabel('Fitness')
-    plt.grid()
-    plt.legend(loc="upper left", bbox_to_anchor=(1, 1))
+
+def _compute_similarity_metrics(runs):
+    cos_vals = []
+    ssim_vals = []
+    try:
+        import torch
+        import clip
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        clip_model, clip_preprocess = clip.load("ViT-B/32", device=device)
+        for run in runs:
+            cos_sim, ssim_value = _compute_similarity_for_run(
+                run["prompt_dir"], clip_model, clip_preprocess, device
+            )
+            cos_vals.append(cos_sim)
+            ssim_vals.append(ssim_value)
+    except Exception as exc:
+        print(f"Warning: similarity metrics unavailable ({exc}). Filling with NaN.")
+        cos_vals = [np.nan] * len(runs)
+        ssim_vals = [np.nan] * len(runs)
+    return cos_vals, ssim_vals
+
+
+def _plot_similarity_boxplot(values_df, output_path):
+    metrics = ["cosine_similarity", "ssim"]
+    data = [pd.to_numeric(values_df[m], errors="coerce").dropna().to_numpy(dtype=float) for m in metrics]
+    plt.figure(figsize=(8, 6))
+    plt.boxplot(data, labels=["Cosine Similarity", "SSIM"], showmeans=True)
+    plt.ylabel("Similarity")
+    plt.title("Image Similarity (it_0 vs best_all)")
+    plt.grid(axis="y", linestyle="--", linewidth=0.5)
     plt.tight_layout()
-    plt.savefig(OUTPUT_FOLDER + "/fitness_evolution.png")
+    plt.savefig(output_path)
     plt.close()
 
-    # Aesthetic Score Evolution
+
+def _build_stats(axis, values, axis_name):
+    return pd.DataFrame({
+        axis_name: axis,
+        "count": np.sum(~np.isnan(values), axis=0),
+        "avg": np.nanmean(values, axis=0),
+        "std": np.nanstd(values, axis=0),
+        "min": np.nanmin(values, axis=0),
+        "max": np.nanmax(values, axis=0),
+    })
+
+
+def _plot_evolution(stats_df, x_col, y_name, title, output_path):
+    x = stats_df[x_col].to_numpy(dtype=float)
+    mean = stats_df["avg"].to_numpy(dtype=float)
+    std = stats_df["std"].to_numpy(dtype=float)
+    min_v = stats_df["min"].to_numpy(dtype=float)
+    max_v = stats_df["max"].to_numpy(dtype=float)
+
     plt.figure(figsize=(10, 6))
-    plot_mean_std(data['generation'], data['avg_aesthetic_score'], data['std_aesthetic_score'], "Population")
-    plot_mean_std(data['generation'], data['best_avg_aesthetic_score'], data['best_std_aesthetic_score'], "Bests")
-    plt.plot(data['generation'], data['max_aesthetic_score'], 'r-', label="Best")
-    plt.ylim(0, 10.5)
-    plt.xlabel('Generation')
-    plt.ylabel('Aesthetic Score')
+    plt.plot(x, mean, label="avg")
+    plt.fill_between(x, mean - std, mean + std, alpha=0.25, label="avg ± std")
+    plt.plot(x, min_v, "--", label="min")
+    plt.plot(x, max_v, "--", label="max")
+    plt.xlabel(x_col.replace("_", " ").title())
+    plt.ylabel(y_name.title())
+    plt.title(title)
     plt.grid()
-    plt.legend(loc="upper left", bbox_to_anchor=(1, 1))
+    plt.legend(loc="best")
     plt.tight_layout()
-    plt.savefig(OUTPUT_FOLDER + "/aesthetic_score_evolution.png")
+    plt.savefig(output_path)
     plt.close()
 
-    # CLIP Score Evolution
-    plt.figure(figsize=(10, 6))
-    plot_mean_std(data['generation'], data['avg_clip_score'], data['std_clip_score'], "Population")
-    plot_mean_std(data['generation'], data['best_avg_clip_score'], data['best_std_clip_score'], "Bests")
-    plt.plot(data['generation'], data['max_clip_score'], 'r-', label="Best")
-    plt.xlabel('Generation')
-    plt.ylabel('CLIP Score')
-    plt.ylim(0, 0.6)
-    plt.grid()
-    plt.legend(loc="upper left", bbox_to_anchor=(1, 1))
-    plt.tight_layout()
-    plt.savefig(OUTPUT_FOLDER + "/clip_score_evolution.png")
-    plt.close()
 
-    # Initialize PowerPoint presentation
-    presentation = Presentation()
+def _summary_rows(df, group_name):
+    row = {"prompt": group_name, "n_runs": len(df)}
+    for metric in ["aesthetic", "clip", "objective", "cosine_similarity", "ssim"]:
+        values = pd.to_numeric(df[metric], errors="coerce").to_numpy(dtype=float)
+        row[f"{metric}_avg"] = float(np.nanmean(values))
+        row[f"{metric}_std"] = float(np.nanstd(values))
+        row[f"{metric}_min"] = float(np.nanmin(values))
+        row[f"{metric}_max"] = float(np.nanmax(values))
+    return row
+
+
+def _aggregate_one_experiment(experiment_dir):
+    runs = _load_result_runs(experiment_dir)
+    if not runs:
+        print(f"No score files found under experiment folder: {experiment_dir}")
+        return
+
+    objective_names = sorted(set(run["objective_name"] for run in runs))
+    x_labels = sorted(set(run["x_label"] for run in runs))
+    if len(objective_names) != 1 or len(x_labels) != 1:
+        raise ValueError(
+            "Mixed run types found (Adam and CMA-ES together). "
+            "Run aggregation on one method folder at a time."
+        )
+
+    axis_name = x_labels[0]
+    objective_name = objective_names[0]
+    x_axis = np.arange(0, int(max(np.max(run["x"]) for run in runs)) + 1)
+    max_time = max(np.max(run["time"]) for run in runs)
+    time_axis = np.linspace(0, max_time, 200) if max_time > 0 else np.array([0.0])
+
+    for metric, label in [("aesthetic", "aesthetic"), ("clip", "clip"), ("objective", objective_name)]:
+        step_values = _stack_on_axis(runs, metric, "x", x_axis)
+        step_stats = _build_stats(x_axis, step_values, axis_name)
+        step_stats.to_csv(os.path.join(experiment_dir, f"{label}_evolution_by_{axis_name}.csv"), index=False)
+        _plot_evolution(
+            step_stats,
+            axis_name,
+            label,
+            f"{label.title()} evolution by {axis_name}",
+            os.path.join(experiment_dir, f"{label}_evolution_by_{axis_name}.png"),
+        )
+
+        time_values = _stack_on_axis(runs, metric, "time", time_axis)
+        time_stats = _build_stats(time_axis, time_values, "elapsed_time_seconds")
+        time_stats.to_csv(os.path.join(experiment_dir, f"{label}_evolution_by_time.csv"), index=False)
+        _plot_evolution(
+            time_stats,
+            "elapsed_time_seconds",
+            label,
+            f"{label.title()} evolution by elapsed time",
+            os.path.join(experiment_dir, f"{label}_evolution_by_time.png"),
+        )
+
+    cosine_similarity, ssim_vals = _compute_similarity_metrics(runs)
+    final_rows = []
+    for run, cos_sim, ssim_value in zip(runs, cosine_similarity, ssim_vals):
+        final_rows.append({
+            "prompt": run["prompt"],
+            "category": run["category"],
+            "aesthetic": float(run["aesthetic"][-1]),
+            "clip": float(run["clip"][-1]),
+            "objective": float(run["objective"][-1]),
+            "cosine_similarity": cos_sim,
+            "ssim": ssim_value,
+        })
+    finals_df = pd.DataFrame(final_rows)
+
+    summary_rows = []
+    for prompt, group in finals_df.groupby("prompt", dropna=False):
+        summary_rows.append(_summary_rows(group, str(prompt)))
+    summary_rows.append(_summary_rows(finals_df, "TOTAL"))
+
+    summary_df = pd.DataFrame(summary_rows)
+    summary_df.insert(1, "objective_name", objective_name)
+    summary_df.to_csv(os.path.join(experiment_dir, "aggregate_prompt_summary.csv"), index=False)
+    finals_df.to_csv(os.path.join(experiment_dir, "aggregate_prompt_similarity_values.csv"), index=False)
+    _plot_similarity_boxplot(finals_df, os.path.join(experiment_dir, "similarity_boxplot.png"))
+    print(f"Aggregation completed for {len(runs)} runs in {experiment_dir}")
+
+
+def aggregate_results(output_folder=None):
+    output_folder = output_folder or OUTPUT_FOLDER
+    experiment_dirs = _find_experiment_dirs(output_folder)
+    if not experiment_dirs:
+        print(f"No experiment folders found under: {output_folder}")
+        return
+    for experiment_dir in experiment_dirs:
+        _aggregate_one_experiment(experiment_dir)
 
-    # Collect folders with seed numbers
-    folders = []
-    for folder_name in os.listdir(OUTPUT_FOLDER):
-        if folder_name.startswith("results_"):
-            # Extract the seed number from the folder name
-            seed_number = int(folder_name.split("_")[-2])  # Convert to integer for sorting
-            prompt_number = int(folder_name.split("_")[-1])  # Extract prompt number
-            folder_path = os.path.join(OUTPUT_FOLDER, folder_name)
-            folders.append((seed_number, prompt_number, folder_path))
-
-    # Sort folders by prompt number in ascending order
-    folders.sort(key=lambda x: x[1])
-
-    # Iterate over sorted folders
-    for seed_number, prompt_number, folder_path in folders:
-        # Paths for required images and CSV file
-        it_0_path = os.path.join(folder_path, "it_0.png")
-        best_all_path = os.path.join(folder_path, "best_all.png")
-        fitness_evolution_path = os.path.join(folder_path, "fitness_evolution.png")
-        aesthetic_evolution_path = os.path.join(folder_path, "aesthetic_score_evolution.png")
-        clip_evolution_path = os.path.join(folder_path, "clip_score_evolution.png")
-        csv_path = os.path.join(folder_path, "fitness_results.csv")
-
-        # Extract scores and prompt from CSV
-        fitness_initial = None
-        fitness_best = None
-        aesthetic_initial = None
-        aesthetic_best = None
-        clip_initial = None
-        clip_best = None
-        prompt_text = None
-        category = None
-
-        if os.path.exists(csv_path):
-            with open(csv_path, 'r') as csvfile:
-                reader = csv.DictReader(csvfile)
-                rows = list(reader)
-                if rows:
-                    # Initial values from the first row
-                    first_row = rows[0]
-                    fitness_initial = float(first_row['max_fitness'])
-                    aesthetic_initial = float(first_row['max_aesthetic_score'])
-                    clip_initial = float(first_row['max_clip_score'])
-                    prompt_text = first_row['prompt']
-                    category = first_row['category']
-
-                    # Find the row with the best (maximum) max_fitness
-                    best_row = max(rows, key=lambda r: float(r['max_fitness']))
-                    fitness_best = float(best_row['max_fitness'])
-                    aesthetic_best = float(best_row['max_aesthetic_score'])
-                    clip_best = float(best_row['max_clip_score'])
-
-        # Slide 1: it_0.png and it_1000.png
-        if os.path.exists(it_0_path) and os.path.exists(best_all_path):
-            slide = presentation.slides.add_slide(presentation.slide_layouts[5])  # Blank slide
-            title = slide.shapes.title
-            title.text = f"Seed {seed_number}"
-
-            # Add prompt below the title
-            if prompt_text:
-                left = Inches(0.5)
-                top = Inches(1)
-                width = Inches(9)
-                textbox = slide.shapes.add_textbox(left, top, width, Inches(0.5))
-                textbox.text = f"Prompt: {prompt_text}"
-
-            if category:
-                left = Inches(0.5)
-                top = Inches(1.5)
-                width = Inches(9)
-                textbox = slide.shapes.add_textbox(left, top, width, Inches(0.5))
-                textbox.text = f"Category: {category}"
-
-            # Add it_0.png
-            slide.shapes.add_picture(it_0_path, Inches(0.5), Inches(2), height=Inches(4))
-
-            # Add legend below it_0.png
-            left = Inches(0.5)
-            top = Inches(6.2)
-            width = Inches(4)
-            textbox = slide.shapes.add_textbox(left, top, width, Inches(0.5))
-            text = "Initial iteration"
-            if fitness_initial is not None:
-                text += f"\nInitial Fitness: {fitness_initial:.4f}"
-            if aesthetic_initial is not None:
-                text += f"\nAesthetic Score: {aesthetic_initial:.4f}"
-            if clip_initial is not None:
-                text += f"\nCLIP Score: {clip_initial:.4f}"
-            textbox.text = text
-
-            # Add it_1000.png
-            slide.shapes.add_picture(best_all_path, Inches(5.5), Inches(2), height=Inches(4))
-
-            # Add legend below it_1000.png
-            left = Inches(5.5)
-            top = Inches(6.2)
-            width = Inches(4)
-            textbox = slide.shapes.add_textbox(left, top, width, Inches(0.5))
-            text = "Best iteration"
-            if fitness_best is not None:
-                text += f"\nBest fitness: {fitness_best:.4f}"
-            if aesthetic_best is not None:
-                text += f"\nAesthetic Score: {aesthetic_best:.4f}"
-            if clip_best is not None:
-                text += f"\nCLIP Score: {clip_best:.4f}"
-            textbox.text = text
-
-        # Slide 2: fitness_evolution
-        if os.path.exists(fitness_evolution_path):
-            slide = presentation.slides.add_slide(presentation.slide_layouts[5])  # Blank slide
-            title = slide.shapes.title
-            title.text = f"Seed {seed_number}"
-
-            # Add aesthetic_evolution.png
-            slide.shapes.add_picture(fitness_evolution_path, Inches(0), Inches(2), height=Inches(4))
-
-            left = Inches(0.5)
-            top = Inches(6.2)
-            width = Inches(4)
-            textbox = slide.shapes.add_textbox(left, top, width, Inches(0.5))
-            text = "Fitness evolution"
-            textbox.text = text
-
-        # Slide 3: clip_score_evolution.png and aesthetic_score_evolution.png
-        if os.path.exists(clip_evolution_path) and os.path.exists(aesthetic_evolution_path):
-            slide = presentation.slides.add_slide(presentation.slide_layouts[5])  # Blank slide
-            title = slide.shapes.title
-            title.text = f"Seed {seed_number}"
-
-            # Add aesthetic_evolution.png
-            slide.shapes.add_picture(clip_evolution_path, Inches(0), Inches(2), height=Inches(4))
-
-            left = Inches(0.5)
-            top = Inches(6.2)
-            width = Inches(4)
-            textbox = slide.shapes.add_textbox(left, top, width, Inches(0.5))
-            text = "CLIP score evolution"
-            textbox.text = text
-
-            # Add loss_evolution.png
-            slide.shapes.add_picture(aesthetic_evolution_path, Inches(5), Inches(2), height=Inches(4))
-
-            left = Inches(5.5)
-            top = Inches(6.2)
-            width = Inches(4)
-            textbox = slide.shapes.add_textbox(left, top, width, Inches(0.5))
-            text = "Aesthetic score evolution"
-            textbox.text = text
-
-    output_filename = os.path.join(OUTPUT_FOLDER, f"summary.pptx")
-    # Save the presentation
-    presentation.save(output_filename)
-    print(f"Presentation saved as {output_filename}")
-
-def aggregate_results_adam():
-
-    # Plot results
-    # Generates and saves plots for the evolution of scores and losses over iterations.
-    def plot_results(results, results_folder):
-        plt.figure(figsize=(10, 6))  # Increase figure size
-        plt.plot(results['iteration'], results['aesthetic_score'], label="Aesthetic Score")
-        plt.xlabel('Iteration')
-        plt.ylabel('Aesthetic Score')
-        plt.title('Aesthetic Score Evolution')
-        plt.grid()
-        plt.legend(loc="upper left", bbox_to_anchor=(1, 1))  # Move legend outside the plot
-        plt.tight_layout()  # Adjust layout
-        plt.savefig(results_folder + "/aesthetic_evolution.png")
-        plt.close()
-
-        plt.figure(figsize=(10, 6))  # Increase figure size
-        plt.plot(results['iteration'], results['clip_score'], label="CLIP Score")
-        plt.xlabel('Iteration')
-        plt.ylabel('CLIP Score')
-        plt.title('CLIP Score Evolution')
-        plt.grid()
-        plt.legend(loc="upper left", bbox_to_anchor=(1, 1))  # Move legend outside the plot
-        plt.tight_layout()  # Adjust layout
-        plt.savefig(results_folder + "/clip_evolution.png")
-        plt.close()
-
-        # Plot all losses in one plot
-        plt.figure(figsize=(10, 6))  # Increase figure size
-        plt.plot(results['iteration'], results['combined_loss'], label="Combined Loss")
-        plt.xlabel('Iteration')
-        plt.ylabel('Loss')
-        plt.title('Loss Evolution')
-        plt.grid()
-        plt.legend(loc="upper left", bbox_to_anchor=(1, 1))  # Move legend outside the plot
-        plt.tight_layout()  # Adjust layout
-        plt.savefig(results_folder + "/loss_evolution.png")
-        plt.close()
-
-    def plot_mean_std(x_axis, m_vec, std_vec, description, title=None, y_label=None, x_label=None):
-        lower_bound = [M_new - Sigma for M_new, Sigma in zip(m_vec, std_vec)]
-        upper_bound = [M_new + Sigma for M_new, Sigma in zip(m_vec, std_vec)]
-
-        plt.plot(x_axis, m_vec, '--', label=description + " Avg.")
-        plt.fill_between(x_axis, lower_bound, upper_bound, alpha=.3, label=description + " Avg. ± SD")
-        if title is not None:
-            plt.title(title)
-        if y_label is not None:
-            plt.ylabel(y_label)
-        if x_label is not None:
-            plt.xlabel(x_label)
-
-    # Initialize aggregated_data as None
-    aggregated_data = None
-
-    # Variables to track the maximum final combined score
-    max_final_combined_score = float('-inf')
-    max_seed = None
-    max_prompt_number = None
-
-    # Iterate over all subdirectories
-    for folder_name in os.listdir(OUTPUT_FOLDER):
-        if folder_name.startswith(f"results_"):
-            seed = folder_name.split("_")[-2]  # Extract the seed number
-            prompt_number = folder_name.split("_")[-1]  # Extract the prompt number
-
-            file_path = os.path.join(OUTPUT_FOLDER, folder_name, "score_results.csv")
-
-            if os.path.exists(file_path):
-                # Read the CSV file
-                df = pd.read_csv(file_path)
-
-                df = df.drop(columns=["prompt", "category"]) 
-
-                df = df.rename(columns={"combined_score": f"combined_score_{seed}_{prompt_number}"})
-                df = df.rename(columns={"combined_loss": f"combined_loss_{seed}_{prompt_number}"})
-                df = df.rename(columns={"aesthetic_score": f"aesthetic_score_{seed}_{prompt_number}"})
-                df = df.rename(columns={"clip_score": f"clip_score_{seed}_{prompt_number}"})
-                df = df.rename(columns={"elapsed_time": f"elapsed_time_{seed}_{prompt_number}"})
-
-                # Check the final combined score in this file
-                max_score = df[f"combined_score_{seed}_{prompt_number}"].max()
-                if max_score > max_final_combined_score:
-                    max_final_combined_score = max_score
-                    max_seed = seed
-                    max_prompt_number = prompt_number
-
-                if aggregated_data is None:
-                    aggregated_data = df
-
-                else:
-                    aggregated_data = pd.merge(aggregated_data, df, on="iteration", how="outer")
-            else:
-                print(f"File not found: {file_path}")
-
-    # Ensure aggregated_data is not None before saving
-    if aggregated_data is not None:
-        # Save the aggregated data to an Excel file
-        output_file = os.path.join(OUTPUT_FOLDER, "aggregated_score_results.xlsx")
-        aggregated_data.to_excel(output_file, index=False)
-        print(f"Aggregated results saved to {output_file}")
-    else:
-        print("No data was aggregated. Check the input folders and files.")
-
-    data = pd.read_excel(output_file)
-
-    data['max_combined_score'] = aggregated_data[f"combined_score_{max_seed}_{max_prompt_number}"]
-    data['max_combined_loss'] = aggregated_data[f"combined_loss_{max_seed}_{max_prompt_number}"]
-    data['max_aesthetic_score'] = aggregated_data[f"aesthetic_score_{max_seed}_{max_prompt_number}"]
-    data['max_clip_score'] = aggregated_data[f"clip_score_{max_seed}_{max_prompt_number}"]
-
-    # Calculate the average metrics across all seeds for each iteration
-    data['avg_combined_score'] = data.filter(like='combined_score_').mean(axis=1)
-    data['avg_combined_loss'] = data.filter(like='combined_loss_').mean(axis=1)
-    data['avg_aesthetic_score'] = data.filter(like='aesthetic_score_').mean(axis=1)
-    data['avg_clip_score'] = data.filter(like='clip_score_').mean(axis=1)
-
-    # Calculate the standard deviation for each metric
-    data['std_combined_score'] = data.filter(like='combined_score_').std(axis=1)
-    data['std_combined_loss'] = data.filter(like='combined_loss_').std(axis=1)
-    data['std_aesthetic_score'] = data.filter(like='aesthetic_score_').std(axis=1)
-    data['std_clip_score'] = data.filter(like='clip_score_').std(axis=1)
-
-    # Loss Evolution
-    plt.figure(figsize=(10, 6))
-    plot_mean_std(data['iteration'], data['avg_combined_loss'], data['std_combined_loss'], "Loss")
-    plt.plot(data['iteration'], data['max_combined_loss'], '-', label="Best")
-    plt.ylim(0, 1.1)
-    plt.xlabel('Iteration')
-    plt.ylabel('Loss')
-    plt.grid()
-    plt.legend(loc="upper left", bbox_to_anchor=(1, 1))
-    plt.tight_layout()
-    plt.savefig(OUTPUT_FOLDER + "/loss_evolution.png")
-    plt.close()
-
-    # Aesthetic Score Evolution
-    plt.figure(figsize=(10, 6))
-    plot_mean_std(data['iteration'], data['avg_aesthetic_score'], data['std_aesthetic_score'], "")
-    plt.plot(data['iteration'], data['max_aesthetic_score'], '-', label="Best")
-    plt.ylim(0, 10.5)
-    plt.xlabel('Iteration')
-    plt.ylabel('Aesthetic Score')
-    plt.grid()
-    plt.legend(loc="upper left", bbox_to_anchor=(1, 1))
-    plt.tight_layout()
-    plt.savefig(OUTPUT_FOLDER + "/aesthetic_score_evolution.png")
-    plt.close()
-
-    # CLIP Score Evolution
-    plt.figure()
-    plot_mean_std(data['iteration'], data['avg_clip_score'], data['std_clip_score'], "Population")
-    plt.plot(data['iteration'], data['max_clip_score'], '-', label="Best")
-    plt.ylim(0, 0.6)
-    plt.xlabel('Iteration')
-    plt.ylabel('CLIP Score')
-    plt.grid()
-    plt.legend()
-    plt.savefig(OUTPUT_FOLDER + "/clip_score_evolution.png")
-    plt.close()
-
-    # Initialize PowerPoint presentation
-    presentation = Presentation()
-
-    # Collect folders with seed numbers
-    folders = []
-    for folder_name in os.listdir(OUTPUT_FOLDER):
-        if folder_name.startswith("results_"):
-            # Extract the seed number from the folder name
-            seed_number = int(folder_name.split("_")[-2])  # Convert to integer for sorting
-            prompt_number = int(folder_name.split("_")[-1])  # Extract prompt number
-            folder_path = os.path.join(OUTPUT_FOLDER, folder_name)
-            folders.append((seed_number, prompt_number, folder_path))
-
-    # Sort folders by prompt number in ascending order
-    folders.sort(key=lambda x: x[1])
-
-    # Iterate over sorted folders
-    for seed_number, prompt_number, folder_path in folders:
-        # Paths for required images and CSV file
-        it_0_path = os.path.join(folder_path, "it_0.png")
-        best_all_path = os.path.join(folder_path, "best_all.png")
-        loss_evolution_path = os.path.join(folder_path, "loss_evolution.png")
-        score_evolution_path = os.path.join(folder_path, "aesthetic_evolution.png")
-        clip_evolution_path = os.path.join(folder_path, "clip_evolution.png")
-        csv_path = os.path.join(folder_path, "score_results.csv")
-
-        # Extract scores and prompt from CSV
-        combined_score_initial = None
-        combined_score_best = None
-        aesthetic_initial = None
-        aesthetic_best = None
-        clip_initial = None
-        clip_best = None
-        prompt_text = None
-        category = None
-
-        if os.path.exists(csv_path):
-            with open(csv_path, 'r') as csvfile:
-                reader = csv.DictReader(csvfile)
-                rows = list(reader)
-                if rows:
-                    # Initial values from the first row
-                    first_row = rows[0]
-                    combined_score_initial = float(first_row['combined_score'])
-                    aesthetic_initial = float(first_row['aesthetic_score'])
-                    clip_initial = float(first_row['clip_score'])
-                    prompt_text = first_row['prompt']
-                    category = first_row['category']
-
-                    # Find the row with the best (maximum) max_fitness
-                    best_row = max(rows, key=lambda r: float(r['combined_score']))
-                    combined_score_best = float(best_row['combined_score'])
-                    aesthetic_best = float(best_row['aesthetic_score'])
-                    clip_best = float(best_row['clip_score'])
-
-        # Slide 1: it_0.png and it_1000.png
-        if os.path.exists(it_0_path) and os.path.exists(best_all_path):
-            slide = presentation.slides.add_slide(presentation.slide_layouts[5])  # Blank slide
-            title = slide.shapes.title
-            title.text = f"Seed {seed_number}"
-
-            # Add prompt below the title
-            if prompt_text:
-                left = Inches(0.5)
-                top = Inches(1)
-                width = Inches(9)
-                textbox = slide.shapes.add_textbox(left, top, width, Inches(0.5))
-                textbox.text = f"Prompt: {prompt_text}"
-
-            if category:
-                left = Inches(0.5)
-                top = Inches(1.5)
-                width = Inches(9)
-                textbox = slide.shapes.add_textbox(left, top, width, Inches(0.5))
-                textbox.text = f"Category: {category}"
-
-            # Add it_0.png
-            slide.shapes.add_picture(it_0_path, Inches(0.5), Inches(2), height=Inches(4))
-
-            # Add legend below it_0.png
-            left = Inches(0.5)
-            top = Inches(6.2)
-            width = Inches(4)
-            textbox = slide.shapes.add_textbox(left, top, width, Inches(0.5))
-            text = "Initial iteration"
-            if combined_score_initial is not None:
-                text += f"\nInitial Combined Score: {combined_score_initial:.4f}"
-            if aesthetic_initial is not None:
-                text += f"\nAesthetic Score: {aesthetic_initial:.4f}"
-            if clip_initial is not None:
-                text += f"\nCLIP Score: {clip_initial:.4f}"
-            textbox.text = text
-
-            # Add it_1000.png
-            slide.shapes.add_picture(best_all_path, Inches(5.5), Inches(2), height=Inches(4))
-
-            # Add legend below it_1000.png
-            left = Inches(5.5)
-            top = Inches(6.2)
-            width = Inches(4)
-            textbox = slide.shapes.add_textbox(left, top, width, Inches(0.5))
-            text = "Best iteration"
-            if combined_score_best is not None:
-                text += f"\nBest Combined Score: {combined_score_best:.4f}"
-            if aesthetic_best is not None:
-                text += f"\nAesthetic Score: {aesthetic_best:.4f}"
-            if clip_best is not None:
-                text += f"\nCLIP Score: {clip_best:.4f}"
-            textbox.text = text
-
-        # Slide 2: loss_evolution.png
-        if os.path.exists(loss_evolution_path) and os.path.exists(score_evolution_path):
-            slide = presentation.slides.add_slide(presentation.slide_layouts[5])  # Blank slide
-            title = slide.shapes.title
-            title.text = f"Seed {seed_number}"
-
-            # Add aesthetic_evolution.png
-            slide.shapes.add_picture(loss_evolution_path, Inches(0), Inches(2), height=Inches(4))
-
-            left = Inches(0.5)
-            top = Inches(6.2)
-            width = Inches(4)
-            textbox = slide.shapes.add_textbox(left, top, width, Inches(0.5))
-            text = "Loss evolution"
-            textbox.text = text
-
-        # Slide 3: aesthetic_evolution.png and loss_evolution.png
-        if os.path.exists(loss_evolution_path) and os.path.exists(score_evolution_path):
-            slide = presentation.slides.add_slide(presentation.slide_layouts[5])  # Blank slide
-            title = slide.shapes.title
-            title.text = f"Seed {seed_number}"
-
-            # Add aesthetic_evolution.png
-            slide.shapes.add_picture(clip_evolution_path, Inches(0), Inches(2), height=Inches(4))
-
-            left = Inches(0.5)
-            top = Inches(6.2)
-            width = Inches(4)
-            textbox = slide.shapes.add_textbox(left, top, width, Inches(0.5))
-            text = "CLIP evolution"
-            textbox.text = text
-
-            # Add loss_evolution.png
-            slide.shapes.add_picture(score_evolution_path, Inches(5), Inches(2), height=Inches(4))
-
-            left = Inches(5.5)
-            top = Inches(6.2)
-            width = Inches(4)
-            textbox = slide.shapes.add_textbox(left, top, width, Inches(0.5))
-            text = "Aesthetic evolution"
-            textbox.text = text
-
-    output_filename = os.path.join(OUTPUT_FOLDER, f"summary.pptx")
-    # Save the presentation
-    presentation.save(output_filename)
-    print(f"Presentation saved as {output_filename}")
 
 if __name__ == "__main__":
     # Entry point for the script
@@ -812,6 +429,7 @@ if __name__ == "__main__":
             else:
                 raise ValueError(f"Unknown optimization method: {config['optimization_method']}")
             print(f"Run with seed {seed} and prompt '{prompt}' finished!")
-            #aggregate_results()
             prompt_number += 1
         seed_number += 1
+
+    aggregate_results()

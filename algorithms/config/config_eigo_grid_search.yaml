@@ -1,0 +1,62 @@
+# Single prompt for all runs
+selected_prompt: "an astronaut riding a horse on mars"
+
+# Select which optimizers to include in the grid
+# If true, all combinations in grid.adam are tested with optimization_method=adam
+# If true, all combinations in grid.cmaes are tested with optimization_method=cmaes
+test_adam: false
+test_cmaes: true
+
+# General parameters (copied from config_eigo.yaml)
+seed: 42
+cuda: 0
+predictor: 2
+num_inference_steps: 20
+guidance_scale: 4.5
+height: 512
+width: 512
+alpha: 0.4
+beta: 0.6
+max_aesthetic_score: 10
+max_clip_score: 0.5
+model_id: "PixArt-alpha/PixArt-Sigma-XL-2-1024-MS"
+model_backend: "auto"
+torch_dtype: "float16"
+max_sequence_length: 256
+use_safetensors: true
+use_multi_gpu: false
+pipeline_device_map: "balanced"
+max_memory: null
+enable_gradient_checkpointing: false
+enable_attention_slicing: false
+enable_vae_slicing: false
+enable_vae_tiling: false
+results_folder: "results_grid_search_pixart_sepcmaes"
+
+# CMA-ES defaults (used if not overridden by grid.cmaes)
+num_generations: 50
+pop_size: 20
+cmaes_variant: "sep"
+sigma: 0.5
+save_gens: false
+
+# Adam defaults (used if not overridden by grid.adam)
+num_iterations: 300
+adam_lr: 5e-3
+adam_weight_decay: 0
+adam_eps: 1e-8
+adam_beta1: 0.9
+adam_beta2: 0.999
+
+# Time limit in seconds (null -> use num_generations/num_iterations)
+time_limit_seconds: null
+
+# Grid definition
+# Each list generates a cartesian product per method
+grid:
+  adam:
+    adam_lr: [1e-8, 3e-8, 1e-7, 3e-7, 1e-6, 3e-6]
+    adam_weight_decay: [1e-3, 1e-2]
+
+  cmaes:
+    sigma: [0.05, 0.01, 0.005, 0.001]

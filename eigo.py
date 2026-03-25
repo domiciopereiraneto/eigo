@@ -218,16 +218,18 @@ class Eigo:
     def _freeze_module_params(module):
         if module is None:
             return
-        if hasattr(module, "parameters"):
-            for p in module.parameters():
+        parameters = getattr(module, "parameters", None)
+        if callable(parameters):
+            for p in parameters():
                 p.requires_grad_(False)
             return
 
         components = getattr(module, "components", None)
         if isinstance(components, dict):
             for component in components.values():
-                if component is not None and hasattr(component, "parameters"):
-                    for p in component.parameters():
+                component_parameters = getattr(component, "parameters", None)
+                if component is not None and callable(component_parameters):
+                    for p in component_parameters():
                         p.requires_grad_(False)
 
     @staticmethod
@@ -472,6 +474,25 @@ class Eigo:
         else:
             return f"{seconds}s"
 
+    def _save_run_config(self, results_folder, seed, selected_prompt, category=None, prompt_number=None):
+        run_config = dict(self.parameters)
+        run_config["seed"] = int(seed)
+        run_config["selected_prompt"] = selected_prompt
+        run_config["results_folder"] = self.parameters["results_folder"]
+        run_config["experiment_output_folder"] = self.OUTPUT_FOLDER
+        run_config["run_results_folder"] = results_folder
+        run_config["resolved_model_backend"] = self.model_backend
+        run_config["resolved_torch_dtype"] = str(self.model_dtype).replace("torch.", "")
+
+        if category is not None:
+            run_config["category"] = category
+        if prompt_number is not None:
+            run_config["prompt_number"] = prompt_number
+
+        config_save_path = os.path.join(results_folder, "config.yaml")
+        with open(config_save_path, "w", encoding="utf-8") as file:
+            yaml.safe_dump(run_config, file, sort_keys=False, allow_unicode=True)
+
     def evaluate(self, input_embedding, seed, embedding_shape, selected_prompt, save_path=None):
         # x is a NumPy array representing the embedding vector
         # Convert it to a torch tensor
@@ -579,6 +600,7 @@ class Eigo:
             results_folder += f"_{prompt_number}"
 
         os.makedirs(results_folder, exist_ok=True)
+        self._save_run_config(results_folder, seed, selected_prompt, category=category, prompt_number=prompt_number)
 
         save_path = None
 
@@ -667,7 +689,8 @@ class Eigo:
 
             print(f"Generation {generation+1}/{self.parameters['num_generations']}")
 
-            os.makedirs(results_folder+"/gen_%d" % (generation+1), exist_ok=True)
+            if self.parameters["save_gens"]:
+                os.makedirs(results_folder+"/gen_%d" % (generation+1), exist_ok=True)
 
             # Ask for new candidate solutions
             solutions = es.ask()
@@ -869,6 +892,11 @@ class Eigo:
         adam_eps = float(self.parameters["adam_eps"])
         adam_beta1 = float(self.parameters["adam_beta1"])
         adam_beta2 = float(self.parameters["adam_beta2"])
+        adam_max_grad_norm = self.parameters.get("adam_max_grad_norm", None)
+        if adam_max_grad_norm is not None:
+            adam_max_grad_norm = float(adam_max_grad_norm)
+            if adam_max_grad_norm <= 0:
+                adam_max_grad_norm = None
 
         torch.manual_seed(seed)
         np.random.seed(seed)
@@ -883,6 +911,7 @@ class Eigo:
         if prompt_number is not None:
             results_folder += f"_{prompt_number}"
         os.makedirs(results_folder, exist_ok=True)
+        self._save_run_config(results_folder, seed, selected_prompt, category=category, prompt_number=prompt_number)
 
         # Text features don't depend on your params; compute w/o grad
         with torch.no_grad():
@@ -965,6 +994,8 @@ class Eigo:
 
             # Calculate gradients
             combined_loss.backward()
+            if adam_max_grad_norm is not None:
+                torch.nn.utils.clip_grad_norm_(text_embeddings, max_norm=adam_max_grad_norm)
             # Update parameters
             optimizer.step()
 
