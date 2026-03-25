@@ -1,80 +1,156 @@
 # EIGO
-Evolutionary Image Generation Optimization (EIGO) is an engine for experimentation of diffusion-based generative models optimization through evolutionary prompt embedding search. It refines text-to-image generation using aesthetic and semantic metrics, enabling controllable, efficient, and black-box optimization without model retraining.
+
+Evolutionary Image Generation Optimization (EIGO) is a backend and experiment suite for optimizing text-to-image generation through prompt embedding search. The core engine combines diffusion pipelines, aesthetic predictors, and CLIP-based prompt alignment to run black-box or gradient-based optimization without retraining the image model.
+
+The repository currently exposes:
+
+- `eigo.py`: the main backend engine (`Eigo`) used by all experiment scripts
+- `algorithms/eigo_single_prompt.py`: run one prompt with either Adam or CMA-ES
+- `algorithms/p2_experiments.py`: run batches over sampled Parti Prompts categories
+- `algorithms/p2_schedule.py`: launch multiple `p2_experiments.py` runs from scheduled config overrides
+- `algorithms/eigo_grid_search.py`: run parameter sweeps for one prompt
+- `algorithms/tools/process_results.py`: generate summary tables, plots, and image grids from completed runs
 
 ## Setup
 
 ### Prerequisites
 
-Ensure you have [Conda](https://docs.conda.io/) installed on your system.
+Install [Conda](https://docs.conda.io/) and clone the repository with submodules:
 
-### Environment Setup
+```bash
+git clone --recursive <repository-url>
+cd eigo
+```
 
-1. Clone the repository:
+If the repository was already cloned without submodules:
 
-   If you haven't cloned the repository yet, run:
-   
-   ```bash
-   git clone --recursive <repository-url>
-   ```
+```bash
+git submodule update --init --recursive
+```
 
-   If you've already cloned the repository without submodules, run:
-   
-   ```bash
-   git submodule update --init --recursive
-   ```
+Create and activate the Conda environment:
 
-3. Create the Conda environment using the `environment.yml` file:
-    ```bash
-    conda env create -f environment.yml
-    ```
+```bash
+conda env create -f environment.yml
+conda activate eigo
+```
 
-4. Activate the environment:
-    ```bash
-    conda activate eigo
-    ```
+## Repository Layout
+
+```text
+eigo.py
+algorithms/
+  config/
+    config_eigo.yaml
+    config_eigo_grid_search.yaml
+    config_p2_experiments.yaml
+    p2_schedule.yaml
+  eigo_single_prompt.py
+  eigo_grid_search.py
+  p2_experiments.py
+  p2_schedule.py
+  tools/
+    process_results.py
+    config.yml
+```
+
+## Backend
+
+`eigo.py` contains the `Eigo` class, which is the shared backend used by all experiment scripts. It is responsible for:
+
+- loading the selected diffusion pipeline
+- encoding prompt embeddings
+- running Adam or CMA-ES optimization
+- scoring generated images with CLIP and an aesthetic predictor
+- saving images, metrics, and run configuration
+
+The backend supports these diffusion backends:
+
+- `sdxl` via `StableDiffusionXLPipeline`
+- `flux` via `FluxPipeline`
+- `pixart` via `PixArtAlphaPipeline`
+- `auto` to infer the backend from `model_id`
+
+Backends are configured through YAML, mainly with:
+
+- `model_id`
+- `model_backend`
+- `torch_dtype`
+- `max_sequence_length`
+- `use_multi_gpu`
+- `pipeline_device_map`
+- `max_memory`
+- `enable_gradient_checkpointing`
+- `enable_attention_slicing`
+- `enable_vae_slicing`
+- `enable_vae_tiling`
 
 ## Usage
 
-### Interactive Notebook
+### Notebook
 
-For an interactive introduction and demonstration, see the provided Jupyter notebook:
+For an interactive walkthrough:
 
 ```bash
 jupyter notebook eigo_ex.ipynb
 ```
 
-The notebook walks through setting up the environment, running optimization algorithms, and visualizing results. It is ideal for experimentation and understanding EIGO's workflow without writing code from scratch.
+### Single-Prompt Optimization
 
-The repository contains two main optimization algorithms for text-to-image generation using SDXL:
-
-1. Adam optimization 
-2. CMA-ES-based optimization
-
-Run 
-```` bash
-# Set the configurations in algorithms/config/config_eigo.yaml
-
-python algorithms/config/config_eigo.yaml
-````
-
-### Running Optimization Experiments
-
-Each algorithm can be run for a set of Parti Prompts (P2) prompts using its respective Python script with a configuration file:
+Edit [`algorithms/config/config_eigo.yaml`](/home/posgrad/phd2025/dneto/eigo/algorithms/config/config_eigo.yaml) and run:
 
 ```bash
-# Run Adam optimization
-python algorithms/adam_p2.py --config algorithms/config/config_adam_p2.yaml
-
-# Run CMA-ES optimization
-python algorithms/cmaes_p2.py --config algorithms/config/config_cmaes_p2.yaml
+python algorithms/eigo_single_prompt.py
 ```
 
-These experiments are set to execute a number of runs (one per seed) for a set of 
-Parti Prompt prompts.
+This script uses the backend in `eigo.py` and runs the method specified in `optimization_method`:
 
-### Running Scheduled P2 Batches
+- `adam`
+- `cmaes`
 
-To run `algorithms/p2_experiments.py` multiple times with different parameter overrides, use:
+Important fields in `config_eigo.yaml`:
+
+- `selected_prompt`
+- `optimization_method`
+- `seed`
+- `cuda`
+- `predictor`
+- `num_inference_steps`
+- `guidance_scale`
+- `alpha`
+- `beta`
+- `results_folder`
+
+Algorithm-specific fields:
+
+- Adam: `num_iterations`, `adam_lr`, `adam_weight_decay`, `adam_eps`, `adam_beta1`, `adam_beta2`, `adam_max_grad_norm`
+- CMA-ES: `num_generations`, `pop_size`, `sigma`, `cmaes_variant`, `save_gens`
+
+### Parti Prompts Batch Experiments
+
+Edit [`algorithms/config/config_p2_experiments.yaml`](/home/posgrad/phd2025/dneto/eigo/algorithms/config/config_p2_experiments.yaml) and run:
+
+```bash
+python algorithms/p2_experiments.py --config algorithms/config/config_p2_experiments.yaml
+```
+
+This script:
+
+- loads the `nateraw/parti-prompts` dataset
+- samples prompts per category
+- runs EIGO for each selected prompt
+- saves run artifacts and aggregate plots/statistics inside the configured results directory
+
+Relevant config keys:
+
+- `prompt_per_categorie`
+- `prompt_sample_seed`
+- `seed` or `seed_path`
+- all shared backend/model parameters from `config_eigo.yaml`
+
+### Scheduled Batch Runs
+
+To launch multiple Parti Prompts runs with different overrides:
 
 ```bash
 python algorithms/p2_schedule.py \
@@ -82,61 +158,65 @@ python algorithms/p2_schedule.py \
   --schedule algorithms/config/p2_schedule.yaml
 ```
 
-`algorithms/config/p2_schedule.yaml` contains a list of run dictionaries (under `runs`), where each dictionary overrides fields from the base config for one run.
+The schedule file can be either:
 
-### Processing Results
+- a top-level list of override dictionaries
+- a dictionary with a `runs` list
 
-After running the optimization experiments, you can process and analyze the results using:
+Each scheduled run is merged into the base config and executed sequentially.
+
+### Grid Search
+
+For one-prompt sweeps across Adam and/or CMA-ES parameter combinations, edit [`algorithms/config/config_eigo_grid_search.yaml`](/home/posgrad/phd2025/dneto/eigo/algorithms/config/config_eigo_grid_search.yaml) and run:
+
+```bash
+python algorithms/eigo_grid_search.py --config algorithms/config/config_eigo_grid_search.yaml
+```
+
+Useful options:
+
+```bash
+python algorithms/eigo_grid_search.py \
+  --config algorithms/config/config_eigo_grid_search.yaml \
+  --dry-run
+```
+
+The grid-search config supports:
+
+- `selected_prompt`
+- `test_adam`
+- `test_cmaes`
+- shared backend/model parameters
+- `grid.adam` and `grid.cmaes` parameter lists
+
+Each run stores its effective parameter set and a summary YAML is written to the top-level results folder.
+
+## Processing Results
+
+After experiments finish, configure [`algorithms/tools/config.yml`](/home/posgrad/phd2025/dneto/eigo/algorithms/tools/config.yml) and run:
 
 ```bash
 python algorithms/tools/process_results.py --config algorithms/tools/config.yml
 ```
 
-This will generate:
-- Summary tables comparing different methods
-- Image grids showing the best results
-- Results analysis per prompt and category
+This generates:
 
-### Configuration Parameters
+- summary tables
+- evolution plots
+- best-image grids
+- prompt/category comparison views
+- distance tables and grouped plots
 
-Common parameters across all algorithms (set in config file):
+## Output Structure
 
-- `seed`: Random seed for reproducibility
-- `seed_path`: Path to file containing multiple seeds (optional)
-- `cuda`: GPU device number
-- `predictor`: Aesthetic predictor model (0=SAM, 1=LAIONV1, 2=LAIONV2)
-- `num_inference_steps`: Number of denoising steps for image generation
-- `height`: Output image height
-- `width`: Output image width
-- `results_folder`: Output directory for results
-- `model_id`: Diffusion model identifier (e.g., `stabilityai/sdxl-turbo`, `black-forest-labs/FLUX.1-schnell`, `PixArt-alpha/PixArt-XL-2-1024-MS`, or a Z Image checkpoint)
-- `model_backend`: `"auto"`, `"sdxl"`, `"flux"`, `"pixart"`, or `"zimage"` (recommended: `"auto"` unless explicit override is needed)
-- `torch_dtype`: `"auto"`, `"float32"`, `"float16"`, or `"bfloat16"`
-- `max_sequence_length`: Tokenizer max length for FLUX and Z Image (ignored by SDXL/PixArt)
-- `cfg_normalization`: Z Image CFG normalization toggle
-- `cfg_truncation`: Z Image CFG truncation factor
-- `use_safetensors`: Whether to request safetensors weights
-- `use_multi_gpu`: Enable model sharding across multiple GPUs
-- `pipeline_device_map`: Sharding strategy (e.g. `"balanced"` or `"auto"`)
-- `max_memory`: Optional memory budget map per device for sharded loading
-- `enable_gradient_checkpointing`: Reduce activation memory for Adam (slower)
-- `enable_attention_slicing`: Reduce attention memory (slower)
-- `enable_vae_slicing`: Reduce VAE decode memory
-- `enable_vae_tiling`: Reduce VAE decode memory for larger images
+Runs are saved under the configured `results_folder`. The backend creates method- and model-specific experiment directories and stores per-run artifacts such as:
 
-Algorithm-specific parameters:
+- `config.yaml`
+- generated images
+- score or fitness CSV files
+- evolution plots
+- best-image outputs
 
-**Adam:**
-- `num_iterations`: Number of optimization iterations
-- `adam_lr`: Learning rate
-- `adam_weight_decay`: Weight decay parameter
-- `adam_eps`: Epsilon parameter
-
-**CMA-ES:**
-- `num_generations`: Number of generations
-- `pop_size`: Population size
-- `sigma`: Initial step size
-- `cmaes_variant`: CMA-ES variant ("cmaes", "sep", or "vd")
-
+## License
 
 [![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/)
