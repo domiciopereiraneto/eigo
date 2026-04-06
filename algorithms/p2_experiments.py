@@ -1,7 +1,7 @@
 """
-CMA-ES-based optimization of text embeddings for image generation using SDXL.
+Population-based optimization of text embeddings for image generation using SDXL.
 
-This script employs the CMA-ES optimizer (including standard CMA-ES, sep-CMA-ES, or VD-CMA variants) to modify text embeddings while maximizing aesthetic and CLIP scores. It supports configuration through a YAML file and provides functionality for prompt sampling, image generation, and evaluation.
+This script employs a population-based optimizer (CMA-ES, GA, or Adam) to modify text embeddings while maximizing aesthetic and CLIP scores. It supports configuration through a YAML file and provides functionality for prompt sampling, image generation, and evaluation.
 
 Main Features:
 - Loads configuration parameters from a YAML file.
@@ -67,40 +67,6 @@ SEED = config['seed']
 SEED_PATH = config['seed_path']
 OUTPUT_FOLDER = config['results_folder']
 
-# Prompt dataset loading and preprocessing
-# Groups prompts by category and samples a specified number per category.
-prompt_dataset = load_dataset("nateraw/parti-prompts")["train"]
-
-N_PER_CATEGORY = config['prompt_per_categorie']  # Number of prompts to sample per category
-SUBSET_SEED = config['prompt_sample_seed']
-random.seed(SUBSET_SEED)
-
-# Group prompts by category
-category_prompts = defaultdict(list)
-for item in prompt_dataset:
-    category = item.get("Category", "Uncategorized")
-    category_prompts[category].append(item["Prompt"])
-
-# Sample N_PER_CATEGORY prompts from each category and keep track of category
-selected_prompts_with_category = []
-for category, prompts in category_prompts.items():
-    if len(prompts) >= N_PER_CATEGORY:
-        sampled = random.sample(prompts, N_PER_CATEGORY)
-    else:
-        sampled = prompts  # If not enough, take all
-    for prompt in sampled:
-        selected_prompts_with_category.append((prompt, category))
-
-# Save selected prompts to a file
-# Stores the sampled prompts and their categories for reference.
-# prompt_list_path = os.path.join(OUTPUT_FOLDER, "selected_prompts.txt")
-# with open(prompt_list_path, "w", encoding="utf-8") as f:
-#     for prompt, category in selected_prompts_with_category:
-#         f.write(f"{category}\t{prompt}\n")
-# print(f"Saved selected prompts to {prompt_list_path}")
-
-print(f"Selected {len(selected_prompts_with_category)} prompts from {len(category_prompts)} categories.")
-
 # Seed handling
 # Initializes the random seed for reproducibility.
 if SEED_PATH is None:
@@ -109,6 +75,49 @@ else:
     with open(SEED_PATH, 'r') as file:
         # Read each line, strip newline characters, and convert to integers
         seed_list = [int(line.strip()) for line in file]
+
+# Prompt dataset loading and preprocessing
+# Supports either per-category prompt sampling or a single prompt per seed.
+prompt_dataset = load_dataset("nateraw/parti-prompts")["train"]
+
+N_PER_CATEGORY = config['prompt_per_categorie']  # Number of prompts to sample per category
+SUBSET_SEED = config['prompt_sample_seed']
+SINGLE_PROMPT_PER_SEED = config.get("single_prompt_per_seed", False)
+
+# Group prompts by category and also keep a flat prompt/category list.
+category_prompts = defaultdict(list)
+all_prompts_with_category = []
+for item in prompt_dataset:
+    category = item.get("Category", "Uncategorized")
+    prompt = item["Prompt"]
+    category_prompts[category].append(prompt)
+    all_prompts_with_category.append((prompt, category))
+
+
+def build_selected_prompts(seed):
+    if SINGLE_PROMPT_PER_SEED:
+        rng = random.Random(seed)
+        selected_prompt = rng.choice(all_prompts_with_category)
+        print(
+            f"Selected 1 prompt for seed {seed} from {len(all_prompts_with_category)} total prompts "
+            f"across {len(category_prompts)} categories."
+        )
+        return [selected_prompt]
+
+    rng = random.Random(SUBSET_SEED)
+    selected_prompts_with_category = []
+    for category, prompts in category_prompts.items():
+        if len(prompts) >= N_PER_CATEGORY:
+            sampled = rng.sample(prompts, N_PER_CATEGORY)
+        else:
+            sampled = prompts  # If not enough, take all
+        for prompt in sampled:
+            selected_prompts_with_category.append((prompt, category))
+
+    print(
+        f"Selected {len(selected_prompts_with_category)} prompts from {len(category_prompts)} categories."
+    )
+    return selected_prompts_with_category
 
 
 
@@ -419,11 +428,14 @@ if __name__ == "__main__":
 
     seed_number = 1
     for seed in seed_list:
+        selected_prompts_with_category = build_selected_prompts(seed)
         prompt_number = 1
         for prompt, category in selected_prompts_with_category:
             print(f"Running seed {seed}, prompt: {prompt} (Category: {category})")
             if config['optimization_method'] == "cmaes":
                 eigo_engine.run_cmaes_optimization(seed=seed, seed_number=seed_number, prompt=prompt, category=category, prompt_number=prompt_number)
+            elif config['optimization_method'] == "ga":
+                eigo_engine.run_ga_optimization(seed=seed, seed_number=seed_number, prompt=prompt, category=category, prompt_number=prompt_number)
             elif config['optimization_method'] == "adam":
                 eigo_engine.run_adam_optimization(seed=seed, seed_number=seed_number, prompt=prompt, category=category, prompt_number=prompt_number)
             else:

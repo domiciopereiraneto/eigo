@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Run EIGO grid search for a single prompt across Adam and/or CMA-ES parameter sets."""
+"""Run EIGO grid search for one or more prompts across Adam, GA, and/or CMA-ES parameter sets."""
 
 import argparse
+import csv
 import copy
 import itertools
 import json
@@ -26,6 +27,86 @@ def load_yaml(path: Path):
     if not isinstance(data, dict):
         raise ValueError("Configuration YAML must load to a dictionary.")
     return data
+
+
+def _coerce_scalar(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped == "" or stripped.lower() == "nan":
+            return None
+        try:
+            numeric = float(stripped)
+        except ValueError:
+            return value
+        if numeric.is_integer():
+            return int(numeric)
+        return numeric
+    return value
+
+
+def extract_final_results(produced_folder, method):
+    produced_path = Path(produced_folder)
+    if method in {"cmaes", "ga"}:
+        csv_path = produced_path / "fitness_results.csv"
+        metric_keys = [
+            "generation",
+            "elapsed_time",
+            "avg_fitness",
+            "max_fitness",
+            "avg_aesthetic_score",
+            "max_aesthetic_score",
+            "avg_clip_score",
+            "max_clip_score",
+            "avg_image_reward_score",
+            "max_image_reward_score",
+            "avg_hpsv2_score",
+            "max_hpsv2_score",
+            "avg_pickscore_score",
+            "max_pickscore_score",
+        ]
+    elif method == "adam":
+        csv_path = produced_path / "score_results.csv"
+        metric_keys = [
+            "iteration",
+            "elapsed_time",
+            "combined_score",
+            "combined_loss",
+            "aesthetic_score",
+            "clip_score",
+            "image_reward_score",
+            "hpsv2_score",
+            "pickscore_score",
+        ]
+    else:
+        return None
+
+    if not csv_path.exists():
+        return {
+            "status": "missing_csv",
+            "csv_path": str(csv_path),
+        }
+
+    with csv_path.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.DictReader(f))
+
+    if not rows:
+        return {
+            "status": "empty_csv",
+            "csv_path": str(csv_path),
+        }
+
+    final_row = rows[-1]
+    final_results = {
+        "status": "ok",
+        "csv_path": str(csv_path),
+    }
+    for key in metric_keys:
+        if key in final_row:
+            final_results[key] = _coerce_scalar(final_row[key])
+
+    return final_results
 
 
 def normalize_grid(method_grid):
@@ -59,25 +140,43 @@ def expand_grid(grid_dict):
     return combos
 
 
+def get_prompt_list(config):
+    if "selected_prompts" in config:
+        prompts = config["selected_prompts"]
+        if not isinstance(prompts, list) or not prompts:
+            raise ValueError("'selected_prompts' must be a non-empty list of prompt strings.")
+        if not all(isinstance(prompt, str) and prompt.strip() for prompt in prompts):
+            raise ValueError("'selected_prompts' must only contain non-empty strings.")
+        return prompts
+
+    if "selected_prompt" in config:
+        prompt = config["selected_prompt"]
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ValueError("'selected_prompt' must be a non-empty string.")
+        return [prompt]
+
+    raise ValueError("Missing required key 'selected_prompts' or 'selected_prompt' in config.")
+
+
 def validate_base_config(config):
-    required_keys = ["selected_prompt", "results_folder"]
-    for key in required_keys:
-        if key not in config:
-            raise ValueError(f"Missing required key '{key}' in config.")
+    get_prompt_list(config)
+    if "results_folder" not in config:
+        raise ValueError("Missing required key 'results_folder' in config.")
 
 
 def build_run_queue(config):
     test_adam = bool(config.get("test_adam", True))
+    test_ga = bool(config.get("test_ga", False))
     test_cmaes = bool(config.get("test_cmaes", True))
 
-    if not test_adam and not test_cmaes:
-        raise ValueError("At least one of 'test_adam' or 'test_cmaes' must be true.")
+    if not test_adam and not test_ga and not test_cmaes:
+        raise ValueError("At least one of 'test_adam', 'test_ga', or 'test_cmaes' must be true.")
 
     grid_config = config.get("grid", {})
     if grid_config is None:
         grid_config = {}
     if not isinstance(grid_config, dict):
-        raise ValueError("'grid' must be a dictionary with optional 'adam' and 'cmaes' sections.")
+        raise ValueError("'grid' must be a dictionary with optional 'adam', 'ga', and 'cmaes' sections.")
 
     run_queue = []
 
@@ -86,6 +185,12 @@ def build_run_queue(config):
         adam_combos = expand_grid(adam_grid)
         for combo in adam_combos:
             run_queue.append(("adam", combo))
+
+    if test_ga:
+        ga_grid = normalize_grid(grid_config.get("ga", {}))
+        ga_combos = expand_grid(ga_grid)
+        for combo in ga_combos:
+            run_queue.append(("ga", combo))
 
     if test_cmaes:
         cmaes_grid = normalize_grid(grid_config.get("cmaes", {}))
@@ -96,10 +201,11 @@ def build_run_queue(config):
     return run_queue
 
 
-def create_run_config(base_config, method, overrides, run_id):
+def create_run_config(base_config, method, overrides, run_id, prompt):
     run_config = copy.deepcopy(base_config)
 
     run_config["optimization_method"] = method
+    run_config["selected_prompt"] = prompt
     run_config.update(overrides)
 
     base_results_folder = str(base_config.get("results_folder", "results"))
@@ -116,6 +222,7 @@ def save_run_parameters(results_folder, run_id, method, overrides, run_config):
     payload = {
         "run_id": run_id,
         "method": method,
+        "selected_prompt": run_config.get("selected_prompt"),
         "overrides": overrides,
         "effective_parameters": {
             key: run_config.get(key)
@@ -134,73 +241,84 @@ def run_grid_search(config, dry_run=False):
     validate_base_config(config)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    prompt_list = get_prompt_list(config)
     run_queue = build_run_queue(config)
 
     summary_rows = []
-    print(f"Single prompt: {config['selected_prompt']}")
-    print(f"Total runs: {len(run_queue)}")
+    print(f"Prompt count: {len(prompt_list)}")
+    print(f"Total runs: {len(prompt_list) * len(run_queue)}")
 
-    for idx, (method, overrides) in enumerate(run_queue, start=1):
-        run_id = f"run_{idx:03d}_{method}_{timestamp}"
-        run_config = create_run_config(config, method, overrides, run_id)
+    total_runs = len(prompt_list) * len(run_queue)
+    run_index = 0
+    for prompt_idx, prompt in enumerate(prompt_list, start=1):
+        for method, overrides in run_queue:
+            run_index += 1
+            run_id = f"run_{run_index:03d}_prompt_{prompt_idx:03d}_{method}_{timestamp}"
+            run_config = create_run_config(config, method, overrides, run_id, prompt)
 
-        print("-" * 80)
-        print(f"Run {idx}/{len(run_queue)}")
-        print(f"Method: {method}")
-        print(f"Overrides: {json.dumps(overrides, ensure_ascii=True)}")
-        print(f"Results folder: {run_config['results_folder']}")
+            print("-" * 80)
+            print(f"Run {run_index}/{total_runs}")
+            print(f"Prompt {prompt_idx}/{len(prompt_list)}: {prompt}")
+            print(f"Method: {method}")
+            print(f"Overrides: {json.dumps(overrides, ensure_ascii=True)}")
+            print(f"Results folder: {run_config['results_folder']}")
 
-        run_params_path = save_run_parameters(
-            run_config["results_folder"],
-            run_id,
-            method,
-            overrides,
-            run_config,
-        )
-        print(f"Run parameters saved to: {run_params_path}")
-
-        row = {
-            "run_index": idx,
-            "run_id": run_id,
-            "method": method,
-            "overrides": overrides,
-            "results_folder": run_config["results_folder"],
-            "status": "scheduled",
-        }
-
-        if dry_run:
-            row["status"] = "dry_run"
-            summary_rows.append(row)
-            continue
-
-        try:
-            from eigo import Eigo
-
-            eigo_engine = Eigo(run_config)
-            if method == "adam":
-                produced_folder = eigo_engine.run_adam_optimization()
-            elif method == "cmaes":
-                produced_folder = eigo_engine.run_cmaes_optimization()
-            else:
-                raise ValueError(f"Unsupported method: {method}")
-
-            row["status"] = "success"
-            row["produced_folder"] = produced_folder
-            save_run_parameters(
-                produced_folder,
+            run_params_path = save_run_parameters(
+                run_config["results_folder"],
                 run_id,
                 method,
                 overrides,
                 run_config,
             )
-        except Exception as exc:  # pylint: disable=broad-except
-            row["status"] = "failed"
-            row["error"] = str(exc)
-            summary_rows.append(row)
-            print(f"Run failed: {exc}")
-            continue
+            print(f"Run parameters saved to: {run_params_path}")
 
-        summary_rows.append(row)
+            row = {
+                "run_index": run_index,
+                "run_id": run_id,
+                "prompt_index": prompt_idx,
+                "selected_prompt": prompt,
+                "method": method,
+                "overrides": overrides,
+                "results_folder": run_config["results_folder"],
+                "status": "scheduled",
+            }
+
+            if dry_run:
+                row["status"] = "dry_run"
+                summary_rows.append(row)
+                continue
+
+            try:
+                from eigo import Eigo
+
+                eigo_engine = Eigo(run_config)
+                if method == "adam":
+                    produced_folder = eigo_engine.run_adam_optimization()
+                elif method == "ga":
+                    produced_folder = eigo_engine.run_ga_optimization()
+                elif method == "cmaes":
+                    produced_folder = eigo_engine.run_cmaes_optimization()
+                else:
+                    raise ValueError(f"Unsupported method: {method}")
+
+                row["status"] = "success"
+                row["produced_folder"] = produced_folder
+                row["final_results"] = extract_final_results(produced_folder, method)
+                save_run_parameters(
+                    produced_folder,
+                    run_id,
+                    method,
+                    overrides,
+                    run_config,
+                )
+            except Exception as exc:  # pylint: disable=broad-except
+                row["status"] = "failed"
+                row["error"] = str(exc)
+                summary_rows.append(row)
+                print(f"Run failed: {exc}")
+                continue
+
+            summary_rows.append(row)
 
     return summary_rows
 
@@ -211,8 +329,9 @@ def save_summary(config, summary_rows):
     summary_path = output_dir / "grid_search_summary.yaml"
 
     payload = {
-        "selected_prompt": config.get("selected_prompt"),
+        "selected_prompts": get_prompt_list(config),
         "test_adam": bool(config.get("test_adam", True)),
+        "test_ga": bool(config.get("test_ga", False)),
         "test_cmaes": bool(config.get("test_cmaes", True)),
         "total_runs": len(summary_rows),
         "runs": summary_rows,
@@ -227,7 +346,7 @@ def save_summary(config, summary_rows):
 def build_parser():
     parser = argparse.ArgumentParser(
         description=(
-            "Run grid search for EIGO with one prompt and method-specific parameter lists."
+            "Run grid search for EIGO with one or more prompts and method-specific parameter lists."
         )
     )
     parser.add_argument(

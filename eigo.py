@@ -1,7 +1,8 @@
 """
 This script contains the Eigo class, an optimization engine for diffusion-based image
-generation guided by aesthetic and prompt alignment scores. The engine supports two
-optimization methods: CMA-ES (standard, sep-CMA-ES and VD-CMA) and Adam.
+generation guided by aesthetic, prompt-alignment, and ImageReward scores. The engine
+supports three optimization methods: CMA-ES (standard, sep-CMA-ES and VD-CMA), GA,
+and Adam.
 """
 
 import sys
@@ -30,6 +31,8 @@ import argparse
 import re
 import ast
 from contextlib import nullcontext
+from pathlib import Path
+from transformers import AutoModel, AutoProcessor
 
 class Eigo:
     _MODEL_CACHE = {}
@@ -42,6 +45,12 @@ class Eigo:
             cache_entry["clip_model"] = None
             cache_entry["clip_preprocess"] = None
             cache_entry["aesthetic_model"] = None
+            cache_entry["image_reward_model"] = None
+            cache_entry["hpsv2_model"] = None
+            cache_entry["hpsv2_preprocess"] = None
+            cache_entry["hpsv2_tokenizer"] = None
+            cache_entry["pickscore_model"] = None
+            cache_entry["pickscore_processor"] = None
         cls._MODEL_CACHE.clear()
         cls._ACTIVE_CACHE_KEY = None
         gc.collect()
@@ -65,6 +74,48 @@ class Eigo:
         self.enable_vae_tiling = bool(config_parameters.get("enable_vae_tiling", False))
         self.enable_gradient_checkpointing = bool(config_parameters.get("enable_gradient_checkpointing", False))
         self._active_prompt_attention_mask = None
+        self.aesthetic_score_weight = float(
+            config_parameters.get("aesthetic_score_weight", config_parameters.get("alpha", 0.0))
+        )
+        self.clip_score_weight = float(
+            config_parameters.get("clip_score_weight", config_parameters.get("beta", 0.0))
+        )
+        self.image_reward_score_weight = float(
+            config_parameters.get("image_reward_score_weight", config_parameters.get("gamma", 0.0))
+        )
+        self.hpsv2_score_weight = float(config_parameters.get("hpsv2_score_weight", 0.0))
+        self.pickscore_score_weight = float(config_parameters.get("pickscore_score_weight", 0.0))
+        self._metric_scales = {
+            "aesthetic_score": float(config_parameters.get("max_aesthetic_score", 1.0)),
+            "clip_score": float(config_parameters.get("max_clip_score", 1.0)),
+            "image_reward_score": float(config_parameters.get("max_image_reward_score", 1.0)),
+            "hpsv2_score": float(config_parameters.get("max_hpsv2_score", 1.0)),
+            "pickscore_score": float(config_parameters.get("max_pickscore_score", 1.0)),
+        }
+        image_reward_model_name = config_parameters.get(
+            "image_reward_model_name",
+            config_parameters.get("image_reward_model", "ImageReward-v1.0"),
+        )
+        self.image_reward_model_name = (
+            None if image_reward_model_name is None else str(image_reward_model_name)
+        )
+        self.use_image_reward = (
+            self.image_reward_model_name is not None
+        )
+        hpsv2_version = config_parameters.get("hpsv2_version", "v2.1")
+        self.hpsv2_version = None if hpsv2_version is None else str(hpsv2_version)
+        self.use_hpsv2 = self.hpsv2_version is not None
+        pickscore_processor_name = config_parameters.get(
+            "pickscore_processor_name",
+            config_parameters.get("pickscore_processor", "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"),
+        )
+        self.pickscore_processor_name = None if pickscore_processor_name is None else str(pickscore_processor_name)
+        pickscore_model_name = config_parameters.get(
+            "pickscore_model_name",
+            config_parameters.get("pickscore_model", "yuvalkirstain/PickScore_v1"),
+        )
+        self.pickscore_model_name = None if pickscore_model_name is None else str(pickscore_model_name)
+        self.use_pickscore = self.pickscore_model_name is not None and self.pickscore_processor_name is not None
 
         if config_parameters["predictor"] == 0:
             predictor_name = 'simulacra'
@@ -86,6 +137,8 @@ class Eigo:
                 method_save_name = "vdcmae"
             else:
                 raise ValueError(f"Unknown CMA-ES variant: {config_parameters['cmaes_variant']}")
+        elif config_parameters["optimization_method"] == "ga":
+            method_save_name = "ga"
         else:
             raise ValueError(f"Unknown optimization method: {config_parameters['optimization_method']}")
 
@@ -93,8 +146,12 @@ class Eigo:
         self.OUTPUT_FOLDER = (
             f"{config_parameters['results_folder']}/"
             f"{method_save_name}_clip_{predictor_name}_{self.model_backend}_{model_tag}_"
-            f"{config_parameters['seed']}_a{int(config_parameters['alpha']*100)}_"
-            f"b{int(config_parameters['beta']*100)}"
+            f"{config_parameters['seed']}_"
+            f"aesw{int(self.aesthetic_score_weight*100)}_"
+            f"clipw{int(self.clip_score_weight*100)}_"
+            f"irw{int(self.image_reward_score_weight*100)}_"
+            f"hpsw{int(self.hpsv2_score_weight*100)}_"
+            f"psw{int(self.pickscore_score_weight*100)}"
         )
 
         # Save the selected prompts and their categories to a text file in the results folder
@@ -115,6 +172,13 @@ class Eigo:
             str(self.pipeline_device_map),
             str(self.max_memory),
             config_parameters["predictor"],
+            self.use_image_reward,
+            self.image_reward_model_name if self.use_image_reward else None,
+            self.use_hpsv2,
+            self.hpsv2_version if self.use_hpsv2 else None,
+            self.use_pickscore,
+            self.pickscore_processor_name if self.use_pickscore else None,
+            self.pickscore_model_name if self.use_pickscore else None,
         )
 
         if cls._ACTIVE_CACHE_KEY is not None and cls._ACTIVE_CACHE_KEY != cache_key:
@@ -150,12 +214,77 @@ class Eigo:
             else:
                 raise ValueError("Invalid predictor option.")
 
+            image_reward_model = None
+            if self.use_image_reward:
+                try:
+                    import ImageReward as RM
+                except ImportError as exc:
+                    raise ImportError(
+                        "ImageReward scoring requires the 'image-reward' package when an ImageReward model is configured."
+                    ) from exc
+                image_reward_model = RM.load(self.image_reward_model_name, device=self.device)
+                self._freeze_module_params(image_reward_model)
+
+            hpsv2_model = None
+            hpsv2_preprocess = None
+            hpsv2_tokenizer = None
+            if self.use_hpsv2:
+                self._ensure_hpsv2_tokenizer_assets()
+                try:
+                    import hpsv2
+                    from hpsv2.src.open_clip import create_model_and_transforms, get_tokenizer
+                    from hpsv2.utils import hps_version_map
+                    import huggingface_hub
+                except ImportError as exc:
+                    raise ImportError(
+                        "HPSv2 scoring requires the 'hpsv2' package when hpsv2_score_weight != 0."
+                    ) from exc
+
+                checkpoint_path = huggingface_hub.hf_hub_download("xswu/HPSv2", hps_version_map[self.hpsv2_version])
+                hpsv2_model, _, hpsv2_preprocess = create_model_and_transforms(
+                    'ViT-H-14',
+                    'laion2B-s32B-b79K',
+                    precision='amp',
+                    device=self.device,
+                    jit=False,
+                    force_quick_gelu=False,
+                    force_custom_text=False,
+                    force_patch_dropout=False,
+                    force_image_size=None,
+                    pretrained_image=False,
+                    image_mean=None,
+                    image_std=None,
+                    light_augmentation=True,
+                    aug_cfg={},
+                    output_dict=True,
+                    with_score_predictor=False,
+                    with_region_predictor=False,
+                )
+                checkpoint = torch.load(checkpoint_path, map_location=self.device)
+                hpsv2_model.load_state_dict(checkpoint['state_dict'])
+                hpsv2_model = hpsv2_model.to(self.device).eval()
+                self._freeze_module_params(hpsv2_model)
+                hpsv2_tokenizer = get_tokenizer('ViT-H-14')
+
+            pickscore_model = None
+            pickscore_processor = None
+            if self.use_pickscore:
+                pickscore_processor = AutoProcessor.from_pretrained(self.pickscore_processor_name)
+                pickscore_model = AutoModel.from_pretrained(self.pickscore_model_name).eval().to(self.device)
+                self._freeze_module_params(pickscore_model)
+
             cls._MODEL_CACHE[cache_key] = {
                 "pipe": pipe,
                 "is_sharded": is_sharded,
                 "clip_model": clip_model,
                 "clip_preprocess": clip_preprocess,
                 "aesthetic_model": aesthetic_model,
+                "image_reward_model": image_reward_model,
+                "hpsv2_model": hpsv2_model,
+                "hpsv2_preprocess": hpsv2_preprocess,
+                "hpsv2_tokenizer": hpsv2_tokenizer,
+                "pickscore_model": pickscore_model,
+                "pickscore_processor": pickscore_processor,
                 "model_name": model_name,
             }
             cls._ACTIVE_CACHE_KEY = cache_key
@@ -167,6 +296,12 @@ class Eigo:
         self.clip_model = cached_models["clip_model"]
         self.clip_preprocess = cached_models["clip_preprocess"]
         self.aesthetic_model = cached_models["aesthetic_model"]
+        self.image_reward_model = cached_models.get("image_reward_model")
+        self.hpsv2_model = cached_models.get("hpsv2_model")
+        self.hpsv2_preprocess = cached_models.get("hpsv2_preprocess")
+        self.hpsv2_tokenizer = cached_models.get("hpsv2_tokenizer")
+        self.pickscore_model = cached_models.get("pickscore_model")
+        self.pickscore_processor = cached_models.get("pickscore_processor")
         self.model_name = cached_models["model_name"]
         wrapped_call = getattr(self.pipe.__class__.__call__, "__wrapped__", None)
         self.call_with_grad = wrapped_call.__get__(self.pipe, self.pipe.__class__) if wrapped_call is not None else self.pipe.__call__
@@ -231,6 +366,33 @@ class Eigo:
                 if component is not None and callable(component_parameters):
                     for p in component_parameters():
                         p.requires_grad_(False)
+
+    @staticmethod
+    def _ensure_hpsv2_tokenizer_assets():
+        site_packages = (
+            Path(sys.prefix)
+            / "lib"
+            / f"python{sys.version_info.major}.{sys.version_info.minor}"
+            / "site-packages"
+        )
+        target_dir = site_packages / "hpsv2" / "src" / "open_clip"
+        target_file = target_dir / "bpe_simple_vocab_16e6.txt.gz"
+        if target_file.exists():
+            return
+
+        candidate_paths = [
+            site_packages / "open_clip" / "bpe_simple_vocab_16e6.txt.gz",
+            site_packages / "clip" / "bpe_simple_vocab_16e6.txt.gz",
+            Path(__file__).resolve().parent / "aesthetic_evaluation" / "CLIP" / "clip" / "bpe_simple_vocab_16e6.txt.gz",
+        ]
+        source_file = next((path for path in candidate_paths if path.exists()), None)
+        if source_file is None:
+            raise FileNotFoundError(
+                "HPSv2 tokenizer vocabulary file is missing and no fallback copy was found."
+            )
+
+        target_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source_file, target_file)
 
     @staticmethod
     def _resolve_max_memory(max_memory_cfg):
@@ -462,6 +624,157 @@ class Eigo:
         sim = (image_features @ text_features.T).squeeze()  # scalar
         return sim
 
+    def evaluate_image_reward_cmaes(self, image_tensor, prompt):
+        if not self.use_image_reward or self.image_reward_model is None:
+            return 0.0
+
+        pil_image = Image.fromarray(self._tensor_to_uint8_image(image_tensor))
+        return float(self.image_reward_model.score(prompt, pil_image))
+
+    def evaluate_image_reward_adam(self, image_tensor, prompt_ids, prompt_attention_mask):
+        if not self.use_image_reward or self.image_reward_model is None:
+            return torch.tensor(0.0, device=self.device, dtype=torch.float32)
+
+        image = image_tensor.permute(2, 0, 1).unsqueeze(0).to(device=self.device, dtype=torch.float32)
+        image = F.interpolate(image, size=(224, 224), mode="bicubic", align_corners=False)
+        mean = self._CLIP_MEAN.to(image.device, image.dtype)
+        std = self._CLIP_STD.to(image.device, image.dtype)
+        image = (image - mean) / std
+
+        reward = self.image_reward_model.score_gard(prompt_ids, prompt_attention_mask, image).squeeze()
+        return reward.to(torch.float32)
+
+    def evaluate_hpsv2_cmaes(self, image_tensor, prompt):
+        if not self.use_hpsv2 or self.hpsv2_model is None or self.hpsv2_preprocess is None or self.hpsv2_tokenizer is None:
+            return 0.0
+
+        image = Image.fromarray(self._tensor_to_uint8_image(image_tensor))
+        image = self.hpsv2_preprocess(image).unsqueeze(0).to(device=self.device, non_blocking=True)
+        text = self.hpsv2_tokenizer([prompt]).to(device=self.device, non_blocking=True)
+
+        autocast_context = (
+            torch.cuda.amp.autocast()
+            if str(self.device).startswith("cuda")
+            else nullcontext()
+        )
+        with autocast_context:
+            outputs = self.hpsv2_model(image, text)
+            image_features = outputs["image_features"]
+            text_features = outputs["text_features"]
+            logits_per_image = image_features @ text_features.T
+
+        return float(torch.diagonal(logits_per_image).detach().to(torch.float32).cpu().item())
+
+    def evaluate_hpsv2_adam(self, image_tensor, text_tokens):
+        if not self.use_hpsv2 or self.hpsv2_model is None or text_tokens is None:
+            return torch.tensor(0.0, device=self.device, dtype=torch.float32)
+
+        image = image_tensor.permute(2, 0, 1).unsqueeze(0).to(device=self.device, dtype=torch.float32)
+        image = F.interpolate(image, size=(224, 224), mode="bicubic", align_corners=False)
+        mean = self._CLIP_MEAN.to(image.device, image.dtype)
+        std = self._CLIP_STD.to(image.device, image.dtype)
+        image = (image - mean) / std
+
+        autocast_context = (
+            torch.cuda.amp.autocast()
+            if str(self.device).startswith("cuda")
+            else nullcontext()
+        )
+        with autocast_context:
+            outputs = self.hpsv2_model(image, text_tokens)
+            image_features = outputs["image_features"]
+            text_features = outputs["text_features"]
+            logits_per_image = image_features @ text_features.T
+
+        return torch.diagonal(logits_per_image).squeeze().to(torch.float32)
+
+    def _pickscore_image_size(self):
+        if self.pickscore_processor is None:
+            return 224
+        image_processor = self.pickscore_processor.image_processor
+        crop_size = getattr(image_processor, "crop_size", None)
+        if isinstance(crop_size, dict):
+            return int(crop_size.get("height", crop_size.get("width", 224)))
+        if isinstance(crop_size, int):
+            return int(crop_size)
+        size = getattr(image_processor, "size", None)
+        if isinstance(size, dict):
+            return int(size.get("shortest_edge", size.get("height", size.get("width", 224))))
+        if isinstance(size, int):
+            return int(size)
+        return 224
+
+    def _pickscore_mean_std(self, dtype):
+        image_processor = self.pickscore_processor.image_processor
+        mean = torch.tensor(image_processor.image_mean, device=self.device, dtype=dtype).view(1, 3, 1, 1)
+        std = torch.tensor(image_processor.image_std, device=self.device, dtype=dtype).view(1, 3, 1, 1)
+        return mean, std
+
+    def evaluate_pickscore_cmaes(self, image_tensor, prompt):
+        if not self.use_pickscore or self.pickscore_model is None or self.pickscore_processor is None:
+            return 0.0
+
+        pil_image = Image.fromarray(self._tensor_to_uint8_image(image_tensor))
+        image_inputs = self.pickscore_processor(
+            images=pil_image,
+            padding=True,
+            truncation=True,
+            max_length=77,
+            return_tensors="pt",
+        ).to(self.device)
+        text_inputs = self.pickscore_processor(
+            text=prompt,
+            padding=True,
+            truncation=True,
+            max_length=77,
+            return_tensors="pt",
+        ).to(self.device)
+
+        with torch.no_grad():
+            image_embeds = self.pickscore_model.get_image_features(**image_inputs)
+            image_embeds = image_embeds / torch.norm(image_embeds, dim=-1, keepdim=True)
+            text_embeds = self.pickscore_model.get_text_features(**text_inputs)
+            text_embeds = text_embeds / torch.norm(text_embeds, dim=-1, keepdim=True)
+            scores = self.pickscore_model.logit_scale.exp() * (text_embeds @ image_embeds.T)
+        return float(scores.squeeze().detach().to(torch.float32).cpu().item())
+
+    def evaluate_pickscore_adam(self, image_tensor, text_inputs):
+        if not self.use_pickscore or self.pickscore_model is None or self.pickscore_processor is None or text_inputs is None:
+            return torch.tensor(0.0, device=self.device, dtype=torch.float32)
+
+        image = image_tensor.permute(2, 0, 1).unsqueeze(0).to(device=self.device, dtype=torch.float32)
+        image = F.interpolate(image, size=(self._pickscore_image_size(), self._pickscore_image_size()), mode="bicubic", align_corners=False)
+        mean, std = self._pickscore_mean_std(image.dtype)
+        image = (image - mean) / std
+
+        image_embeds = self.pickscore_model.get_image_features(pixel_values=image)
+        image_embeds = image_embeds / torch.norm(image_embeds, dim=-1, keepdim=True)
+        text_embeds = self.pickscore_model.get_text_features(
+            input_ids=text_inputs["input_ids"],
+            attention_mask=text_inputs["attention_mask"],
+        )
+        text_embeds = text_embeds / torch.norm(text_embeds, dim=-1, keepdim=True)
+        scores = self.pickscore_model.logit_scale.exp() * (text_embeds @ image_embeds.T)
+        return scores.squeeze().to(torch.float32)
+
+    def _combine_metric_components(self, metric_values):
+        metric_weights = {
+            "aesthetic_score": self.aesthetic_score_weight,
+            "clip_score": self.clip_score_weight,
+            "image_reward_score": self.image_reward_score_weight,
+            "hpsv2_score": self.hpsv2_score_weight,
+            "pickscore_score": self.pickscore_score_weight,
+        }
+        components = {}
+        total = None
+        for metric_name, raw_value in metric_values.items():
+            weight = metric_weights.get(metric_name, 0.0)
+            scale = self._metric_scales.get(metric_name, 1.0)
+            component = weight * raw_value / scale
+            components[metric_name] = component
+            total = component if total is None else total + component
+        return total, components
+
     def format_time(self, seconds):
         seconds = int(seconds)
         hours = seconds // 3600
@@ -507,12 +820,18 @@ class Eigo:
 
             aesthetic_score = self.aesthetic_evaluation(image).item()
             clip_score = self.evaluate_clip_score_cmaes(image, selected_prompt).item()
+            image_reward_score = self.evaluate_image_reward_cmaes(image, selected_prompt)
+            hpsv2_score = self.evaluate_hpsv2_cmaes(image, selected_prompt)
+            pickscore_score = self.evaluate_pickscore_cmaes(image, selected_prompt)
         # CMA-ES minimizes the function, so we need to invert the score if higher is better
 
-        fitness_1 = self.parameters["alpha"]*aesthetic_score/self.parameters["max_aesthetic_score"]
-        fitness_2 = self.parameters["beta"]*clip_score/self.parameters["max_clip_score"]
-
-        fitness = fitness_1 + fitness_2
+        fitness, components = self._combine_metric_components({
+            "aesthetic_score": aesthetic_score,
+            "clip_score": clip_score,
+            "image_reward_score": image_reward_score,
+            "hpsv2_score": hpsv2_score,
+            "pickscore_score": pickscore_score,
+        })
 
         if save_path is not None:
             # Save the generated image
@@ -521,10 +840,9 @@ class Eigo:
             pil_image = Image.fromarray(image_np)
             pil_image.save(save_path)
 
-        return -fitness, aesthetic_score, clip_score, fitness_1, fitness_2 
+        return -fitness, aesthetic_score, clip_score, image_reward_score, hpsv2_score, pickscore_score, components
 
-    def run_cmaes_optimization(self, seed = None, seed_number = None, prompt = None, category = None, prompt_number = None):
-
+    def _save_population_plot_results(self, results, results_folder):
         def plot_mean_std(x_axis, m_vec, std_vec, description, title=None, y_label=None, x_label=None):
             lower_bound = [M_new - Sigma for M_new, Sigma in zip(m_vec, std_vec)]
             upper_bound = [M_new + Sigma for M_new, Sigma in zip(m_vec, std_vec)]
@@ -538,45 +856,76 @@ class Eigo:
             if x_label is not None:
                 plt.xlabel(x_label)
 
-        def save_plot_results(results, results_folder):
-            # Plot main fitness evolution
-            plt.figure(figsize=(10, 6))  # Increase figure size
-            plot_mean_std(results['generation'], results['avg_fitness'], results['std_fitness'], "Fitness")
-            plt.plot(results['generation'], results['max_fitness'], 'r-', label="Best Fitness")
-            plt.ylim(0, 1.1)
-            plt.xlabel('Generation')
-            plt.ylabel('Fitness')
-            plt.grid()
-            plt.legend(loc="upper left", bbox_to_anchor=(1, 1))  # Move legend outside the plot
-            plt.tight_layout()  # Adjust layout
-            plt.savefig(results_folder + "/fitness_evolution.png")
-            plt.close()
+        plt.figure(figsize=(10, 6))
+        plot_mean_std(results['generation'], results['avg_fitness'], results['std_fitness'], "Fitness")
+        plt.plot(results['generation'], results['max_fitness'], 'r-', label="Best Fitness")
+        plt.ylim(0, 1.1)
+        plt.xlabel('Generation')
+        plt.ylabel('Fitness')
+        plt.grid()
+        plt.legend(loc="upper left", bbox_to_anchor=(1, 1))
+        plt.tight_layout()
+        plt.savefig(results_folder + "/fitness_evolution.png")
+        plt.close()
 
-            # Plot aesthetic score evolution
-            plt.figure(figsize=(10, 6))  # Increase figure size
-            plot_mean_std(results['generation'], results['avg_aesthetic_score'], results['std_aesthetic_score'], "Population")
-            plt.plot(results['generation'], results['max_aesthetic_score'], 'r-', label="Best")
-            plt.ylim(0, 10)
-            plt.xlabel('Generation')
-            plt.ylabel('Aesthetic Score')
-            plt.grid()
-            plt.legend(loc="upper left", bbox_to_anchor=(1, 1))  # Move legend outside the plot
-            plt.tight_layout()  # Adjust layout
-            plt.savefig(results_folder + "/aesthetic_score_evolution.png")
-            plt.close()
+        plt.figure(figsize=(10, 6))
+        plot_mean_std(results['generation'], results['avg_aesthetic_score'], results['std_aesthetic_score'], "Population")
+        plt.plot(results['generation'], results['max_aesthetic_score'], 'r-', label="Best")
+        plt.ylim(0, 10)
+        plt.xlabel('Generation')
+        plt.ylabel('Aesthetic Score')
+        plt.grid()
+        plt.legend(loc="upper left", bbox_to_anchor=(1, 1))
+        plt.tight_layout()
+        plt.savefig(results_folder + "/aesthetic_score_evolution.png")
+        plt.close()
 
-            # Plot clip score evolution
-            plt.figure(figsize=(10, 6))  # Increase figure size
-            plot_mean_std(results['generation'], results['avg_clip_score'], results['std_clip_score'], "Population")
-            plt.plot(results['generation'], results['max_clip_score'], 'r-', label="Best")
-            plt.ylim(0, 0.6)
-            plt.xlabel('Generation')
-            plt.ylabel('CLIP Score')
-            plt.grid()
-            plt.legend(loc="upper left", bbox_to_anchor=(1, 1))  # Move legend outside the plot
-            plt.tight_layout()  # Adjust layout
-            plt.savefig(results_folder + "/clip_score_evolution.png") 
-            plt.close()   
+        plt.figure(figsize=(10, 6))
+        plot_mean_std(results['generation'], results['avg_clip_score'], results['std_clip_score'], "Population")
+        plt.plot(results['generation'], results['max_clip_score'], 'r-', label="Best")
+        plt.ylim(0, 0.6)
+        plt.xlabel('Generation')
+        plt.ylabel('CLIP Score')
+        plt.grid()
+        plt.legend(loc="upper left", bbox_to_anchor=(1, 1))
+        plt.tight_layout()
+        plt.savefig(results_folder + "/clip_score_evolution.png")
+        plt.close()
+
+        plt.figure(figsize=(10, 6))
+        plot_mean_std(results['generation'], results['avg_image_reward_score'], results['std_image_reward_score'], "Population")
+        plt.plot(results['generation'], results['max_image_reward_score'], 'r-', label="Best")
+        plt.xlabel('Generation')
+        plt.ylabel('ImageReward Score')
+        plt.grid()
+        plt.legend(loc="upper left", bbox_to_anchor=(1, 1))
+        plt.tight_layout()
+        plt.savefig(results_folder + "/image_reward_evolution.png")
+        plt.close()
+
+        plt.figure(figsize=(10, 6))
+        plot_mean_std(results['generation'], results['avg_hpsv2_score'], results['std_hpsv2_score'], "Population")
+        plt.plot(results['generation'], results['max_hpsv2_score'], 'r-', label="Best")
+        plt.xlabel('Generation')
+        plt.ylabel('HPSv2 Score')
+        plt.grid()
+        plt.legend(loc="upper left", bbox_to_anchor=(1, 1))
+        plt.tight_layout()
+        plt.savefig(results_folder + "/hpsv2_evolution.png")
+        plt.close()
+
+        plt.figure(figsize=(10, 6))
+        plot_mean_std(results['generation'], results['avg_pickscore_score'], results['std_pickscore_score'], "Population")
+        plt.plot(results['generation'], results['max_pickscore_score'], 'r-', label="Best")
+        plt.xlabel('Generation')
+        plt.ylabel('PickScore')
+        plt.grid()
+        plt.legend(loc="upper left", bbox_to_anchor=(1, 1))
+        plt.tight_layout()
+        plt.savefig(results_folder + "/pickscore_evolution.png")
+        plt.close()
+
+    def run_cmaes_optimization(self, seed = None, seed_number = None, prompt = None, category = None, prompt_number = None):
 
         if seed is None:
             seed = self.parameters["seed"]
@@ -647,7 +996,7 @@ class Eigo:
             pil_image = Image.fromarray(image_np)
             pil_image.save(f"{results_folder}/it_0.png")
 
-            initial_fitness, initial_aesthetic_score, initial_clip_score, initial_fitness_1, initial_fitness_2 = self.evaluate(trainable_params_init, seed, text_embeddings_init_shape, selected_prompt)
+            initial_fitness, initial_aesthetic_score, initial_clip_score, initial_image_reward_score, initial_hpsv2_score, initial_pickscore_score, initial_components = self.evaluate(trainable_params_init, seed, text_embeddings_init_shape, selected_prompt)
 
         time_list = [0]
         best_aesthetic_score_overall = initial_aesthetic_score
@@ -670,13 +1019,15 @@ class Eigo:
         avg_clip_score_list = [initial_clip_score]
         std_clip_score_list = [0]
 
-        max_fitness_1_list = [initial_fitness_1]
-        avg_fitness_1_list = [initial_fitness_1]
-        std_fitness_1_list = [0]
-
-        max_fitness_2_list = [initial_fitness_2]
-        avg_fitness_2_list = [initial_fitness_2]
-        std_fitness_2_list = [0]
+        max_image_reward_score_list = [initial_image_reward_score]
+        avg_image_reward_score_list = [initial_image_reward_score]
+        std_image_reward_score_list = [0]
+        max_hpsv2_score_list = [initial_hpsv2_score]
+        avg_hpsv2_score_list = [initial_hpsv2_score]
+        std_hpsv2_score_list = [0]
+        max_pickscore_score_list = [initial_pickscore_score]
+        avg_pickscore_score_list = [initial_pickscore_score]
+        std_pickscore_score_list = [0]
 
         while not es.stop():
             elapsed_time = time.time() - start_time
@@ -696,21 +1047,23 @@ class Eigo:
             solutions = es.ask()
             # Evaluate candidate solutions
             tmp_fitnesses = []
-            tmp_fitness_1 = []
-            tmp_fitness_2 = []
             aesthetic_scores = []
             clip_scores = []
+            image_reward_scores = []
+            hpsv2_scores = []
+            pickscore_scores = []
 
             ind_id = 1
             for x in solutions:
                 if self.parameters["save_gens"]:
                     save_path = results_folder + "/gen_%d/id_%d.png" % (generation+1, ind_id)
-                fitness, aesthetic_score, clip_score, fitness_1, fitness_2 = self.evaluate(x, seed, text_embeddings_init_shape, selected_prompt, save_path)
+                fitness, aesthetic_score, clip_score, image_reward_score, hpsv2_score, pickscore_score, _ = self.evaluate(x, seed, text_embeddings_init_shape, selected_prompt, save_path)
                 tmp_fitnesses.append(fitness)
-                tmp_fitness_1.append(fitness_1)
-                tmp_fitness_2.append(fitness_2)
                 aesthetic_scores.append(aesthetic_score)
                 clip_scores.append(clip_score)
+                image_reward_scores.append(image_reward_score)
+                hpsv2_scores.append(hpsv2_score)
+                pickscore_scores.append(pickscore_score)
                 ind_id += 1
             # Tell CMA-ES the fitnesses
             es.tell(solutions, tmp_fitnesses)
@@ -742,21 +1095,26 @@ class Eigo:
             avg_clip_score_list.append(avg_clip_score)
             std_clip_score_list.append(std_clip_score)
 
-            max_fitness_1 = max(tmp_fitness_1)
-            avg_fitness_1 = np.mean(tmp_fitness_1)
-            std_fitness_1 = np.std(tmp_fitness_1)
+            max_image_reward_score = max(image_reward_scores)
+            avg_image_reward_score = np.mean(image_reward_scores)
+            std_image_reward_score = np.std(image_reward_scores)
 
-            max_fitness_1_list.append(max_fitness_1)
-            avg_fitness_1_list.append(avg_fitness_1)
-            std_fitness_1_list.append(std_fitness_1)
+            max_image_reward_score_list.append(max_image_reward_score)
+            avg_image_reward_score_list.append(avg_image_reward_score)
+            std_image_reward_score_list.append(std_image_reward_score)
+            max_hpsv2_score = max(hpsv2_scores)
+            avg_hpsv2_score = np.mean(hpsv2_scores)
+            std_hpsv2_score = np.std(hpsv2_scores)
 
-            max_fitness_2 = max(tmp_fitness_2)
-            avg_fitness_2 = np.mean(tmp_fitness_2)
-            std_fitness_2 = np.std(tmp_fitness_2)
-
-            max_fitness_2_list.append(max_fitness_2)
-            avg_fitness_2_list.append(avg_fitness_2)
-            std_fitness_2_list.append(std_fitness_2)
+            max_hpsv2_score_list.append(max_hpsv2_score)
+            avg_hpsv2_score_list.append(avg_hpsv2_score)
+            std_hpsv2_score_list.append(std_hpsv2_score)
+            max_pickscore_score = max(pickscore_scores)
+            avg_pickscore_score = np.mean(pickscore_scores)
+            std_pickscore_score = np.std(pickscore_scores)
+            max_pickscore_score_list.append(max_pickscore_score)
+            avg_pickscore_score_list.append(avg_pickscore_score)
+            std_pickscore_score_list.append(std_pickscore_score)
 
             # Get best solution so far
             best_x = es.result.xbest
@@ -802,6 +1160,15 @@ class Eigo:
                 "avg_clip_score": avg_clip_score_list,
                 "std_clip_score": std_clip_score_list,
                 "max_clip_score": max_clip_score_list,
+                "avg_image_reward_score": avg_image_reward_score_list,
+                "std_image_reward_score": std_image_reward_score_list,
+                "max_image_reward_score": max_image_reward_score_list,
+                "avg_hpsv2_score": avg_hpsv2_score_list,
+                "std_hpsv2_score": std_hpsv2_score_list,
+                "max_hpsv2_score": max_hpsv2_score_list,
+                "avg_pickscore_score": avg_pickscore_score_list,
+                "std_pickscore_score": std_pickscore_score_list,
+                "max_pickscore_score": max_pickscore_score_list,
                 "elapsed_time": time_list
             })
 
@@ -810,15 +1177,275 @@ class Eigo:
 
             results.to_csv(f"{results_folder}/fitness_results.csv", index=False, na_rep='nan')
 
-            save_plot_results(results, results_folder)
+            self._save_population_plot_results(results, results_folder)
 
             # Print stats
-            print(f"Generation {generation}/{self.parameters['num_generations']}: Max fitness: {max_fit}, Avg fitness: {avg_fit}, Max aesthetic score: {max_aesthetic_score}, Avg aesthetic score: {avg_aesthetic_score}, Max clip score: {max_clip_score}, Avg clip score: {avg_clip_score}, Estimated time remaining: {formatted_time_remaining}")
+            print(f"Generation {generation}/{self.parameters['num_generations']}: Max fitness: {max_fit}, Avg fitness: {avg_fit}, Max aesthetic score: {max_aesthetic_score}, Avg aesthetic score: {avg_aesthetic_score}, Max clip score: {max_clip_score}, Avg clip score: {avg_clip_score}, Max ImageReward score: {max_image_reward_score}, Avg ImageReward score: {avg_image_reward_score}, Max HPSv2 score: {max_hpsv2_score}, Avg HPSv2 score: {avg_hpsv2_score}, Max PickScore: {max_pickscore_score}, Avg PickScore: {avg_pickscore_score}, Estimated time remaining: {formatted_time_remaining}")
 
         # Save the overall best image
         with torch.no_grad():
             split = np.prod(text_embeddings_init_shape[0])
             best_overall_pe  = torch.tensor(best_text_embeddings_overall[:split],  dtype=torch.float32, device=self.device).view(text_embeddings_init_shape[0])
+            best_overall_ppe = torch.tensor(best_text_embeddings_overall[split:], dtype=torch.float32, device=self.device).view(text_embeddings_init_shape[1])
+            best_image = self.generate_image_from_embeddings_cmaes(best_overall_pe, best_overall_ppe, seed)
+        best_image_np = best_image.detach().to(torch.float32).cpu().numpy()
+        best_image_np = (best_image_np * 255).astype(np.uint8)
+        pil_image = Image.fromarray(best_image_np)
+        pil_image.save(f"{results_folder}/best_all.png")
+
+        return results_folder
+
+    def run_ga_optimization(self, seed = None, seed_number = None, prompt = None, category = None, prompt_number = None):
+        if seed is None:
+            seed = self.parameters["seed"]
+        if prompt is None:
+            selected_prompt = self.parameters["selected_prompt"]
+        else:
+            selected_prompt = prompt
+
+        seed = int(seed)
+        num_generations = int(self.parameters["num_generations"])
+        pop_size = int(self.parameters["pop_size"])
+        mutation_std = float(self.parameters.get("ga_mutation_std", self.parameters.get("sigma", 0.1)))
+        elite_count = int(self.parameters.get("ga_elite_count", 1))
+        crossover_rate = float(self.parameters.get("ga_crossover_rate", 0.5))
+        mutation_rate = float(self.parameters.get("ga_mutation_rate", 0.1))
+
+        if pop_size < 2:
+            raise ValueError("GA requires pop_size >= 2.")
+        if mutation_std <= 0:
+            raise ValueError("GA requires ga_mutation_std > 0.")
+        if not 1 <= elite_count <= pop_size:
+            raise ValueError("GA requires 1 <= ga_elite_count <= pop_size.")
+        if not 0 <= crossover_rate <= 1:
+            raise ValueError("GA requires 0 <= ga_crossover_rate <= 1.")
+        if not 0 <= mutation_rate <= 1:
+            raise ValueError("GA requires 0 <= ga_mutation_rate <= 1.")
+
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+        random.seed(seed)
+        rng = np.random.default_rng(seed)
+
+        if category is not None:
+            print(f"Selected prompt: {selected_prompt} (Category: {category})")
+        else:
+            print(f"Selected prompt: {selected_prompt}")
+
+        results_folder = f"{self.OUTPUT_FOLDER}/results_{self.model_name}_{seed}"
+        if prompt_number is not None:
+            results_folder += f"_{prompt_number}"
+        os.makedirs(results_folder, exist_ok=True)
+        self._save_run_config(results_folder, seed, selected_prompt, category=category, prompt_number=prompt_number)
+
+        with torch.no_grad():
+            prompt_embeds, pooled_prompt_embeds = self._encode_prompt_embeddings(selected_prompt)
+            initial_image = self.generate_image_from_embeddings_cmaes(prompt_embeds.clone(), pooled_prompt_embeds.clone(), seed)
+            image_np = initial_image.detach().clone().to(torch.float32).cpu().numpy()
+            image_np = (image_np * 255).astype(np.uint8)
+            pil_image = Image.fromarray(image_np)
+            pil_image.save(f"{results_folder}/it_0.png")
+
+        trainable_params_init = torch.cat([
+            prompt_embeds.flatten(),
+            pooled_prompt_embeds.flatten()
+        ]).to(torch.float32).cpu().numpy()
+
+        sh_prompt = prompt_embeds.shape
+        sh_pooled = pooled_prompt_embeds.shape
+        text_embeddings_init_shape = [sh_prompt, sh_pooled]
+
+        initial_fitness, initial_aesthetic_score, initial_clip_score, initial_image_reward_score, initial_hpsv2_score, initial_pickscore_score, initial_components = self.evaluate(
+            trainable_params_init, seed, text_embeddings_init_shape, selected_prompt
+        )
+
+        population = np.repeat(trainable_params_init[None, :], pop_size, axis=0)
+        population += rng.normal(0.0, mutation_std, size=population.shape)
+        population[0] = trainable_params_init.copy()
+
+        best_fitness_overall = -initial_fitness
+        best_text_embeddings_overall = trainable_params_init.copy()
+        time_list = [0]
+        start_time = time.time()
+
+        max_fit_list = [best_fitness_overall]
+        avg_fit_list = [best_fitness_overall]
+        std_fit_list = [0]
+        max_aesthetic_score_list = [initial_aesthetic_score]
+        avg_aesthetic_score_list = [initial_aesthetic_score]
+        std_aesthetic_score_list = [0]
+        max_clip_score_list = [initial_clip_score]
+        avg_clip_score_list = [initial_clip_score]
+        std_clip_score_list = [0]
+        max_image_reward_score_list = [initial_image_reward_score]
+        avg_image_reward_score_list = [initial_image_reward_score]
+        std_image_reward_score_list = [0]
+        max_hpsv2_score_list = [initial_hpsv2_score]
+        avg_hpsv2_score_list = [initial_hpsv2_score]
+        std_hpsv2_score_list = [0]
+        max_pickscore_score_list = [initial_pickscore_score]
+        avg_pickscore_score_list = [initial_pickscore_score]
+        std_pickscore_score_list = [0]
+
+        for generation in range(1, num_generations + 1):
+            elapsed_time = time.time() - start_time
+            if self.parameters['time_limit_seconds'] is not None and elapsed_time >= self.parameters['time_limit_seconds']:
+                print(
+                    "Time limit reached before starting generation "
+                    f"{generation}/{num_generations} (elapsed: {self.format_time(elapsed_time)})."
+                )
+                break
+
+            print(f"Generation {generation}/{num_generations}")
+
+            if self.parameters["save_gens"]:
+                os.makedirs(results_folder + "/gen_%d" % generation, exist_ok=True)
+
+            tmp_fitnesses = []
+            aesthetic_scores = []
+            clip_scores = []
+            image_reward_scores = []
+            hpsv2_scores = []
+            pickscore_scores = []
+
+            for ind_id, x in enumerate(population, start=1):
+                save_path = None
+                if self.parameters["save_gens"]:
+                    save_path = results_folder + "/gen_%d/id_%d.png" % (generation, ind_id)
+                fitness, aesthetic_score, clip_score, image_reward_score, hpsv2_score, pickscore_score, _ = self.evaluate(
+                    x, seed, text_embeddings_init_shape, selected_prompt, save_path
+                )
+                tmp_fitnesses.append(fitness)
+                aesthetic_scores.append(aesthetic_score)
+                clip_scores.append(clip_score)
+                image_reward_scores.append(image_reward_score)
+                hpsv2_scores.append(hpsv2_score)
+                pickscore_scores.append(pickscore_score)
+
+            fitnesses = np.array([-f for f in tmp_fitnesses], dtype=float)
+            order = np.argsort(fitnesses)[::-1]
+            population = population[order]
+            fitnesses = fitnesses[order]
+            aesthetic_scores = np.array(aesthetic_scores, dtype=float)[order]
+            clip_scores = np.array(clip_scores, dtype=float)[order]
+            image_reward_scores = np.array(image_reward_scores, dtype=float)[order]
+            hpsv2_scores = np.array(hpsv2_scores, dtype=float)[order]
+            pickscore_scores = np.array(pickscore_scores, dtype=float)[order]
+
+            max_fit = float(np.max(fitnesses))
+            avg_fit = float(np.mean(fitnesses))
+            std_fit = float(np.std(fitnesses))
+            max_aesthetic_score = float(np.max(aesthetic_scores))
+            avg_aesthetic_score = float(np.mean(aesthetic_scores))
+            std_aesthetic_score = float(np.std(aesthetic_scores))
+            max_clip_score = float(np.max(clip_scores))
+            avg_clip_score = float(np.mean(clip_scores))
+            std_clip_score = float(np.std(clip_scores))
+            max_image_reward_score = float(np.max(image_reward_scores))
+            avg_image_reward_score = float(np.mean(image_reward_scores))
+            std_image_reward_score = float(np.std(image_reward_scores))
+            max_hpsv2_score = float(np.max(hpsv2_scores))
+            avg_hpsv2_score = float(np.mean(hpsv2_scores))
+            std_hpsv2_score = float(np.std(hpsv2_scores))
+            max_pickscore_score = float(np.max(pickscore_scores))
+            avg_pickscore_score = float(np.mean(pickscore_scores))
+            std_pickscore_score = float(np.std(pickscore_scores))
+
+            max_fit_list.append(max_fit)
+            avg_fit_list.append(avg_fit)
+            std_fit_list.append(std_fit)
+            max_aesthetic_score_list.append(max_aesthetic_score)
+            avg_aesthetic_score_list.append(avg_aesthetic_score)
+            std_aesthetic_score_list.append(std_aesthetic_score)
+            max_clip_score_list.append(max_clip_score)
+            avg_clip_score_list.append(avg_clip_score)
+            std_clip_score_list.append(std_clip_score)
+            max_image_reward_score_list.append(max_image_reward_score)
+            avg_image_reward_score_list.append(avg_image_reward_score)
+            std_image_reward_score_list.append(std_image_reward_score)
+            max_hpsv2_score_list.append(max_hpsv2_score)
+            avg_hpsv2_score_list.append(avg_hpsv2_score)
+            std_hpsv2_score_list.append(std_hpsv2_score)
+            max_pickscore_score_list.append(max_pickscore_score)
+            avg_pickscore_score_list.append(avg_pickscore_score)
+            std_pickscore_score_list.append(std_pickscore_score)
+
+            best_x = population[0].copy()
+            if max_fit > best_fitness_overall:
+                best_fitness_overall = max_fit
+                best_text_embeddings_overall = best_x.copy()
+
+            with torch.no_grad():
+                split = np.prod(text_embeddings_init_shape[0])
+                best_pe = torch.tensor(best_x[:split], dtype=torch.float32, device=self.device).view(text_embeddings_init_shape[0])
+                best_ppe = torch.tensor(best_x[split:], dtype=torch.float32, device=self.device).view(text_embeddings_init_shape[1])
+                best_image = self.generate_image_from_embeddings_cmaes(best_pe, best_ppe, seed)
+                image_np = best_image.detach().clone().to(torch.float32).cpu().numpy()
+                image_np = (image_np * 255).astype(np.uint8)
+                pil_image = Image.fromarray(image_np)
+                pil_image.save(results_folder + "/best_%d.png" % generation)
+
+            elapsed_time = time.time() - start_time
+            generations_done = generation
+            generations_left = num_generations - generations_done
+            average_time_per_generation = elapsed_time / generations_done
+            estimated_time_remaining = average_time_per_generation * generations_left
+            formatted_time_remaining = self.format_time(estimated_time_remaining)
+            time_list.append(elapsed_time)
+
+            results = pd.DataFrame({
+                "generation": list(range(0, generation + 1)),
+                "prompt": [selected_prompt] + [''] * generation,
+                "avg_fitness": avg_fit_list,
+                "std_fitness": std_fit_list,
+                "max_fitness": max_fit_list,
+                "avg_aesthetic_score": avg_aesthetic_score_list,
+                "std_aesthetic_score": std_aesthetic_score_list,
+                "max_aesthetic_score": max_aesthetic_score_list,
+                "avg_clip_score": avg_clip_score_list,
+                "std_clip_score": std_clip_score_list,
+                "max_clip_score": max_clip_score_list,
+                "avg_image_reward_score": avg_image_reward_score_list,
+                "std_image_reward_score": std_image_reward_score_list,
+                "max_image_reward_score": max_image_reward_score_list,
+                "avg_hpsv2_score": avg_hpsv2_score_list,
+                "std_hpsv2_score": std_hpsv2_score_list,
+                "max_hpsv2_score": max_hpsv2_score_list,
+                "avg_pickscore_score": avg_pickscore_score_list,
+                "std_pickscore_score": std_pickscore_score_list,
+                "max_pickscore_score": max_pickscore_score_list,
+                "elapsed_time": time_list
+            })
+
+            if category is not None:
+                results["category"] = [category] + [''] * generation
+
+            results.to_csv(f"{results_folder}/fitness_results.csv", index=False, na_rep='nan')
+            self._save_population_plot_results(results, results_folder)
+
+            print(f"Generation {generation}/{num_generations}: Max fitness: {max_fit}, Avg fitness: {avg_fit}, Max aesthetic score: {max_aesthetic_score}, Avg aesthetic score: {avg_aesthetic_score}, Max clip score: {max_clip_score}, Avg clip score: {avg_clip_score}, Max ImageReward score: {max_image_reward_score}, Avg ImageReward score: {avg_image_reward_score}, Max HPSv2 score: {max_hpsv2_score}, Avg HPSv2 score: {avg_hpsv2_score}, Max PickScore: {max_pickscore_score}, Avg PickScore: {avg_pickscore_score}, Estimated time remaining: {formatted_time_remaining}")
+
+            elites = population[:elite_count].copy()
+            next_population = [elites[i].copy() for i in range(elite_count)]
+
+            while len(next_population) < pop_size:
+                parent_indices = rng.integers(0, elite_count, size=2)
+                parent_a = elites[parent_indices[0]]
+                parent_b = elites[parent_indices[1]]
+                crossover_mask = rng.random(parent_a.shape[0]) < crossover_rate
+                child = np.where(crossover_mask, parent_a, parent_b)
+                mutation_mask = rng.random(child.shape[0]) < mutation_rate
+                if np.any(mutation_mask):
+                    child = child.copy()
+                    child[mutation_mask] += rng.normal(0.0, mutation_std, size=int(np.sum(mutation_mask)))
+                next_population.append(child)
+
+            population = np.array(next_population[:pop_size], dtype=np.float32)
+            population[0] = best_text_embeddings_overall.copy()
+
+        with torch.no_grad():
+            split = np.prod(text_embeddings_init_shape[0])
+            best_overall_pe = torch.tensor(best_text_embeddings_overall[:split], dtype=torch.float32, device=self.device).view(text_embeddings_init_shape[0])
             best_overall_ppe = torch.tensor(best_text_embeddings_overall[split:], dtype=torch.float32, device=self.device).view(text_embeddings_init_shape[1])
             best_image = self.generate_image_from_embeddings_cmaes(best_overall_pe, best_overall_ppe, seed)
         best_image_np = best_image.detach().to(torch.float32).cpu().numpy()
@@ -851,6 +1478,39 @@ class Eigo:
             plt.legend(loc="upper left", bbox_to_anchor=(1, 1))  # Move legend outside the plot
             plt.tight_layout()  # Adjust layout
             plt.savefig(results_folder + "/clip_evolution.png")
+            plt.close()
+
+            plt.figure(figsize=(10, 6))
+            plt.plot(results['iteration'], results['image_reward_score'], label="ImageReward Score")
+            plt.xlabel('Iteration')
+            plt.ylabel('ImageReward Score')
+            plt.title('ImageReward Evolution')
+            plt.grid()
+            plt.legend(loc="upper left", bbox_to_anchor=(1, 1))
+            plt.tight_layout()
+            plt.savefig(results_folder + "/image_reward_evolution.png")
+            plt.close()
+
+            plt.figure(figsize=(10, 6))
+            plt.plot(results['iteration'], results['hpsv2_score'], label="HPSv2 Score")
+            plt.xlabel('Iteration')
+            plt.ylabel('HPSv2 Score')
+            plt.title('HPSv2 Evolution')
+            plt.grid()
+            plt.legend(loc="upper left", bbox_to_anchor=(1, 1))
+            plt.tight_layout()
+            plt.savefig(results_folder + "/hpsv2_evolution.png")
+            plt.close()
+
+            plt.figure(figsize=(10, 6))
+            plt.plot(results['iteration'], results['pickscore_score'], label="PickScore")
+            plt.xlabel('Iteration')
+            plt.ylabel('PickScore')
+            plt.title('PickScore Evolution')
+            plt.grid()
+            plt.legend(loc="upper left", bbox_to_anchor=(1, 1))
+            plt.tight_layout()
+            plt.savefig(results_folder + "/pickscore_evolution.png")
             plt.close()
 
             # Plot all losses in one plot
@@ -918,6 +1578,36 @@ class Eigo:
             text_tokens = clip.tokenize([selected_prompt]).to(self.device)
             text_features = self.clip_model.encode_text(text_tokens).float()
             text_features = F.normalize(text_features, dim=-1, eps=1e-6)
+            if self.use_image_reward and self.image_reward_model is not None:
+                image_reward_text = self.image_reward_model.blip.tokenizer(
+                    selected_prompt,
+                    padding='max_length',
+                    truncation=True,
+                    max_length=35,
+                    return_tensors="pt",
+                ).to(self.device)
+                image_reward_prompt_ids = image_reward_text.input_ids
+                image_reward_attention_mask = image_reward_text.attention_mask
+            else:
+                image_reward_prompt_ids = None
+                image_reward_attention_mask = None
+            if self.use_hpsv2 and self.hpsv2_tokenizer is not None:
+                hpsv2_text_tokens = self.hpsv2_tokenizer([selected_prompt]).to(
+                    device=self.device,
+                    non_blocking=True,
+                )
+            else:
+                hpsv2_text_tokens = None
+            if self.use_pickscore and self.pickscore_processor is not None:
+                pickscore_text_inputs = self.pickscore_processor(
+                    text=selected_prompt,
+                    padding=True,
+                    truncation=True,
+                    max_length=77,
+                    return_tensors="pt",
+                ).to(self.device)
+            else:
+                pickscore_text_inputs = None
 
         prompt_embeds, pooled_prompt_embeds = self._encode_prompt_embeddings(selected_prompt)
         text_embeddings_init = [
@@ -939,8 +1629,21 @@ class Eigo:
         aesthetic_score = self.aesthetic_evaluation(initial_image)
 
         clip_score = self.evaluate_clip_score_adam(initial_image, text_features)
+        image_reward_score = self.evaluate_image_reward_adam(
+            initial_image,
+            image_reward_prompt_ids,
+            image_reward_attention_mask,
+        )
+        hpsv2_score = self.evaluate_hpsv2_adam(initial_image, hpsv2_text_tokens)
+        pickscore_score = self.evaluate_pickscore_adam(initial_image, pickscore_text_inputs)
 
-        initial_combined_score = self.parameters["alpha"] * aesthetic_score / self.parameters["max_aesthetic_score"] + self.parameters["beta"] * clip_score / self.parameters["max_clip_score"]
+        initial_combined_score, _ = self._combine_metric_components({
+            "aesthetic_score": aesthetic_score,
+            "clip_score": clip_score,
+            "image_reward_score": image_reward_score,
+            "hpsv2_score": hpsv2_score,
+            "pickscore_score": pickscore_score,
+        })
         initial_combined_loss = 1 - initial_combined_score
         if not torch.isfinite(initial_combined_loss):
             raise RuntimeError(
@@ -953,7 +1656,7 @@ class Eigo:
         best_score = initial_combined_score.item()
         best_text_embeddings = [t.detach().clone() for t in text_embeddings_init]
 
-        optimizer = torch.optim.Adam(
+        optimizer = torch.optim.AdamW(
             text_embeddings,
             lr=adam_lr,
             betas=(adam_beta1, adam_beta2),
@@ -967,6 +1670,9 @@ class Eigo:
         # Add lists to store the metrics
         aesthetic_score_list = [aesthetic_score.item()]
         clip_score_list = [clip_score.item()]
+        image_reward_score_list = [image_reward_score.item()]
+        hpsv2_score_list = [hpsv2_score.item()]
+        pickscore_score_list = [pickscore_score.item()]
 
         for iteration in range(1, num_iterations + 1):
             if self.parameters['time_limit_seconds'] is not None and elapsed_time >= self.parameters['time_limit_seconds']:
@@ -983,7 +1689,20 @@ class Eigo:
                 image = self.generate_image_from_embeddings_adam(text_embeddings, seed)
             aesthetic_score = self.aesthetic_evaluation(image)
             clip_score = self.evaluate_clip_score_adam(image, text_features)
-            combined_score = self.parameters["alpha"] * aesthetic_score / self.parameters["max_aesthetic_score"] + self.parameters["beta"] * clip_score / self.parameters["max_clip_score"]
+            image_reward_score = self.evaluate_image_reward_adam(
+                image,
+                image_reward_prompt_ids,
+                image_reward_attention_mask,
+            )
+            hpsv2_score = self.evaluate_hpsv2_adam(image, hpsv2_text_tokens)
+            pickscore_score = self.evaluate_pickscore_adam(image, pickscore_text_inputs)
+            combined_score, _ = self._combine_metric_components({
+                "aesthetic_score": aesthetic_score,
+                "clip_score": clip_score,
+                "image_reward_score": image_reward_score,
+                "hpsv2_score": hpsv2_score,
+                "pickscore_score": pickscore_score,
+            })
             combined_loss = 1 - combined_score
             if not torch.isfinite(combined_loss):
                 print(
@@ -1002,6 +1721,9 @@ class Eigo:
             # Append metrics to their respective lists
             aesthetic_score_list.append(aesthetic_score.item())
             clip_score_list.append(clip_score.item())
+            image_reward_score_list.append(image_reward_score.item())
+            hpsv2_score_list.append(hpsv2_score.item())
+            pickscore_score_list.append(pickscore_score.item())
 
             if combined_score.item() > best_score:
                 best_score = combined_score.item()
@@ -1032,6 +1754,9 @@ class Eigo:
                 "combined_loss": combined_loss_list,
                 "aesthetic_score": aesthetic_score_list,
                 "clip_score": clip_score_list,
+                "image_reward_score": image_reward_score_list,
+                "hpsv2_score": hpsv2_score_list,
+                "pickscore_score": pickscore_score_list,
                 "elapsed_time": time_list
             })
 
@@ -1044,7 +1769,7 @@ class Eigo:
             plot_results(results, results_folder)
 
             # Print stats
-            print(f"Iteration {iteration}/{num_iterations}: Combined Score: {combined_score.item()}, Aesthetic Score: {aesthetic_score.item()}, CLIP Score: {clip_score.item()}, Estimated time remaining: {formatted_time_remaining}")
+            print(f"Iteration {iteration}/{num_iterations}: Combined Score: {combined_score.item()}, Aesthetic Score: {aesthetic_score.item()}, CLIP Score: {clip_score.item()}, ImageReward Score: {image_reward_score.item()}, HPSv2 Score: {hpsv2_score.item()}, PickScore: {pickscore_score.item()}, Estimated time remaining: {formatted_time_remaining}")
 
         # Save the overall best image
         with torch.no_grad():

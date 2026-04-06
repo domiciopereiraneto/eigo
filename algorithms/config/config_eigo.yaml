@@ -1,6 +1,6 @@
 # Primary configuration parameters
 "selected_prompt": "an astrounat riding a horse in mars" # Text prompt to guide image generation
-"optimization_method": "adam" #"cmaes" for CMA-ES variants "adam" for Adam
+"optimization_method": "adam" #"cmaes" for CMA-ES variants, "ga" for the genetic algorithm, "adam" for Adam
 
 # General parameters
 "seed": 42  # Default seed value for reproducibility
@@ -10,10 +10,20 @@
 "guidance_scale": 0  # Guidance scale for classifier-free guidance (set to 0 for no guidance)
 "height": 512  # Height of the generated image in pixels
 "width": 512  # Width of the generated image in pixels
-"alpha": 0.4  # Weight for the aesthetic score in the combined fitness function
-"beta": 0.6  # Weight for the CLIP score in the combined fitness function
+"aesthetic_score_weight": 0.4  # Weight for the aesthetic score in the combined fitness function
+"clip_score_weight": 0.6  # Weight for the CLIP score in the combined fitness function
+"image_reward_score_weight": 0.0  # Weight for the ImageReward score in the combined fitness function
+"hpsv2_score_weight": 0.0  # Weight for the HPSv2 score in the combined fitness function
+"pickscore_score_weight": 0.0  # Weight for the PickScore score in the combined fitness function
 "max_aesthetic_score": 10  # Maximum possible aesthetic score (used for normalization)
 "max_clip_score": 0.5  # Maximum possible CLIP score (used for normalization)
+"max_image_reward_score": 2.0  # Approximate ImageReward normalization constant
+"max_hpsv2_score": 30.0  # Approximate HPSv2 normalization constant
+"max_pickscore_score": 30.0  # Approximate PickScore normalization constant
+"image_reward_model": "ImageReward-v1.0"  # ImageReward checkpoint name; set to null to disable ImageReward calculation
+"hpsv2_version": "v2.1"  # HPSv2 checkpoint version; set to null to disable HPSv2 calculation
+"pickscore_model": "yuvalkirstain/PickScore_v1"  # PickScore checkpoint name; set to null to disable PickScore calculation
+"pickscore_processor": "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"  # Processor backbone for PickScore; set to null to disable PickScore calculation
 "model_id": "black-forest-labs/FLUX.1-schnell" # Model ID (e.g., "black-forest-labs/FLUX.1-schnell", "PixArt-alpha/PixArt-XL-2-1024-MS", "stabilityai/sdxl-turbo")
 "model_backend": "auto"  # Diffusion backend: "auto", "sdxl", "flux", or "pixart"
 "torch_dtype": "float16"  # "auto", "float32", "float16", or "bfloat16" (FLUX on GPU usually benefits from bfloat16)
@@ -43,6 +53,12 @@ save_gens: true # Save individuals of each generation to the results folder
 "adam_beta1": 0.9  # Beta1 parameter for the Adam optimizer
 "adam_beta2": 0.999  # Beta2 parameter for the Adam optimizer
 "adam_max_grad_norm": null  # Gradient norm clipping threshold for Adam; set to null or <=0 to disable
+
+# GA specific parameters (if selected)
+"ga_mutation_std": 0.05  # Standard deviation of Gaussian mutation noise
+"ga_elite_count": 2  # Number of top individuals copied unchanged to the next generation
+"ga_crossover_rate": 0.5  # Per-dimension probability of inheriting from parent A during crossover
+"ga_mutation_rate": 0.1  # Per-dimension probability of applying mutation noise
 
 # Time limit specification
 time_limit_seconds: null # Time limit in seconds, if null then it follows the number of generations/iterations

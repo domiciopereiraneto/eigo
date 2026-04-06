@@ -1,29 +1,40 @@
 # Primary configuration parameters
-"optimization_method": "adam" #"cmaes" for CMA-ES variants "adam" for Adam
+"optimization_method": "cmaes" #"cmaes" for CMA-ES variants, "ga" for the genetic algorithm, "adam" for Adam
 
 # Prompt dataset parameters (used by cmaes_p2.py)
-seed_path: null  # Path to a file with seeds; if null, uses the 'seed' below
+seed_path: "algorithms/config/seeds.txt"  # Path to a file with seeds; if null, uses the 'seed' below
 seed: 42  # Default seed value for reproducibility
 prompt_per_categorie: 3  # Number of prompts sampled per category from the dataset
 prompt_sample_seed: 42  # Seed for prompt sampling from the dataset
+single_prompt_per_seed: true  # If true, ignore per-category sampling and pick one prompt from the full dataset using each run seed
 
 # General generation/scoring parameters
-cuda: 1  # GPU device ID to use (e.g., 0 for first GPU); falls back to CPU if unavailable
+cuda: 0  # GPU device ID to use (e.g., 0 for first GPU); falls back to CPU if unavailable
 predictor: 2  # 0: SAM, 1: LAION V1, 2: LAION V2
-num_inference_steps: 4  # Diffusion inference steps during image generation
+num_inference_steps: 1  # Diffusion inference steps during image generation
 guidance_scale: 0 # Classifier-free guidance scale (0 means disabled)
 height: 512  # Generated image height (pixels)
 width: 512  # Generated image width (pixels)
-alpha: 0.4  # Weight for aesthetic score in combined fitness
-beta: 0.6  # Weight for CLIP score in combined fitness
+aesthetic_score_weight: 0.0  # Weight for aesthetic score in combined fitness
+clip_score_weight: 1.0  # Weight for CLIP score in combined fitness
+image_reward_score_weight: 0.0  # Weight for ImageReward score in combined fitness
+hpsv2_score_weight: 0.0  # Weight for HPSv2 score in combined fitness
+pickscore_score_weight: 0.0  # Weight for PickScore score in combined fitness
 max_aesthetic_score: 10  # Maximum aesthetic score (normalization)
 max_clip_score: 0.5  # Maximum CLIP score (normalization)
-results_folder: "results_adam_flux_new"  # Output directory for runs and artifacts
+max_image_reward_score: 1.0  # Approximate ImageReward normalization constant
+max_hpsv2_score: 1.0  # Approximate HPSv2 normalization constant
+max_pickscore_score: 1.0  # Approximate PickScore normalization constant
+image_reward_model: "ImageReward-v1.0"  # ImageReward checkpoint name; set to null to disable ImageReward calculation
+hpsv2_version: "v2.1"  # HPSv2 checkpoint version; set to null to disable HPSv2 calculation
+pickscore_model: "yuvalkirstain/PickScore_v1"  # PickScore checkpoint name; set to null to disable PickScore calculation
+pickscore_processor: "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"  # Processor backbone for PickScore; set to null to disable PickScore calculation
+results_folder: "results_sepcmaes_sdxl_clip"  # Output directory for runs and artifacts
 
 # Diffusion model parameters
-model_id: "black-forest-labs/FLUX.1-schnell" # Model ID (e.g., "black-forest-labs/FLUX.1-schnell", "PixArt-alpha/PixArt-LCM-XL-2-1024-MS", "stabilityai/sdxl-turbo")
+model_id: "stabilityai/sdxl-turbo" # Model ID (e.g., "black-forest-labs/FLUX.1-schnell", "PixArt-alpha/PixArt-XL-2-1024-MS", "stabilityai/sdxl-turbo")
 model_backend: "auto"  # "auto", "sdxl", "flux", or "pixart"
-torch_dtype: "bfloat16"  # "auto", "float32", "float16", or "bfloat16"
+torch_dtype: "float32"  # "auto", "float32", "float16", or "bfloat16"
 max_sequence_length: 256  # FLUX text encoder token limit (ignored for SDXL)
 use_safetensors: true  # Prefer safetensors weights when available
 
@@ -31,16 +42,16 @@ use_safetensors: true  # Prefer safetensors weights when available
 use_multi_gpu: false  # If true and multiple CUDA devices exist, shard pipeline across GPUs
 pipeline_device_map: "balanced"  # Device map strategy (e.g. "balanced", "auto")
 max_memory: null  # Optional memory map, e.g. {"cuda:0":"22GiB","cuda:1":"22GiB","cpu":"64GiB"}
-enable_gradient_checkpointing: true  # Lower memory use at the cost of speed
-enable_attention_slicing: true  # Lower VRAM use (slower)
-enable_vae_slicing: true  # Lower VRAM use for VAE
-enable_vae_tiling: true  # Useful for high-res decode on limited VRAM
+enable_gradient_checkpointing: false  # Lower memory use at the cost of speed
+enable_attention_slicing: false  # Lower VRAM use (slower)
+enable_vae_slicing: false  # Lower VRAM use for VAE
+enable_vae_tiling: false  # Useful for high-res decode on limited VRAM
 
 # CMA-ES specific parameters
-num_generations: 500 # Number of CMA-ES generations
+num_generations: 100 # Number of CMA-ES generations
 pop_size: 20  # CMA-ES population size
 cmaes_variant: "sep"  # "cmaes" (standard), "sep", or "vd"
-sigma: 0.005  # Initial CMA-ES standard deviation
+sigma: 0.4  # Initial CMA-ES standard deviation
 save_gens: false # Save individuals of each generation to the results folder
 
 # Adam specific parameters (if selected)
@@ -52,5 +63,11 @@ save_gens: false # Save individuals of each generation to the results folder
 "adam_beta2": 0.999  # Beta2 parameter for the Adam optimizer
 "adam_max_grad_norm": null  # Gradient norm clipping threshold for Adam; set to null or <=0 to disable
 
+# GA specific parameters
+ga_mutation_std: 0.25  # Standard deviation of Gaussian mutation noise
+ga_elite_count: 1  # Number of top individuals copied unchanged to the next generation
+ga_crossover_rate: 0.8  # Per-dimension probability of inheriting from parent A during crossover
+ga_mutation_rate: 0.2  # Per-dimension probability of applying mutation noise
+
 # Time limit specification
-time_limit_seconds: 3000 # Time limit in seconds, if null then it follows the number of generations/iterations
+time_limit_seconds: null # Time limit in seconds, if null then it follows the number of generations/iterations

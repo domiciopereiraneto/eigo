@@ -27,7 +27,11 @@ print("Starting optimization using method:", experimental_setup_parameters["opti
 
 if experimental_setup_parameters["optimization_method"] == "cmaes":
     results_folder = eigo_engine.run_cmaes_optimization()
+elif experimental_setup_parameters["optimization_method"] == "ga":
+    results_folder = eigo_engine.run_ga_optimization()
 elif experimental_setup_parameters["optimization_method"] == "adam":
     results_folder = eigo_engine.run_adam_optimization()
+else:
+    raise ValueError(f"Unknown optimization method: {experimental_setup_parameters['optimization_method']}")
 
 print("Results saved in folder:", results_folder)

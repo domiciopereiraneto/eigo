@@ -1,11 +1,11 @@
 # EIGO
 
-Evolutionary Image Generation Optimization (EIGO) is a backend and experiment suite for optimizing text-to-image generation through prompt embedding search. The core engine combines diffusion pipelines, aesthetic predictors, and CLIP-based prompt alignment to run black-box or gradient-based optimization without retraining the image model.
+Evolutionary Image Generation Optimization (EIGO) is a backend and experiment suite for optimizing text-to-image generation through prompt embedding search. The core engine combines diffusion pipelines, aesthetic predictors, CLIP-based prompt alignment, ImageReward, and HPSv2 to run black-box or gradient-based optimization without retraining the image model.
 
 The repository currently exposes:
 
 - `eigo.py`: the main backend engine (`Eigo`) used by all experiment scripts
-- `algorithms/eigo_single_prompt.py`: run one prompt with either Adam or CMA-ES
+- `algorithms/eigo_single_prompt.py`: run one prompt with Adam, GA, or CMA-ES
 - `algorithms/p2_experiments.py`: run batches over sampled Parti Prompts categories
 - `algorithms/p2_schedule.py`: launch multiple `p2_experiments.py` runs from scheduled config overrides
 - `algorithms/eigo_grid_search.py`: run parameter sweeps for one prompt
@@ -60,8 +60,8 @@ algorithms/
 
 - loading the selected diffusion pipeline
 - encoding prompt embeddings
-- running Adam or CMA-ES optimization
-- scoring generated images with CLIP and an aesthetic predictor
+- running Adam, GA, or CMA-ES optimization
+- scoring generated images with CLIP, an aesthetic predictor, ImageReward, and HPSv2
 - saving images, metrics, and run configuration
 
 The backend supports these diffusion backends:
@@ -106,6 +106,7 @@ python algorithms/eigo_single_prompt.py
 This script uses the backend in `eigo.py` and runs the method specified in `optimization_method`:
 
 - `adam`
+- `ga`
 - `cmaes`
 
 Important fields in `config_eigo.yaml`:
@@ -117,13 +118,26 @@ Important fields in `config_eigo.yaml`:
 - `predictor`
 - `num_inference_steps`
 - `guidance_scale`
-- `alpha`
-- `beta`
+- `aesthetic_score_weight`
+- `clip_score_weight`
+- `image_reward_score_weight`
+- `hpsv2_score_weight`
+- `pickscore_score_weight`
+- `max_image_reward_score`
+- `max_hpsv2_score`
+- `max_pickscore_score`
+- `image_reward_model`
+- `hpsv2_version`
+- `pickscore_model`
+- `pickscore_processor`
 - `results_folder`
+
+Metric weights only control the summed objective. Optional metrics are still computed when configured; set `image_reward_model: null`, `hpsv2_version: null`, or `pickscore_model: null` to disable those calculations entirely.
 
 Algorithm-specific fields:
 
 - Adam: `num_iterations`, `adam_lr`, `adam_weight_decay`, `adam_eps`, `adam_beta1`, `adam_beta2`, `adam_max_grad_norm`
+- GA: `num_generations`, `pop_size`, `ga_mutation_std`, `ga_elite_count`, `ga_crossover_rate`, `ga_mutation_rate`, `save_gens`
 - CMA-ES: `num_generations`, `pop_size`, `sigma`, `cmaes_variant`, `save_gens`
 
 ### Parti Prompts Batch Experiments
@@ -167,7 +181,7 @@ Each scheduled run is merged into the base config and executed sequentially.
 
 ### Grid Search
 
-For one-prompt sweeps across Adam and/or CMA-ES parameter combinations, edit [`algorithms/config/config_eigo_grid_search.yaml`](/home/posgrad/phd2025/dneto/eigo/algorithms/config/config_eigo_grid_search.yaml) and run:
+For one-prompt sweeps across Adam, GA, and/or CMA-ES parameter combinations, edit [`algorithms/config/config_eigo_grid_search.yaml`](/home/posgrad/phd2025/dneto/eigo/algorithms/config/config_eigo_grid_search.yaml) and run:
 
 ```bash
 python algorithms/eigo_grid_search.py --config algorithms/config/config_eigo_grid_search.yaml
@@ -185,11 +199,30 @@ The grid-search config supports:
 
 - `selected_prompt`
 - `test_adam`
+- `test_ga`
 - `test_cmaes`
 - shared backend/model parameters
-- `grid.adam` and `grid.cmaes` parameter lists
+- `grid.adam`, `grid.ga`, and `grid.cmaes` parameter lists
 
 Each run stores its effective parameter set and a summary YAML is written to the top-level results folder.
+
+### Optuna Search
+
+For adaptive hyperparameter search across Adam, GA, and/or CMA-ES, edit [`algorithms/config/config_eigo_optuna_search.yaml`](/home/posgrad/phd2025/dneto/eigo/algorithms/config/config_eigo_optuna_search.yaml) and run:
+
+```bash
+python algorithms/eigo_optuna_search.py --config algorithms/config/config_eigo_optuna_search.yaml
+```
+
+Useful options:
+
+```bash
+python algorithms/eigo_optuna_search.py \
+  --config algorithms/config/config_eigo_optuna_search.yaml \
+  --dry-run
+```
+
+The Optuna config supports `optuna.n_trials`, `optuna.direction`, `optuna.metric`, `optuna.sampler`, and method-specific `optuna.search_space` entries. Lists are sampled as categorical choices, while dictionaries can define `float`, `int`, or `categorical` distributions. Each trial evaluates all selected prompts and optimizes the mean final objective value.
 
 ## Processing Results
 

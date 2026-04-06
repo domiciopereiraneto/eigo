@@ -28,3 +28,6 @@ dependencies:
       - protobuf>=4.25.3
       - sentencepiece>=0.2.0
       - beautifulsoup4 >= 4.14.3
+      - image-reward==1.5
+      - hpsv2
+      - optuna
