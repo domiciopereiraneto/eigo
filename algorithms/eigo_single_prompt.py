@@ -31,6 +31,8 @@ elif experimental_setup_parameters["optimization_method"] == "ga":
     results_folder = eigo_engine.run_ga_optimization()
 elif experimental_setup_parameters["optimization_method"] == "adam":
     results_folder = eigo_engine.run_adam_optimization()
+elif experimental_setup_parameters["optimization_method"] == "random_sampler":
+    results_folder = eigo_engine.run_random_sampler_optimization()
 else:
     raise ValueError(f"Unknown optimization method: {experimental_setup_parameters['optimization_method']}")
 

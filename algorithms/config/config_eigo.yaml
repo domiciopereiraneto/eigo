@@ -1,13 +1,14 @@
 # Primary configuration parameters
 "selected_prompt": "an astrounat riding a horse in mars" # Text prompt to guide image generation
-"optimization_method": "adam" #"cmaes" for CMA-ES variants, "ga" for the genetic algorithm, "adam" for Adam
+"optimization_method": "adam" #"cmaes" for CMA-ES variants, "ga" for the genetic algorithm, "adam" for Adam, "random_sampler" for random seed sampling
 
 # General parameters
 "seed": 42  # Default seed value for reproducibility
-"cuda": 2  # GPU device ID to use (e.g. 0 for the first GPU). If no GPU is available falls back to CPU.
+"cuda": 1  # GPU device ID to use (e.g. 0 for the first GPU). If no GPU is available falls back to CPU.
 "predictor": 2  # Predictor type= 0 for SAM 1 for LAION V1 2 for LAION V2
-"num_inference_steps": 4  # Number of inference steps for the diffusion model during image generation
-"guidance_scale": 0  # Guidance scale for classifier-free guidance (set to 0 for no guidance)
+"num_inference_steps": 8  # Number of inference steps for the diffusion model during image generation; LCM usually works well with 1-8
+"guidance_scale": 4.5  # Guidance scale for classifier-free guidance (set to 0 for no guidance)
+"lcm_origin_steps": 50  # Original diffusion steps for LCM backends; ignored by other backends
 "height": 512  # Height of the generated image in pixels
 "width": 512  # Width of the generated image in pixels
 "aesthetic_score_weight": 0.4  # Weight for the aesthetic score in the combined fitness function
@@ -17,26 +18,27 @@
 "pickscore_score_weight": 0.0  # Weight for the PickScore score in the combined fitness function
 "max_aesthetic_score": 10  # Maximum possible aesthetic score (used for normalization)
 "max_clip_score": 0.5  # Maximum possible CLIP score (used for normalization)
-"max_image_reward_score": 2.0  # Approximate ImageReward normalization constant
-"max_hpsv2_score": 30.0  # Approximate HPSv2 normalization constant
-"max_pickscore_score": 30.0  # Approximate PickScore normalization constant
+"max_image_reward_score": 1.0  # Approximate ImageReward normalization constant
+"max_hpsv2_score": 1.0  # Approximate HPSv2 normalization constant
+"max_pickscore_score": 1.0  # Approximate PickScore normalization constant
 "image_reward_model": "ImageReward-v1.0"  # ImageReward checkpoint name; set to null to disable ImageReward calculation
 "hpsv2_version": "v2.1"  # HPSv2 checkpoint version; set to null to disable HPSv2 calculation
 "pickscore_model": "yuvalkirstain/PickScore_v1"  # PickScore checkpoint name; set to null to disable PickScore calculation
 "pickscore_processor": "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"  # Processor backbone for PickScore; set to null to disable PickScore calculation
-"model_id": "black-forest-labs/FLUX.1-schnell" # Model ID (e.g., "black-forest-labs/FLUX.1-schnell", "PixArt-alpha/PixArt-XL-2-1024-MS", "stabilityai/sdxl-turbo")
-"model_backend": "auto"  # Diffusion backend: "auto", "sdxl", "flux", or "pixart"
-"torch_dtype": "float16"  # "auto", "float32", "float16", or "bfloat16" (FLUX on GPU usually benefits from bfloat16)
+"evaluate_zero_weight_metrics": true  # If false, zero-weight metrics are not loaded/evaluated; recommended for Adam VRAM
+"model_id": "SimianLuo/LCM_Dreamshaper_v7" # Model ID (e.g., "black-forest-labs/FLUX.1-schnell", "PixArt-alpha/PixArt-XL-2-1024-MS", "stabilityai/sdxl-turbo", "SimianLuo/LCM_Dreamshaper_v7")
+"model_backend": "auto"  # Diffusion backend: "auto", "sdxl", "flux", "pixart", or "lcm"
+"torch_dtype": "float32"  # "auto", "float32", "float16", or "bfloat16" (FLUX on GPU usually benefits from bfloat16)
 "max_sequence_length": 256  # Max token length for FLUX text encoding (ignored for SDXL)
 "use_safetensors": true  # Load model weights from safetensors when available
 "use_multi_gpu": false  # If true and multiple CUDA devices exist, shard the diffusion pipeline across GPUs
 "pipeline_device_map": "balanced"  # Device-map strategy for multi-GPU sharding (e.g., "balanced", "auto")
 "max_memory": null  # Optional per-device memory map, e.g. {"cuda:0":"22GiB","cuda:1":"22GiB","cpu":"64GiB"}
-"enable_gradient_checkpointing": true  # Recommended true for Adam with FLUX/PixArt to reduce activation memory
-"enable_attention_slicing": true  # Enable attention slicing for lower VRAM usage (slower)
-"enable_vae_slicing": true  # Enable VAE slicing for lower VRAM usage
-"enable_vae_tiling": true  # Enable VAE tiling for high-resolution/low-VRAM decoding
-"results_folder": "results_flux_test_adam"  # Folder to save results including
+"enable_gradient_checkpointing": false  # Recommended true for Adam with FLUX/PixArt to reduce activation memory
+"enable_attention_slicing": false  # Enable attention slicing for lower VRAM usage (slower)
+"enable_vae_slicing": false  # Enable VAE slicing for lower VRAM usage
+"enable_vae_tiling": false  # Enable VAE tiling for high-resolution/low-VRAM decoding
+"results_folder": "results_lcm_test_adam"  # Folder to save results including
 
 # CMA-ES specific parameters (if selected)
 "num_generations": 50  # Number of generations for the CMA-ES optimization process
@@ -47,7 +49,7 @@ save_gens: true # Save individuals of each generation to the results folder
 
 # Adam specific parameters (if selected)
 "num_iterations": 1000  # Number of iterations for the Adam optimization process
-"adam_lr": 1e-4  # Learning rate for the Adam optimizer
+"adam_lr": 1e-3  # Learning rate for the Adam optimizer
 "adam_weight_decay": 0  # Weight decay for the Adam optimizer
 "adam_eps": 1e-8  # Epsilon value for numerical stability in the Adam
 "adam_beta1": 0.9  # Beta1 parameter for the Adam optimizer
@@ -59,6 +61,9 @@ save_gens: true # Save individuals of each generation to the results folder
 "ga_elite_count": 2  # Number of top individuals copied unchanged to the next generation
 "ga_crossover_rate": 0.5  # Per-dimension probability of inheriting from parent A during crossover
 "ga_mutation_rate": 0.1  # Per-dimension probability of applying mutation noise
+
+# Random sampler specific parameters (if selected)
+"num_images_to_generate": 20  # Number of random generation seeds/images to evaluate
 
 # Time limit specification
 time_limit_seconds: null # Time limit in seconds, if null then it follows the number of generations/iterations

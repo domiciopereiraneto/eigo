@@ -10,9 +10,11 @@ selected_prompts:
 # If true, all combinations in grid.adam are tested with optimization_method=adam
 # If true, all combinations in grid.ga are tested with optimization_method=ga
 # If true, all combinations in grid.cmaes are tested with optimization_method=cmaes
+# If true, all combinations in grid.random_sampler are tested with optimization_method=random_sampler
 test_adam: true
 test_ga: false
 test_cmaes: false
+test_random_sampler: false
 
 # General parameters (copied from config_eigo.yaml)
 seed: 42
@@ -20,6 +22,7 @@ cuda: 2
 predictor: 2
 num_inference_steps: 1
 guidance_scale: 0
+lcm_origin_steps: 50
 height: 512
 width: 512
 aesthetic_score_weight: 0.5
@@ -36,8 +39,9 @@ image_reward_model: "ImageReward-v1.0"  # Set to null to disable ImageReward cal
 hpsv2_version: "v2.1"  # Set to null to disable HPSv2 calculation
 pickscore_model: "yuvalkirstain/PickScore_v1"  # Set to null to disable PickScore calculation
 pickscore_processor: "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"  # Set to null to disable PickScore calculation
-model_id: "stabilityai/sdxl-turbo"
-model_backend: "auto"
+evaluate_zero_weight_metrics: false  # Keep zero-weight scorer models/graphs out of Adam VRAM
+model_id: "stabilityai/sdxl-turbo" # e.g., "SimianLuo/LCM_Dreamshaper_v7" with model_backend: "lcm" or "auto"
+model_backend: "auto" # "auto", "sdxl", "flux", "pixart", or "lcm"
 torch_dtype: "float32"
 max_sequence_length: 256
 use_safetensors: true
@@ -72,6 +76,9 @@ ga_elite_count: 1
 ga_crossover_rate: 0.8
 ga_mutation_rate: 0.1
 
+# Random sampler defaults (used if not overridden by grid.random_sampler)
+num_images_to_generate: 20
+
 # Time limit in seconds (null -> use num_generations/num_iterations)
 time_limit_seconds: null
 
@@ -91,3 +98,6 @@ grid:
   cmaes:
     pop_size: [20, 50]
     sigma: [0.05,0.1, 0.2, 0.3, 0.4, 0.5]
+
+  random_sampler:
+    num_images_to_generate: [20, 50]

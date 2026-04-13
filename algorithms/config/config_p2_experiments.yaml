@@ -1,5 +1,5 @@
 # Primary configuration parameters
-"optimization_method": "cmaes" #"cmaes" for CMA-ES variants, "ga" for the genetic algorithm, "adam" for Adam
+"optimization_method": "random_sampler" #"cmaes" for CMA-ES variants, "ga" for the genetic algorithm, "adam" for AdamW, "random_sampler" for random seed sampling
 
 # Prompt dataset parameters (used by cmaes_p2.py)
 seed_path: "algorithms/config/seeds.txt"  # Path to a file with seeds; if null, uses the 'seed' below
@@ -11,12 +11,13 @@ single_prompt_per_seed: true  # If true, ignore per-category sampling and pick o
 # General generation/scoring parameters
 cuda: 0  # GPU device ID to use (e.g., 0 for first GPU); falls back to CPU if unavailable
 predictor: 2  # 0: SAM, 1: LAION V1, 2: LAION V2
-num_inference_steps: 1  # Diffusion inference steps during image generation
+num_inference_steps: 1  # Diffusion inference steps during image generation; LCM usually works well with 1-8
 guidance_scale: 0 # Classifier-free guidance scale (0 means disabled)
+lcm_origin_steps: 50  # Original diffusion steps for LCM backends; ignored by other backends
 height: 512  # Generated image height (pixels)
 width: 512  # Generated image width (pixels)
-aesthetic_score_weight: 0.0  # Weight for aesthetic score in combined fitness
-clip_score_weight: 1.0  # Weight for CLIP score in combined fitness
+aesthetic_score_weight: 0.5  # Weight for aesthetic score in combined fitness
+clip_score_weight: 0.5  # Weight for CLIP score in combined fitness
 image_reward_score_weight: 0.0  # Weight for ImageReward score in combined fitness
 hpsv2_score_weight: 0.0  # Weight for HPSv2 score in combined fitness
 pickscore_score_weight: 0.0  # Weight for PickScore score in combined fitness
@@ -29,11 +30,12 @@ image_reward_model: "ImageReward-v1.0"  # ImageReward checkpoint name; set to nu
 hpsv2_version: "v2.1"  # HPSv2 checkpoint version; set to null to disable HPSv2 calculation
 pickscore_model: "yuvalkirstain/PickScore_v1"  # PickScore checkpoint name; set to null to disable PickScore calculation
 pickscore_processor: "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"  # Processor backbone for PickScore; set to null to disable PickScore calculation
-results_folder: "results_sepcmaes_sdxl_clip"  # Output directory for runs and artifacts
+evaluate_zero_weight_metrics: false  # Keep zero-weight scorer models/graphs out of Adam VRAM
+results_folder: "results_random_sampler_sdxl"  # Output directory for runs and artifacts
 
 # Diffusion model parameters
-model_id: "stabilityai/sdxl-turbo" # Model ID (e.g., "black-forest-labs/FLUX.1-schnell", "PixArt-alpha/PixArt-XL-2-1024-MS", "stabilityai/sdxl-turbo")
-model_backend: "auto"  # "auto", "sdxl", "flux", or "pixart"
+model_id: "stabilityai/sdxl-turbo" # Model ID (e.g., "black-forest-labs/FLUX.1-schnell", "PixArt-alpha/PixArt-XL-2-1024-MS", "stabilityai/sdxl-turbo", "SimianLuo/LCM_Dreamshaper_v7")
+model_backend: "auto"  # "auto", "sdxl", "flux", "pixart", or "lcm"
 torch_dtype: "float32"  # "auto", "float32", "float16", or "bfloat16"
 max_sequence_length: 256  # FLUX text encoder token limit (ignored for SDXL)
 use_safetensors: true  # Prefer safetensors weights when available
@@ -48,26 +50,29 @@ enable_vae_slicing: false  # Lower VRAM use for VAE
 enable_vae_tiling: false  # Useful for high-res decode on limited VRAM
 
 # CMA-ES specific parameters
-num_generations: 100 # Number of CMA-ES generations
+num_generations: 150 # Number of CMA-ES generations
 pop_size: 20  # CMA-ES population size
 cmaes_variant: "sep"  # "cmaes" (standard), "sep", or "vd"
-sigma: 0.4  # Initial CMA-ES standard deviation
+sigma: 0.45  # Initial CMA-ES standard deviation
 save_gens: false # Save individuals of each generation to the results folder
 
-# Adam specific parameters (if selected)
-"num_iterations": 2000  # Number of iterations for the Adam optimization process
-"adam_lr": 1e-4  # Learning rate for the Adam optimizer
-"adam_weight_decay": 0  # Weight decay for the Adam optimizer
-"adam_eps": 1e-8  # Epsilon value for numerical stability in the Adam
-"adam_beta1": 0.9  # Beta1 parameter for the Adam optimizer
-"adam_beta2": 0.999  # Beta2 parameter for the Adam optimizer
+# AdamW specific parameters (if selected)
+"num_iterations": 3000  # Number of iterations for the Adam optimization process
+"adam_lr": 3e-3  # Learning rate for the Adam optimizer
+"adam_weight_decay": 3e-4  # Weight decay for the Adam optimizer
+"adam_eps": 6e-9  # Epsilon value for numerical stability in the Adam
+"adam_beta1": 0.817  # Beta1 parameter for the Adam optimizer
+"adam_beta2": 0.966  # Beta2 parameter for the Adam optimizer
 "adam_max_grad_norm": null  # Gradient norm clipping threshold for Adam; set to null or <=0 to disable
 
 # GA specific parameters
-ga_mutation_std: 0.25  # Standard deviation of Gaussian mutation noise
+ga_mutation_std: 0.45  # Standard deviation of Gaussian mutation noise
 ga_elite_count: 1  # Number of top individuals copied unchanged to the next generation
-ga_crossover_rate: 0.8  # Per-dimension probability of inheriting from parent A during crossover
-ga_mutation_rate: 0.2  # Per-dimension probability of applying mutation noise
+ga_crossover_rate: 0.85  # Per-dimension probability of inheriting from parent A during crossover
+ga_mutation_rate: 0.3  # Per-dimension probability of applying mutation noise
+
+# Random sampler specific parameters
+num_images_to_generate: 3000  # Number of random generation seeds/images to evaluate
 
 # Time limit specification
 time_limit_seconds: null # Time limit in seconds, if null then it follows the number of generations/iterations

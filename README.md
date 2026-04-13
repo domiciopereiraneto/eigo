@@ -69,6 +69,7 @@ The backend supports these diffusion backends:
 - `sdxl` via `StableDiffusionXLPipeline`
 - `flux` via `FluxPipeline`
 - `pixart` via `PixArtAlphaPipeline`
+- `lcm` via Diffusers' `LatentConsistencyModelPipeline`/`DiffusionPipeline`
 - `auto` to infer the backend from `model_id`
 
 Backends are configured through YAML, mainly with:
@@ -108,6 +109,7 @@ This script uses the backend in `eigo.py` and runs the method specified in `opti
 - `adam`
 - `ga`
 - `cmaes`
+- `random_sampler`
 
 Important fields in `config_eigo.yaml`:
 
@@ -118,6 +120,7 @@ Important fields in `config_eigo.yaml`:
 - `predictor`
 - `num_inference_steps`
 - `guidance_scale`
+- `lcm_origin_steps` for LCM backends, typically `50`
 - `aesthetic_score_weight`
 - `clip_score_weight`
 - `image_reward_score_weight`
@@ -130,9 +133,10 @@ Important fields in `config_eigo.yaml`:
 - `hpsv2_version`
 - `pickscore_model`
 - `pickscore_processor`
+- `evaluate_zero_weight_metrics`
 - `results_folder`
 
-Metric weights only control the summed objective. Optional metrics are still computed when configured; set `image_reward_model: null`, `hpsv2_version: null`, or `pickscore_model: null` to disable those calculations entirely.
+By default, metrics with weight `0.0` are not loaded or evaluated. This keeps unused ImageReward, HPSv2, PickScore, and CLIP scorer models out of Adam VRAM. Set `evaluate_zero_weight_metrics: true` only when you need to log zero-weight metrics anyway.
 
 Algorithm-specific fields:
 
@@ -201,8 +205,9 @@ The grid-search config supports:
 - `test_adam`
 - `test_ga`
 - `test_cmaes`
+- `test_random_sampler`
 - shared backend/model parameters
-- `grid.adam`, `grid.ga`, and `grid.cmaes` parameter lists
+- `grid.adam`, `grid.ga`, `grid.cmaes`, and `grid.random_sampler` parameter lists
 
 Each run stores its effective parameter set and a summary YAML is written to the top-level results folder.
 

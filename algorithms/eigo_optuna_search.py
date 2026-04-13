@@ -30,11 +30,12 @@ from eigo_grid_search import (  # noqa: E402
 
 
 DEFAULT_CONFIG = "algorithms/config/config_eigo_optuna_search.yaml"
-SUPPORTED_METHODS = ("adam", "ga", "cmaes")
+SUPPORTED_METHODS = ("adam", "ga", "cmaes", "random_sampler")
 AUTO_METRICS = {
     "adam": "combined_score",
     "ga": "max_fitness",
     "cmaes": "max_fitness",
+    "random_sampler": "max_fitness",
 }
 
 
@@ -46,8 +47,13 @@ def get_enabled_methods(config):
         methods.append("ga")
     if bool(config.get("test_cmaes", True)):
         methods.append("cmaes")
+    if bool(config.get("test_random_sampler", False)):
+        methods.append("random_sampler")
     if not methods:
-        raise ValueError("At least one of 'test_adam', 'test_ga', or 'test_cmaes' must be true.")
+        raise ValueError(
+            "At least one of 'test_adam', 'test_ga', 'test_cmaes', "
+            "or 'test_random_sampler' must be true."
+        )
     return methods
 
 
@@ -204,6 +210,8 @@ def run_eigo_method(run_config, method):
         return eigo_engine.run_ga_optimization()
     if method == "cmaes":
         return eigo_engine.run_cmaes_optimization()
+    if method == "random_sampler":
+        return eigo_engine.run_random_sampler_optimization()
     raise ValueError(f"Unsupported method: {method}")
 
 

@@ -11,13 +11,15 @@ selected_prompts:
 test_adam: true
 test_ga: false
 test_cmaes: false
+test_random_sampler: false
 
 # General parameters (copied from config_eigo.yaml)
 seed: 42
-cuda: 2
+cuda: 1
 predictor: 2
-num_inference_steps: 1
-guidance_scale: 0
+num_inference_steps: 4
+guidance_scale: 4
+lcm_origin_steps: 50
 height: 512
 width: 512
 aesthetic_score_weight: 0.5
@@ -30,12 +32,13 @@ max_clip_score: 0.5
 max_image_reward_score: 1.0
 max_hpsv2_score: 1.0
 max_pickscore_score: 1.0
-image_reward_model: "ImageReward-v1.0"  # Set to null to disable ImageReward calculation
+image_reward_model: "ImageReward-v1.0" # Set to null to disable ImageReward calculation
 hpsv2_version: "v2.1"  # Set to null to disable HPSv2 calculation
 pickscore_model: "yuvalkirstain/PickScore_v1"  # Set to null to disable PickScore calculation
 pickscore_processor: "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"  # Set to null to disable PickScore calculation
-model_id: "stabilityai/sdxl-turbo"
-model_backend: "auto"
+evaluate_zero_weight_metrics: true  # Keep zero-weight scorer models/graphs out of Adam VRAM
+model_id: "SimianLuo/LCM_Dreamshaper_v7" # Model ID (e.g., "black-forest-labs/FLUX.1-schnell", "PixArt-alpha/PixArt-XL-2-1024-MS", "stabilityai/sdxl-turbo", "SimianLuo/LCM_Dreamshaper_v7")
+model_backend: "auto" # "auto", "sdxl", "flux", "pixart", or "lcm"
 torch_dtype: "float32"
 max_sequence_length: 256
 use_safetensors: true
@@ -46,7 +49,7 @@ enable_gradient_checkpointing: false
 enable_attention_slicing: false
 enable_vae_slicing: false
 enable_vae_tiling: false
-results_folder: "results_optuna_search_sdxlturbo_adam"
+results_folder: "results_optuna_sdxlturbo_lcm"
 
 # CMA-ES defaults (used if not overridden by optuna.search_space.cmaes)
 num_generations: 50
@@ -56,7 +59,7 @@ sigma: 0.5
 save_gens: false
 
 # Adam defaults (used if not overridden by optuna.search_space.adam)
-num_iterations: 1000
+num_iterations: 300
 adam_lr: 5e-3
 adam_weight_decay: 0
 adam_eps: 1e-8
@@ -70,14 +73,17 @@ ga_elite_count: 1
 ga_crossover_rate: 0.8
 ga_mutation_rate: 0.1
 
+# Random sampler defaults (used if not overridden by optuna.search_space.random_sampler)
+num_images_to_generate: 20
+
 # Time limit in seconds (null -> use num_generations/num_iterations)
 time_limit_seconds: null
 
 optuna:
-  n_trials: 20
+  n_trials: 10
   direction: "maximize"
   metric: "auto"  # auto -> combined_score for Adam, max_fitness for GA/CMA-ES
-  study_name: "eigo_optuna_search"
+  study_name: "eigo_optuna_search_lcm"
   storage: null  # Example for resumable studies: "sqlite:///results_optuna_search_sdxlturbo_adam/optuna.db"
   load_if_exists: true
   catch_trial_errors: true
@@ -94,17 +100,34 @@ optuna:
     adam:
       adam_lr:
         type: "float"
-        low: 1e-4
+        low: 1e-5
         high: 1e-2
         log: true
-      adam_weight_decay: [0.0, 1e-4, 1e-3]
-      adam_eps: [1e-8, 1e-10]
+      adam_weight_decay:
+        type: "float"
+        low: 0
+        high: 1e-3
+      adam_beta1:
+        type: "float"
+        low: 0.8
+        high: 0.99
+        log: true
+      adam_beta2:
+        type: "float"
+        low: 0.9
+        high: 0.999
+        log: true
+      adam_eps:
+        type: "float"
+        low: 1e-10
+        high: 1e-6
+        log: true
 
     ga:
       pop_size:
         type: "int"
         low: 20
-        high: 80
+        high: 50
         step: 10
       ga_mutation_std:
         type: "float"
@@ -115,15 +138,26 @@ optuna:
         type: "float"
         low: 0.05
         high: 0.3
+      ga_crossover_rate:
+        type: "float"
+        low: 0.7
+        high: 0.9
 
     cmaes:
       pop_size:
         type: "int"
         low: 20
-        high: 80
-        step: 10
+        high: 50
+        step: 5
       sigma:
         type: "float"
         low: 0.05
         high: 0.5
         log: true
+
+    random_sampler:
+      num_images_to_generate:
+        type: "int"
+        low: 10
+        high: 100
+        step: 10

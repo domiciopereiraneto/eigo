@@ -1,8 +1,7 @@
 """
 This script contains the Eigo class, an optimization engine for diffusion-based image
 generation guided by aesthetic, prompt-alignment, and ImageReward scores. The engine
-supports three optimization methods: CMA-ES (standard, sep-CMA-ES and VD-CMA), GA,
-and Adam.
+supports CMA-ES (standard, sep-CMA-ES and VD-CMA), GA, Adam, and random sampling.
 """
 
 import sys
@@ -14,7 +13,12 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 import pandas as pd
-from diffusers import FluxPipeline, PixArtAlphaPipeline, StableDiffusionXLPipeline
+from diffusers import (
+    DiffusionPipeline,
+    FluxPipeline,
+    PixArtAlphaPipeline,
+    StableDiffusionXLPipeline,
+)
 import random
 from PIL import Image
 import matplotlib.pyplot as plt
@@ -30,6 +34,7 @@ import clip
 import argparse
 import re
 import ast
+import inspect
 from contextlib import nullcontext
 from pathlib import Path
 from transformers import AutoModel, AutoProcessor
@@ -64,6 +69,9 @@ class Eigo:
         self.parameters = config_parameters
         self.model_backend = self._resolve_model_backend(config_parameters)
         self.guidance_scale = float(config_parameters.get("guidance_scale", 0.0))
+        self.lcm_origin_steps = int(config_parameters.get("lcm_origin_steps", 50))
+        if self.lcm_origin_steps <= 0:
+            raise ValueError("lcm_origin_steps must be a positive integer.")
         self.max_sequence_length = int(config_parameters.get("max_sequence_length", 512))
         self.model_dtype = self._resolve_model_dtype(config_parameters)
         self.use_multi_gpu = bool(config_parameters.get("use_multi_gpu", False))
@@ -85,6 +93,7 @@ class Eigo:
         )
         self.hpsv2_score_weight = float(config_parameters.get("hpsv2_score_weight", 0.0))
         self.pickscore_score_weight = float(config_parameters.get("pickscore_score_weight", 0.0))
+        self.evaluate_zero_weight_metrics = bool(config_parameters.get("evaluate_zero_weight_metrics", False))
         self._metric_scales = {
             "aesthetic_score": float(config_parameters.get("max_aesthetic_score", 1.0)),
             "clip_score": float(config_parameters.get("max_clip_score", 1.0)),
@@ -101,10 +110,14 @@ class Eigo:
         )
         self.use_image_reward = (
             self.image_reward_model_name is not None
+            and self._should_evaluate_metric("image_reward_score")
         )
         hpsv2_version = config_parameters.get("hpsv2_version", "v2.1")
         self.hpsv2_version = None if hpsv2_version is None else str(hpsv2_version)
-        self.use_hpsv2 = self.hpsv2_version is not None
+        self.use_hpsv2 = (
+            self.hpsv2_version is not None
+            and self._should_evaluate_metric("hpsv2_score")
+        )
         pickscore_processor_name = config_parameters.get(
             "pickscore_processor_name",
             config_parameters.get("pickscore_processor", "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"),
@@ -115,7 +128,11 @@ class Eigo:
             config_parameters.get("pickscore_model", "yuvalkirstain/PickScore_v1"),
         )
         self.pickscore_model_name = None if pickscore_model_name is None else str(pickscore_model_name)
-        self.use_pickscore = self.pickscore_model_name is not None and self.pickscore_processor_name is not None
+        self.use_pickscore = (
+            self.pickscore_model_name is not None
+            and self.pickscore_processor_name is not None
+            and self._should_evaluate_metric("pickscore_score")
+        )
 
         if config_parameters["predictor"] == 0:
             predictor_name = 'simulacra'
@@ -139,6 +156,8 @@ class Eigo:
                 raise ValueError(f"Unknown CMA-ES variant: {config_parameters['cmaes_variant']}")
         elif config_parameters["optimization_method"] == "ga":
             method_save_name = "ga"
+        elif config_parameters["optimization_method"] == "random_sampler":
+            method_save_name = "randomsampler"
         else:
             raise ValueError(f"Unknown optimization method: {config_parameters['optimization_method']}")
 
@@ -179,6 +198,9 @@ class Eigo:
             self.use_pickscore,
             self.pickscore_processor_name if self.use_pickscore else None,
             self.pickscore_model_name if self.use_pickscore else None,
+            self._should_evaluate_metric("aesthetic_score"),
+            self._should_evaluate_metric("clip_score"),
+            self.evaluate_zero_weight_metrics,
         )
 
         if cls._ACTIVE_CACHE_KEY is not None and cls._ACTIVE_CACHE_KEY != cache_key:
@@ -189,6 +211,7 @@ class Eigo:
                 model_id=config_parameters["model_id"],
                 use_safetensors=config_parameters.get("use_safetensors", True),
             )
+            self._configure_pipeline_output_options(pipe)
             if not is_sharded:
                 pipe = pipe.to(self.device)
             pipe.set_progress_bar_config(disable=True)
@@ -196,21 +219,28 @@ class Eigo:
             self._configure_pipeline_memory_options(pipe)
 
             clip_model_name = "ViT-L/14"
-            clip_model, clip_preprocess = clip.load(clip_model_name, device=self.device)
-            self._freeze_module_params(clip_model)
+            clip_model = None
+            clip_preprocess = None
+            if self._should_evaluate_metric("clip_score"):
+                clip_model, clip_preprocess = clip.load(clip_model_name, device=self.device)
+                self._freeze_module_params(clip_model)
 
+            aesthetic_model = None
             if config_parameters["predictor"] == 0:
-                from aesthetic_evaluation.src import simulacra_rank_image
-                aesthetic_model = simulacra_rank_image.SimulacraAesthetic(self.device)
                 model_name = "SAM"
+                if self._should_evaluate_metric("aesthetic_score"):
+                    from aesthetic_evaluation.src import simulacra_rank_image
+                    aesthetic_model = simulacra_rank_image.SimulacraAesthetic(self.device)
             elif config_parameters["predictor"] == 1:
-                from aesthetic_evaluation.src import laion_rank_image
-                aesthetic_model = laion_rank_image.LAIONAesthetic(self.device, clip_model=clip_model_name)
                 model_name = "LAIONV1"
+                if self._should_evaluate_metric("aesthetic_score"):
+                    from aesthetic_evaluation.src import laion_rank_image
+                    aesthetic_model = laion_rank_image.LAIONAesthetic(self.device, clip_model=clip_model_name)
             elif config_parameters["predictor"] == 2:
-                from aesthetic_evaluation.src import laion_v2_rank_image
-                aesthetic_model = laion_v2_rank_image.LAIONV2Aesthetic(self.device, clip_model=clip_model_name)
                 model_name = "LAIONV2"
+                if self._should_evaluate_metric("aesthetic_score"):
+                    from aesthetic_evaluation.src import laion_v2_rank_image
+                    aesthetic_model = laion_v2_rank_image.LAIONV2Aesthetic(self.device, clip_model=clip_model_name)
             else:
                 raise ValueError("Invalid predictor option.")
 
@@ -314,16 +344,30 @@ class Eigo:
     def _model_id_tag(model_id):
         return re.sub(r"[^a-z0-9]+", "", model_id.lower().split("/")[-1])
 
+    def _should_evaluate_metric(self, metric_name):
+        if self.evaluate_zero_weight_metrics:
+            return True
+        metric_weights = {
+            "aesthetic_score": self.aesthetic_score_weight,
+            "clip_score": self.clip_score_weight,
+            "image_reward_score": self.image_reward_score_weight,
+            "hpsv2_score": self.hpsv2_score_weight,
+            "pickscore_score": self.pickscore_score_weight,
+        }
+        return metric_weights.get(metric_name, 0.0) != 0.0
+
     @staticmethod
     def _resolve_model_backend(config_parameters):
         requested = str(config_parameters.get("model_backend", "auto")).lower()
-        if requested in ("sdxl", "flux", "pixart"):
+        if requested in ("sdxl", "flux", "pixart", "lcm"):
             return requested
         if requested != "auto":
             raise ValueError(
-                f"Invalid model_backend '{requested}'. Expected one of: auto, sdxl, flux, pixart."
+                f"Invalid model_backend '{requested}'. Expected one of: auto, sdxl, flux, pixart, lcm."
             )
         model_id = config_parameters["model_id"].lower()
+        if "lcm" in model_id or "latent-consistency" in model_id:
+            return "lcm"
         if "pixart" in model_id:
             return "pixart"
         return "flux" if "flux" in model_id else "sdxl"
@@ -425,10 +469,16 @@ class Eigo:
             pipe.enable_vae_tiling()
 
         if self.enable_gradient_checkpointing:
-            for module_name in ("transformer", "unet"):
+            for module_name in ("transformer", "unet", "vae"):
                 module = getattr(pipe, module_name, None)
                 if module is not None and hasattr(module, "enable_gradient_checkpointing"):
                     module.enable_gradient_checkpointing()
+
+    def _configure_pipeline_output_options(self, pipe):
+        if self.model_backend == "lcm" and hasattr(pipe, "safety_checker"):
+            pipe.safety_checker = None
+            if hasattr(pipe, "requires_safety_checker"):
+                pipe.requires_safety_checker = False
 
     def _load_pipeline(self, model_id, use_safetensors):
         common_kwargs = {
@@ -447,6 +497,8 @@ class Eigo:
             return FluxPipeline.from_pretrained(model_id, **common_kwargs), is_sharded
         if self.model_backend == "pixart":
             return PixArtAlphaPipeline.from_pretrained(model_id, **common_kwargs), is_sharded
+        if self.model_backend == "lcm":
+            return DiffusionPipeline.from_pretrained(model_id, **common_kwargs), is_sharded
         if self.model_backend == "sdxl":
             return StableDiffusionXLPipeline.from_pretrained(model_id, **common_kwargs), is_sharded
         raise ValueError(f"Unsupported model backend: {self.model_backend}")
@@ -467,6 +519,9 @@ class Eigo:
         if self.model_backend == "sdxl":
             encode_kwargs["negative_prompt"] = ""
             encode_kwargs["do_classifier_free_guidance"] = self.guidance_scale > 1.0
+        elif self.model_backend == "lcm":
+            encode_kwargs["negative_prompt"] = ""
+            encode_kwargs["do_classifier_free_guidance"] = False
         elif self.model_backend == "flux":
             encode_kwargs["max_sequence_length"] = self.max_sequence_length
         elif self.model_backend == "pixart":
@@ -485,6 +540,14 @@ class Eigo:
             aux = torch.zeros((1, 1), dtype=encoded[0].dtype, device=self.device)
             return encoded[0], aux
 
+        if self.model_backend == "lcm":
+            if len(encoded) < 1:
+                raise RuntimeError("Unexpected LCM encode_prompt output length.")
+            # LCM pipelines use a fixed empty unconditional prompt internally for CFG.
+            # Keep the optimization loop shape contract unchanged with a small dummy tensor.
+            aux = torch.zeros((1, 1), dtype=encoded[0].dtype, device=self.device)
+            return encoded[0], aux
+
         if len(encoded) >= 4:
             # SDXL: prompt, negative_prompt, pooled_prompt, negative_pooled_prompt
             return encoded[0], encoded[2]
@@ -493,6 +556,15 @@ class Eigo:
             return encoded[0], encoded[1]
 
         raise RuntimeError("Unexpected encode_prompt output length.")
+
+    def _lcm_origin_steps_call_key(self):
+        try:
+            call_parameters = inspect.signature(self.pipe.__class__.__call__).parameters
+        except (TypeError, ValueError):
+            return "lcm_origin_steps"
+        if "original_inference_steps" in call_parameters:
+            return "original_inference_steps"
+        return "lcm_origin_steps"
 
     def _build_generation_kwargs(self, prompt_embeds, pooled_prompt_embeds, generator):
         prompt_device = self._pipeline_input_device()
@@ -519,6 +591,9 @@ class Eigo:
                 )
             kwargs["prompt_embeds"] = prompt_embeds
             kwargs["prompt_attention_mask"] = self._active_prompt_attention_mask.to(prompt_device)
+        elif self.model_backend == "lcm":
+            kwargs["prompt_embeds"] = prompt_embeds
+            kwargs[self._lcm_origin_steps_call_key()] = self.lcm_origin_steps
         else:
             kwargs["prompt_embeds"] = prompt_embeds
             kwargs["pooled_prompt_embeds"] = pooled_prompt_embeds
@@ -567,6 +642,9 @@ class Eigo:
         return (image_np * 255).astype(np.uint8)
 
     def aesthetic_evaluation(self, image):
+        if not self._should_evaluate_metric("aesthetic_score") or self.aesthetic_model is None:
+            return torch.tensor(0.0, device=self.device, dtype=torch.float32)
+
         # image is a tensor of shape [H, W, C]
         # Convert to [N, C, H, W] and ensure it's in float32
         image_input = image.permute(2, 0, 1).to(torch.float32)  # [1, C, H, W]
@@ -583,6 +661,9 @@ class Eigo:
         return score
 
     def evaluate_clip_score_cmaes(self, image_tensor, prompt):
+        if self.clip_model is None:
+            return torch.tensor(0.0, device=self.device, dtype=torch.float32)
+
         # Convert the image tensor to a PIL image
         image = (image_tensor * 255).clamp(0, 255).byte()
         image = Image.fromarray(image.cpu().numpy())
@@ -607,6 +688,9 @@ class Eigo:
         return clip_score
 
     def evaluate_clip_score_adam(self, image_tensor, text_features):
+        if self.clip_model is None or text_features is None:
+            return torch.tensor(0.0, device=self.device, dtype=torch.float32)
+
         self.clip_model.eval()
 
         # --- differentiable preprocess (no PIL, no .byte) ---
@@ -796,6 +880,7 @@ class Eigo:
         run_config["run_results_folder"] = results_folder
         run_config["resolved_model_backend"] = self.model_backend
         run_config["resolved_torch_dtype"] = str(self.model_dtype).replace("torch.", "")
+        run_config["resolved_lcm_origin_steps"] = self.lcm_origin_steps
 
         if category is not None:
             run_config["category"] = category
@@ -1455,6 +1540,184 @@ class Eigo:
 
         return results_folder
 
+    def _random_sampler_num_images(self):
+        for key in ("num_images_to_generate", "num_images", "random_sampler_num_images"):
+            if key in self.parameters and self.parameters[key] is not None:
+                num_images = int(self.parameters[key])
+                if num_images <= 0:
+                    raise ValueError(f"Random sampler requires {key} > 0.")
+                return num_images
+        raise ValueError(
+            "Random sampler requires one of: num_images_to_generate, num_images, "
+            "or random_sampler_num_images."
+        )
+
+    @staticmethod
+    def _generate_sample_seeds(seed, num_images):
+        rng = np.random.default_rng(int(seed))
+        sample_seeds = []
+        seen = set()
+        while len(sample_seeds) < num_images:
+            candidate = int(rng.integers(0, 2**32 - 1, dtype=np.uint32))
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            sample_seeds.append(candidate)
+        return sample_seeds
+
+    def run_random_sampler_optimization(self, seed=None, seed_number=None, prompt=None, category=None, prompt_number=None):
+        if seed is None:
+            seed = self.parameters["seed"]
+        if prompt is None:
+            selected_prompt = self.parameters["selected_prompt"]
+        else:
+            selected_prompt = prompt
+
+        seed = int(seed)
+        num_images = self._random_sampler_num_images()
+
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+        random.seed(seed)
+
+        if category is not None:
+            print(f"Selected prompt: {selected_prompt} (Category: {category})")
+        else:
+            print(f"Selected prompt: {selected_prompt}")
+
+        results_folder = f"{self.OUTPUT_FOLDER}/results_{self.model_name}_{seed}"
+        if prompt_number is not None:
+            results_folder += f"_{prompt_number}"
+        os.makedirs(results_folder, exist_ok=True)
+        self._save_run_config(results_folder, seed, selected_prompt, category=category, prompt_number=prompt_number)
+
+        with torch.no_grad():
+            prompt_embeds, pooled_prompt_embeds = self._encode_prompt_embeddings(selected_prompt)
+
+        trainable_params_init = torch.cat([
+            prompt_embeds.flatten(),
+            pooled_prompt_embeds.flatten()
+        ]).to(torch.float32).cpu().numpy()
+
+        text_embeddings_init_shape = [prompt_embeds.shape, pooled_prompt_embeds.shape]
+        sample_seeds = self._generate_sample_seeds(seed, num_images)
+
+        sample_rows = []
+        time_list = []
+        start_time = time.time()
+        best_fitness_overall = -np.inf
+        best_sample_path = None
+
+        fitness_history = []
+        aesthetic_history = []
+        clip_history = []
+        image_reward_history = []
+        hpsv2_history = []
+        pickscore_history = []
+
+        for sample_index, sample_seed in enumerate(sample_seeds, start=1):
+            elapsed_time = time.time() - start_time
+            if self.parameters['time_limit_seconds'] is not None and elapsed_time >= self.parameters['time_limit_seconds']:
+                print(
+                    "Time limit reached before starting sample "
+                    f"{sample_index}/{num_images} (elapsed: {self.format_time(elapsed_time)})."
+                )
+                break
+
+            print(f"Random sample {sample_index}/{num_images} with generation seed {sample_seed}")
+
+            sample_path = os.path.join(results_folder, f"sample_{sample_index}_seed_{sample_seed}.png")
+            fitness, aesthetic_score, clip_score, image_reward_score, hpsv2_score, pickscore_score, _ = self.evaluate(
+                trainable_params_init,
+                sample_seed,
+                text_embeddings_init_shape,
+                selected_prompt,
+                sample_path,
+            )
+            positive_fitness = float(-fitness)
+            aesthetic_score = float(aesthetic_score)
+            clip_score = float(clip_score)
+            image_reward_score = float(image_reward_score)
+            hpsv2_score = float(hpsv2_score)
+            pickscore_score = float(pickscore_score)
+
+            if sample_index == 1:
+                shutil.copyfile(sample_path, os.path.join(results_folder, "it_0.png"))
+
+            if positive_fitness > best_fitness_overall:
+                best_fitness_overall = positive_fitness
+                best_sample_path = sample_path
+                shutil.copyfile(sample_path, os.path.join(results_folder, f"best_{sample_index}.png"))
+
+            fitness_history.append(positive_fitness)
+            aesthetic_history.append(aesthetic_score)
+            clip_history.append(clip_score)
+            image_reward_history.append(image_reward_score)
+            hpsv2_history.append(hpsv2_score)
+            pickscore_history.append(pickscore_score)
+            elapsed_time = time.time() - start_time
+            time_list.append(elapsed_time)
+
+            sample_rows.append({
+                "sample": sample_index,
+                "generation": sample_index,
+                "seed": sample_seed,
+                "prompt": selected_prompt if sample_index == 1 else "",
+                "fitness": positive_fitness,
+                "aesthetic_score": aesthetic_score,
+                "clip_score": clip_score,
+                "image_reward_score": image_reward_score,
+                "hpsv2_score": hpsv2_score,
+                "pickscore_score": pickscore_score,
+                "elapsed_time": elapsed_time,
+            })
+
+            results = pd.DataFrame({
+                "generation": list(range(1, sample_index + 1)),
+                "prompt": [selected_prompt] + [''] * (sample_index - 1),
+                "sampled_seed": sample_seeds[:sample_index],
+                "avg_fitness": [float(np.mean(fitness_history[:i])) for i in range(1, sample_index + 1)],
+                "std_fitness": [float(np.std(fitness_history[:i])) for i in range(1, sample_index + 1)],
+                "max_fitness": [float(np.max(fitness_history[:i])) for i in range(1, sample_index + 1)],
+                "avg_aesthetic_score": [float(np.mean(aesthetic_history[:i])) for i in range(1, sample_index + 1)],
+                "std_aesthetic_score": [float(np.std(aesthetic_history[:i])) for i in range(1, sample_index + 1)],
+                "max_aesthetic_score": [float(np.max(aesthetic_history[:i])) for i in range(1, sample_index + 1)],
+                "avg_clip_score": [float(np.mean(clip_history[:i])) for i in range(1, sample_index + 1)],
+                "std_clip_score": [float(np.std(clip_history[:i])) for i in range(1, sample_index + 1)],
+                "max_clip_score": [float(np.max(clip_history[:i])) for i in range(1, sample_index + 1)],
+                "avg_image_reward_score": [float(np.mean(image_reward_history[:i])) for i in range(1, sample_index + 1)],
+                "std_image_reward_score": [float(np.std(image_reward_history[:i])) for i in range(1, sample_index + 1)],
+                "max_image_reward_score": [float(np.max(image_reward_history[:i])) for i in range(1, sample_index + 1)],
+                "avg_hpsv2_score": [float(np.mean(hpsv2_history[:i])) for i in range(1, sample_index + 1)],
+                "std_hpsv2_score": [float(np.std(hpsv2_history[:i])) for i in range(1, sample_index + 1)],
+                "max_hpsv2_score": [float(np.max(hpsv2_history[:i])) for i in range(1, sample_index + 1)],
+                "avg_pickscore_score": [float(np.mean(pickscore_history[:i])) for i in range(1, sample_index + 1)],
+                "std_pickscore_score": [float(np.std(pickscore_history[:i])) for i in range(1, sample_index + 1)],
+                "max_pickscore_score": [float(np.max(pickscore_history[:i])) for i in range(1, sample_index + 1)],
+                "elapsed_time": time_list
+            })
+
+            if category is not None:
+                results["category"] = [category] + [''] * (sample_index - 1)
+                sample_rows[-1]["category"] = category if sample_index == 1 else ""
+
+            results.to_csv(f"{results_folder}/fitness_results.csv", index=False, na_rep='nan')
+            pd.DataFrame(sample_rows).to_csv(f"{results_folder}/sample_results.csv", index=False, na_rep='nan')
+            self._save_population_plot_results(results, results_folder)
+
+            print(
+                f"Sample {sample_index}/{num_images}: Fitness: {positive_fitness}, "
+                f"Aesthetic score: {aesthetic_score}, CLIP score: {clip_score}, "
+                f"ImageReward score: {image_reward_score}, HPSv2 score: {hpsv2_score}, "
+                f"PickScore: {pickscore_score}, Best fitness: {best_fitness_overall}"
+            )
+
+        if best_sample_path is None:
+            raise RuntimeError("Random sampler did not evaluate any images.")
+        shutil.copyfile(best_sample_path, f"{results_folder}/best_all.png")
+
+        return results_folder
+
     def run_adam_optimization(self, seed = None, seed_number = None, prompt = None, category = None, prompt_number = None):
 
         def plot_results(results, results_folder):
@@ -1575,9 +1838,12 @@ class Eigo:
 
         # Text features don't depend on your params; compute w/o grad
         with torch.no_grad():
-            text_tokens = clip.tokenize([selected_prompt]).to(self.device)
-            text_features = self.clip_model.encode_text(text_tokens).float()
-            text_features = F.normalize(text_features, dim=-1, eps=1e-6)
+            if self.clip_model is not None:
+                text_tokens = clip.tokenize([selected_prompt]).to(self.device)
+                text_features = self.clip_model.encode_text(text_tokens).float()
+                text_features = F.normalize(text_features, dim=-1, eps=1e-6)
+            else:
+                text_features = None
             if self.use_image_reward and self.image_reward_model is not None:
                 image_reward_text = self.image_reward_model.blip.tokenizer(
                     selected_prompt,
@@ -1683,7 +1949,7 @@ class Eigo:
                 break
             print(f"Iteration {iteration}/{num_iterations}")
 
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
 
             with self._adam_autocast_context():
                 image = self.generate_image_from_embeddings_adam(text_embeddings, seed)

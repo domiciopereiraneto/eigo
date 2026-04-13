@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run EIGO grid search for one or more prompts across Adam, GA, and/or CMA-ES parameter sets."""
+"""Run EIGO grid search for one or more prompts across Adam, GA, CMA-ES, and/or random-sampler parameter sets."""
 
 import argparse
 import csv
@@ -48,7 +48,7 @@ def _coerce_scalar(value):
 
 def extract_final_results(produced_folder, method):
     produced_path = Path(produced_folder)
-    if method in {"cmaes", "ga"}:
+    if method in {"cmaes", "ga", "random_sampler"}:
         csv_path = produced_path / "fitness_results.csv"
         metric_keys = [
             "generation",
@@ -168,15 +168,19 @@ def build_run_queue(config):
     test_adam = bool(config.get("test_adam", True))
     test_ga = bool(config.get("test_ga", False))
     test_cmaes = bool(config.get("test_cmaes", True))
+    test_random_sampler = bool(config.get("test_random_sampler", False))
 
-    if not test_adam and not test_ga and not test_cmaes:
-        raise ValueError("At least one of 'test_adam', 'test_ga', or 'test_cmaes' must be true.")
+    if not test_adam and not test_ga and not test_cmaes and not test_random_sampler:
+        raise ValueError(
+            "At least one of 'test_adam', 'test_ga', 'test_cmaes', "
+            "or 'test_random_sampler' must be true."
+        )
 
     grid_config = config.get("grid", {})
     if grid_config is None:
         grid_config = {}
     if not isinstance(grid_config, dict):
-        raise ValueError("'grid' must be a dictionary with optional 'adam', 'ga', and 'cmaes' sections.")
+        raise ValueError("'grid' must be a dictionary with optional 'adam', 'ga', 'cmaes', and 'random_sampler' sections.")
 
     run_queue = []
 
@@ -197,6 +201,12 @@ def build_run_queue(config):
         cmaes_combos = expand_grid(cmaes_grid)
         for combo in cmaes_combos:
             run_queue.append(("cmaes", combo))
+
+    if test_random_sampler:
+        random_sampler_grid = normalize_grid(grid_config.get("random_sampler", {}))
+        random_sampler_combos = expand_grid(random_sampler_grid)
+        for combo in random_sampler_combos:
+            run_queue.append(("random_sampler", combo))
 
     return run_queue
 
@@ -298,6 +308,8 @@ def run_grid_search(config, dry_run=False):
                     produced_folder = eigo_engine.run_ga_optimization()
                 elif method == "cmaes":
                     produced_folder = eigo_engine.run_cmaes_optimization()
+                elif method == "random_sampler":
+                    produced_folder = eigo_engine.run_random_sampler_optimization()
                 else:
                     raise ValueError(f"Unsupported method: {method}")
 
@@ -333,6 +345,7 @@ def save_summary(config, summary_rows):
         "test_adam": bool(config.get("test_adam", True)),
         "test_ga": bool(config.get("test_ga", False)),
         "test_cmaes": bool(config.get("test_cmaes", True)),
+        "test_random_sampler": bool(config.get("test_random_sampler", False)),
         "total_runs": len(summary_rows),
         "runs": summary_rows,
     }

@@ -1,0 +1,62 @@
+# Consolidated result processing config.
+#
+# Run:
+#   python algorithms/process_results.py --config algorithms/config/config_process_results.yaml
+
+# Explicit experiment folders. Each folder should directly contain prompt folders
+# named results_* with score_results.csv or fitness_results.csv.
+source_dirs:
+  - results_adam_sdxl_clip/adam_clip_laionv2_sdxl_sdxlturbo_42_aesw0_clipw100_irw0_hpsw0_psw0
+  - results_adam_sdxl_balanced/adam_clip_laionv2_sdxl_sdxlturbo_42_aesw50_clipw50_irw0_hpsw0_psw0
+  - results_sepcmaes_sdxl_clip/sepcmaes_clip_laionv2_sdxl_sdxlturbo_42_aesw0_clipw100_irw0_hpsw0_psw0
+  - results_sepcmaes_sdxl_balanced/sepcmaes_clip_laionv2_sdxl_sdxlturbo_42_aesw50_clipw50_irw0_hpsw0_psw0
+  - results_ga_sdxl_clip/ga_clip_laionv2_sdxl_sdxlturbo_42_aesw0_clipw100_irw0_hpsw0_psw0
+  - results_ga_sdxl_balanced/ga_clip_laionv2_sdxl_sdxlturbo_42_aesw50_clipw50_irw0_hpsw0_psw0
+
+
+# Optional recursive discovery for larger batches. For example, add
+# results_optuna_sdxlturbo_lcm to discover trial-produced experiment folders.
+discover:
+  roots: []
+  recursive: true
+  max_depth: 6
+  include: []
+  exclude:
+    - /results_processed
+
+save_folder: results_processed
+
+outputs:
+  summary: true
+  evolution_plots: true
+  image_grid: true
+  prompt_category_analysis: true
+  distance_table: true
+
+# Use "auto" to parse every metric currently emitted by eigo.py.
+metrics: auto
+
+method_labels:
+  adam: AdamW
+  cmaes: CMA-ES
+  sepcmaes: sep-CMA-ES
+  vdcmae: VD-CMA
+  ga: GA
+  randomsampler: Random sampler
+
+evolution_points: 101
+
+image_grid:
+  max_rows: 30
+  max_method_columns: 4
+  tile_size: [256, 256]
+  prompt_font_size: 15
+  title_font_size: 13
+
+distance:
+  # SSIM uses only PIL + scikit-image. CLIP similarity is disabled by default
+  # because it loads the CLIP model; enable it if the environment has clip ready.
+  ssim: true
+  ssim_max_side: 256
+  clip_similarity: true
+  clip_device: null
