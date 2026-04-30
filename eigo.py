@@ -641,6 +641,14 @@ class Eigo:
         image_np = np.clip(image_np, 0.0, 1.0)
         return (image_np * 255).astype(np.uint8)
 
+    def _uint8_image_to_tensor(self, image_np):
+        image_np = np.asarray(image_np, dtype=np.float32) / 255.0
+        return torch.from_numpy(image_np).to(device=self.device, dtype=torch.float32)
+
+    def _load_saved_image_tensor(self, image_path):
+        with Image.open(image_path) as pil_image:
+            return self._uint8_image_to_tensor(pil_image.convert("RGB"))
+
     def aesthetic_evaluation(self, image):
         if not self._should_evaluate_metric("aesthetic_score") or self.aesthetic_model is None:
             return torch.tensor(0.0, device=self.device, dtype=torch.float32)
@@ -859,6 +867,134 @@ class Eigo:
             total = component if total is None else total + component
         return total, components
 
+    def _evaluate_canonical_image_scores(self, image, selected_prompt):
+        with torch.no_grad():
+            aesthetic_score = self.aesthetic_evaluation(image).item()
+            clip_score = self.evaluate_clip_score_cmaes(image, selected_prompt).item()
+            image_reward_score = self.evaluate_image_reward_cmaes(image, selected_prompt)
+            hpsv2_score = self.evaluate_hpsv2_cmaes(image, selected_prompt)
+            pickscore_score = self.evaluate_pickscore_cmaes(image, selected_prompt)
+
+        combined_score, components = self._combine_metric_components({
+            "aesthetic_score": aesthetic_score,
+            "clip_score": clip_score,
+            "image_reward_score": image_reward_score,
+            "hpsv2_score": hpsv2_score,
+            "pickscore_score": pickscore_score,
+        })
+
+        return (
+            float(combined_score),
+            aesthetic_score,
+            clip_score,
+            image_reward_score,
+            hpsv2_score,
+            pickscore_score,
+            components,
+        )
+
+    def _evaluate_canonical_image_path_scores(self, image_path, selected_prompt):
+        image = self._load_saved_image_tensor(image_path)
+        return self._evaluate_canonical_image_scores(image, selected_prompt)
+
+    @staticmethod
+    def _population_metric_columns():
+        return {
+            "fitness": ("avg_fitness", "std_fitness", "max_fitness"),
+            "aesthetic_score": ("avg_aesthetic_score", "std_aesthetic_score", "max_aesthetic_score"),
+            "clip_score": ("avg_clip_score", "std_clip_score", "max_clip_score"),
+            "image_reward_score": ("avg_image_reward_score", "std_image_reward_score", "max_image_reward_score"),
+            "hpsv2_score": ("avg_hpsv2_score", "std_hpsv2_score", "max_hpsv2_score"),
+            "pickscore_score": ("avg_pickscore_score", "std_pickscore_score", "max_pickscore_score"),
+        }
+
+    def _postprocess_population_results_from_saved_images(self, results, results_folder, selected_prompt):
+        results = results.copy()
+        metric_columns = self._population_metric_columns()
+        for row_idx in range(len(results)):
+            if row_idx == 0:
+                image_path = os.path.join(results_folder, "it_0.png")
+                if not os.path.exists(image_path):
+                    raise FileNotFoundError(
+                        f"Cannot rebuild fitness_results.csv because {image_path} is missing."
+                    )
+                (
+                    canonical_score,
+                    canonical_aesthetic_score,
+                    canonical_clip_score,
+                    canonical_image_reward_score,
+                    canonical_hpsv2_score,
+                    canonical_pickscore_score,
+                    _,
+                ) = self._evaluate_canonical_image_path_scores(image_path, selected_prompt)
+                metric_values = {
+                    "fitness": [canonical_score],
+                    "aesthetic_score": [canonical_aesthetic_score],
+                    "clip_score": [canonical_clip_score],
+                    "image_reward_score": [canonical_image_reward_score],
+                    "hpsv2_score": [canonical_hpsv2_score],
+                    "pickscore_score": [canonical_pickscore_score],
+                }
+            else:
+                metric_values = None
+                gen_folder = os.path.join(results_folder, f"gen_{row_idx}")
+                if self.parameters.get("save_gens", False) and os.path.isdir(gen_folder):
+                    gen_image_paths = sorted(
+                        os.path.join(gen_folder, name)
+                        for name in os.listdir(gen_folder)
+                        if name.lower().endswith(".png")
+                    )
+                    if gen_image_paths:
+                        metric_values = {key: [] for key in metric_columns}
+                        for image_path in gen_image_paths:
+                            (
+                                canonical_score,
+                                canonical_aesthetic_score,
+                                canonical_clip_score,
+                                canonical_image_reward_score,
+                                canonical_hpsv2_score,
+                                canonical_pickscore_score,
+                                _,
+                            ) = self._evaluate_canonical_image_path_scores(image_path, selected_prompt)
+                            metric_values["fitness"].append(canonical_score)
+                            metric_values["aesthetic_score"].append(canonical_aesthetic_score)
+                            metric_values["clip_score"].append(canonical_clip_score)
+                            metric_values["image_reward_score"].append(canonical_image_reward_score)
+                            metric_values["hpsv2_score"].append(canonical_hpsv2_score)
+                            metric_values["pickscore_score"].append(canonical_pickscore_score)
+
+                if metric_values is None:
+                    image_path = os.path.join(results_folder, f"best_{row_idx}.png")
+                    if not os.path.exists(image_path):
+                        raise FileNotFoundError(
+                            f"Cannot rebuild fitness_results.csv because {image_path} is missing."
+                        )
+                    (
+                        canonical_score,
+                        canonical_aesthetic_score,
+                        canonical_clip_score,
+                        canonical_image_reward_score,
+                        canonical_hpsv2_score,
+                        canonical_pickscore_score,
+                        _,
+                    ) = self._evaluate_canonical_image_path_scores(image_path, selected_prompt)
+                    results.at[row_idx, "max_fitness"] = canonical_score
+                    results.at[row_idx, "max_aesthetic_score"] = canonical_aesthetic_score
+                    results.at[row_idx, "max_clip_score"] = canonical_clip_score
+                    results.at[row_idx, "max_image_reward_score"] = canonical_image_reward_score
+                    results.at[row_idx, "max_hpsv2_score"] = canonical_hpsv2_score
+                    results.at[row_idx, "max_pickscore_score"] = canonical_pickscore_score
+                    continue
+
+            for metric_name, values in metric_values.items():
+                avg_col, std_col, max_col = metric_columns[metric_name]
+                values_arr = np.asarray(values, dtype=float)
+                results.at[row_idx, avg_col] = float(np.mean(values_arr))
+                results.at[row_idx, std_col] = float(np.std(values_arr))
+                results.at[row_idx, max_col] = float(np.max(values_arr))
+
+        return results
+
     def format_time(self, seconds):
         seconds = int(seconds)
         hours = seconds // 3600
@@ -903,20 +1039,9 @@ class Eigo:
         with torch.no_grad():
             image = self.generate_image_from_embeddings_cmaes(pe, ppe, seed)
 
-            aesthetic_score = self.aesthetic_evaluation(image).item()
-            clip_score = self.evaluate_clip_score_cmaes(image, selected_prompt).item()
-            image_reward_score = self.evaluate_image_reward_cmaes(image, selected_prompt)
-            hpsv2_score = self.evaluate_hpsv2_cmaes(image, selected_prompt)
-            pickscore_score = self.evaluate_pickscore_cmaes(image, selected_prompt)
-        # CMA-ES minimizes the function, so we need to invert the score if higher is better
-
-        fitness, components = self._combine_metric_components({
-            "aesthetic_score": aesthetic_score,
-            "clip_score": clip_score,
-            "image_reward_score": image_reward_score,
-            "hpsv2_score": hpsv2_score,
-            "pickscore_score": pickscore_score,
-        })
+            fitness, aesthetic_score, clip_score, image_reward_score, hpsv2_score, pickscore_score, components = (
+                self._evaluate_canonical_image_scores(image, selected_prompt)
+            )
 
         if save_path is not None:
             # Save the generated image
@@ -925,6 +1050,7 @@ class Eigo:
             pil_image = Image.fromarray(image_np)
             pil_image.save(save_path)
 
+        # CMA-ES minimizes the function, so we need to invert the score if higher is better
         return -fitness, aesthetic_score, clip_score, image_reward_score, hpsv2_score, pickscore_score, components
 
     def _save_population_plot_results(self, results, results_folder):
@@ -1201,15 +1327,16 @@ class Eigo:
             avg_pickscore_score_list.append(avg_pickscore_score)
             std_pickscore_score_list.append(std_pickscore_score)
 
-            # Get best solution so far
+            current_best_idx = int(np.argmin(tmp_fitnesses))
+            current_best_x = solutions[current_best_idx]
             best_x = es.result.xbest
             best_fitness = -es.result.fbest  # Convert back to positive score
 
             with torch.no_grad():
-                # Generate and save the best image
+                # Save the best image from the current generation.
                 split = np.prod(text_embeddings_init_shape[0])
-                best_pe  = torch.tensor(best_x[:split],  dtype=torch.float32, device=self.device).view(text_embeddings_init_shape[0])
-                best_ppe = torch.tensor(best_x[split:], dtype=torch.float32, device=self.device).view(text_embeddings_init_shape[1])
+                best_pe  = torch.tensor(current_best_x[:split],  dtype=torch.float32, device=self.device).view(text_embeddings_init_shape[0])
+                best_ppe = torch.tensor(current_best_x[split:], dtype=torch.float32, device=self.device).view(text_embeddings_init_shape[1])
                 best_image = self.generate_image_from_embeddings_cmaes(best_pe, best_ppe, seed)
                 image_np = best_image.detach().clone().to(torch.float32).cpu().numpy()
                 image_np = (image_np * 255).astype(np.uint8)
@@ -1277,6 +1404,35 @@ class Eigo:
         best_image_np = (best_image_np * 255).astype(np.uint8)
         pil_image = Image.fromarray(best_image_np)
         pil_image.save(f"{results_folder}/best_all.png")
+
+        results = pd.DataFrame({
+            "generation": list(range(0, generation + 1)),
+            "prompt": [selected_prompt] + [''] * generation,
+            "avg_fitness": avg_fit_list,
+            "std_fitness": std_fit_list,
+            "max_fitness": max_fit_list,
+            "avg_aesthetic_score": avg_aesthetic_score_list,
+            "std_aesthetic_score": std_aesthetic_score_list,
+            "max_aesthetic_score": max_aesthetic_score_list,
+            "avg_clip_score": avg_clip_score_list,
+            "std_clip_score": std_clip_score_list,
+            "max_clip_score": max_clip_score_list,
+            "avg_image_reward_score": avg_image_reward_score_list,
+            "std_image_reward_score": std_image_reward_score_list,
+            "max_image_reward_score": max_image_reward_score_list,
+            "avg_hpsv2_score": avg_hpsv2_score_list,
+            "std_hpsv2_score": std_hpsv2_score_list,
+            "max_hpsv2_score": max_hpsv2_score_list,
+            "avg_pickscore_score": avg_pickscore_score_list,
+            "std_pickscore_score": std_pickscore_score_list,
+            "max_pickscore_score": max_pickscore_score_list,
+            "elapsed_time": time_list
+        })
+        if category is not None:
+            results["category"] = [category] + [''] * generation
+        results = self._postprocess_population_results_from_saved_images(results, results_folder, selected_prompt)
+        results.to_csv(f"{results_folder}/fitness_results.csv", index=False, na_rep='nan')
+        self._save_population_plot_results(results, results_folder)
 
         return results_folder
 
@@ -1538,6 +1694,35 @@ class Eigo:
         pil_image = Image.fromarray(best_image_np)
         pil_image.save(f"{results_folder}/best_all.png")
 
+        results = pd.DataFrame({
+            "generation": list(range(0, generation + 1)),
+            "prompt": [selected_prompt] + [''] * generation,
+            "avg_fitness": avg_fit_list,
+            "std_fitness": std_fit_list,
+            "max_fitness": max_fit_list,
+            "avg_aesthetic_score": avg_aesthetic_score_list,
+            "std_aesthetic_score": std_aesthetic_score_list,
+            "max_aesthetic_score": max_aesthetic_score_list,
+            "avg_clip_score": avg_clip_score_list,
+            "std_clip_score": std_clip_score_list,
+            "max_clip_score": max_clip_score_list,
+            "avg_image_reward_score": avg_image_reward_score_list,
+            "std_image_reward_score": std_image_reward_score_list,
+            "max_image_reward_score": max_image_reward_score_list,
+            "avg_hpsv2_score": avg_hpsv2_score_list,
+            "std_hpsv2_score": std_hpsv2_score_list,
+            "max_hpsv2_score": max_hpsv2_score_list,
+            "avg_pickscore_score": avg_pickscore_score_list,
+            "std_pickscore_score": std_pickscore_score_list,
+            "max_pickscore_score": max_pickscore_score_list,
+            "elapsed_time": time_list
+        })
+        if category is not None:
+            results["category"] = [category] + [''] * generation
+        results = self._postprocess_population_results_from_saved_images(results, results_folder, selected_prompt)
+        results.to_csv(f"{results_folder}/fitness_results.csv", index=False, na_rep='nan')
+        self._save_population_plot_results(results, results_folder)
+
         return results_folder
 
     def _random_sampler_num_images(self):
@@ -1603,6 +1788,7 @@ class Eigo:
         sample_seeds = self._generate_sample_seeds(seed, num_images)
 
         sample_rows = []
+        sample_paths = []
         time_list = []
         start_time = time.time()
         best_fitness_overall = -np.inf
@@ -1671,6 +1857,7 @@ class Eigo:
                 "pickscore_score": pickscore_score,
                 "elapsed_time": elapsed_time,
             })
+            sample_paths.append(sample_path)
 
             results = pd.DataFrame({
                 "generation": list(range(1, sample_index + 1)),
@@ -1715,6 +1902,80 @@ class Eigo:
         if best_sample_path is None:
             raise RuntimeError("Random sampler did not evaluate any images.")
         shutil.copyfile(best_sample_path, f"{results_folder}/best_all.png")
+
+        canonical_sample_rows = []
+        canonical_fitness_history = []
+        canonical_aesthetic_history = []
+        canonical_clip_history = []
+        canonical_image_reward_history = []
+        canonical_hpsv2_history = []
+        canonical_pickscore_history = []
+
+        for idx, (sample_seed, sample_path, elapsed_time) in enumerate(zip(sample_seeds[:len(sample_paths)], sample_paths, time_list), start=1):
+            (
+                canonical_fitness,
+                canonical_aesthetic_score,
+                canonical_clip_score,
+                canonical_image_reward_score,
+                canonical_hpsv2_score,
+                canonical_pickscore_score,
+                _,
+            ) = self._evaluate_canonical_image_path_scores(sample_path, selected_prompt)
+
+            canonical_fitness_history.append(float(canonical_fitness))
+            canonical_aesthetic_history.append(float(canonical_aesthetic_score))
+            canonical_clip_history.append(float(canonical_clip_score))
+            canonical_image_reward_history.append(float(canonical_image_reward_score))
+            canonical_hpsv2_history.append(float(canonical_hpsv2_score))
+            canonical_pickscore_history.append(float(canonical_pickscore_score))
+
+            canonical_sample_rows.append({
+                "sample": idx,
+                "generation": idx,
+                "seed": sample_seed,
+                "prompt": selected_prompt if idx == 1 else "",
+                "fitness": float(canonical_fitness),
+                "aesthetic_score": float(canonical_aesthetic_score),
+                "clip_score": float(canonical_clip_score),
+                "image_reward_score": float(canonical_image_reward_score),
+                "hpsv2_score": float(canonical_hpsv2_score),
+                "pickscore_score": float(canonical_pickscore_score),
+                "elapsed_time": elapsed_time,
+            })
+
+        results = pd.DataFrame({
+            "generation": list(range(1, len(canonical_sample_rows) + 1)),
+            "prompt": [selected_prompt] + [''] * (len(canonical_sample_rows) - 1),
+            "sampled_seed": sample_seeds[:len(canonical_sample_rows)],
+            "avg_fitness": [float(np.mean(canonical_fitness_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
+            "std_fitness": [float(np.std(canonical_fitness_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
+            "max_fitness": [float(np.max(canonical_fitness_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
+            "avg_aesthetic_score": [float(np.mean(canonical_aesthetic_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
+            "std_aesthetic_score": [float(np.std(canonical_aesthetic_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
+            "max_aesthetic_score": [float(np.max(canonical_aesthetic_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
+            "avg_clip_score": [float(np.mean(canonical_clip_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
+            "std_clip_score": [float(np.std(canonical_clip_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
+            "max_clip_score": [float(np.max(canonical_clip_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
+            "avg_image_reward_score": [float(np.mean(canonical_image_reward_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
+            "std_image_reward_score": [float(np.std(canonical_image_reward_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
+            "max_image_reward_score": [float(np.max(canonical_image_reward_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
+            "avg_hpsv2_score": [float(np.mean(canonical_hpsv2_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
+            "std_hpsv2_score": [float(np.std(canonical_hpsv2_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
+            "max_hpsv2_score": [float(np.max(canonical_hpsv2_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
+            "avg_pickscore_score": [float(np.mean(canonical_pickscore_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
+            "std_pickscore_score": [float(np.std(canonical_pickscore_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
+            "max_pickscore_score": [float(np.max(canonical_pickscore_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
+            "elapsed_time": time_list[:len(canonical_sample_rows)]
+        })
+
+        if category is not None:
+            results["category"] = [category] + [''] * (len(canonical_sample_rows) - 1)
+            if canonical_sample_rows:
+                canonical_sample_rows[0]["category"] = category
+
+        results.to_csv(f"{results_folder}/fitness_results.csv", index=False, na_rep='nan')
+        pd.DataFrame(canonical_sample_rows).to_csv(f"{results_folder}/sample_results.csv", index=False, na_rep='nan')
+        self._save_population_plot_results(results, results_folder)
 
         return results_folder
 
@@ -1940,6 +2201,22 @@ class Eigo:
         hpsv2_score_list = [hpsv2_score.item()]
         pickscore_score_list = [pickscore_score.item()]
 
+        runtime_results = pd.DataFrame({
+            "iteration": [0],
+            "prompt": [selected_prompt],
+            "combined_score": combined_score_list,
+            "combined_loss": combined_loss_list,
+            "aesthetic_score": aesthetic_score_list,
+            "clip_score": clip_score_list,
+            "image_reward_score": image_reward_score_list,
+            "hpsv2_score": hpsv2_score_list,
+            "pickscore_score": pickscore_score_list,
+            "elapsed_time": time_list
+        })
+        if category is not None:
+            runtime_results["category"] = [category]
+        runtime_results.to_csv(f"{results_folder}/runtime_score_results.csv", index=False, na_rep='nan')
+
         for iteration in range(1, num_iterations + 1):
             if self.parameters['time_limit_seconds'] is not None and elapsed_time >= self.parameters['time_limit_seconds']:
                 print(
@@ -2012,8 +2289,8 @@ class Eigo:
 
             time_list.append(elapsed_time)
 
-            # Save metrics to the results DataFrame
-            results = pd.DataFrame({
+            # Save the differentiable in-optimization metrics separately from canonical scores.
+            runtime_results = pd.DataFrame({
                 "iteration": list(range(0, iteration + 1)),
                 "prompt": [selected_prompt] + [''] * iteration,
                 "combined_score": combined_score_list,
@@ -2027,12 +2304,12 @@ class Eigo:
             })
 
             if category is not None:
-                results["category"] = [category] + [''] * iteration
+                runtime_results["category"] = [category] + [''] * iteration
 
-            results.to_csv(f"{results_folder}/score_results.csv", index=False, na_rep='nan')
+            runtime_results.to_csv(f"{results_folder}/runtime_score_results.csv", index=False, na_rep='nan')
 
             # Plot and save the fitness evolution
-            plot_results(results, results_folder)
+            plot_results(runtime_results, results_folder)
 
             # Print stats
             print(f"Iteration {iteration}/{num_iterations}: Combined Score: {combined_score.item()}, Aesthetic Score: {aesthetic_score.item()}, CLIP Score: {clip_score.item()}, ImageReward Score: {image_reward_score.item()}, HPSv2 Score: {hpsv2_score.item()}, PickScore: {pickscore_score.item()}, Estimated time remaining: {formatted_time_remaining}")
@@ -2044,5 +2321,43 @@ class Eigo:
         best_image_np = self._tensor_to_uint8_image(best_image)
         pil_image = Image.fromarray(best_image_np)
         pil_image.save(f"{results_folder}/best_all.png")
+
+        canonical_rows = []
+        for row_idx in range(len(combined_score_list)):
+            image_path = f"{results_folder}/it_{row_idx}.png"
+            if not os.path.exists(image_path):
+                raise FileNotFoundError(
+                    f"Cannot build canonical score_results.csv because {image_path} is missing."
+                )
+            pil_image = Image.open(image_path).convert("RGB")
+            image = self._uint8_image_to_tensor(pil_image)
+            (
+                canonical_score,
+                canonical_aesthetic_score,
+                canonical_clip_score,
+                canonical_image_reward_score,
+                canonical_hpsv2_score,
+                canonical_pickscore_score,
+                _,
+            ) = self._evaluate_canonical_image_scores(image, selected_prompt)
+            canonical_rows.append({
+                "iteration": row_idx,
+                "prompt": selected_prompt if row_idx == 0 else "",
+                "combined_score": canonical_score,
+                "combined_loss": 1 - canonical_score,
+                "aesthetic_score": canonical_aesthetic_score,
+                "clip_score": canonical_clip_score,
+                "image_reward_score": canonical_image_reward_score,
+                "hpsv2_score": canonical_hpsv2_score,
+                "pickscore_score": canonical_pickscore_score,
+                "elapsed_time": time_list[row_idx] if row_idx < len(time_list) else np.nan,
+            })
+
+        results = pd.DataFrame(canonical_rows)
+        if category is not None and not results.empty:
+            results["category"] = [category] + [''] * (len(results) - 1)
+
+        results.to_csv(f"{results_folder}/score_results.csv", index=False, na_rep='nan')
+        plot_results(results, results_folder)
 
         return results_folder

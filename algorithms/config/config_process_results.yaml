@@ -6,12 +6,12 @@
 # Explicit experiment folders. Each folder should directly contain prompt folders
 # named results_* with score_results.csv or fitness_results.csv.
 source_dirs:
-  - results_adam_sdxl_clip/adam_clip_laionv2_sdxl_sdxlturbo_42_aesw0_clipw100_irw0_hpsw0_psw0
-  - results_adam_sdxl_balanced/adam_clip_laionv2_sdxl_sdxlturbo_42_aesw50_clipw50_irw0_hpsw0_psw0
-  - results_sepcmaes_sdxl_clip/sepcmaes_clip_laionv2_sdxl_sdxlturbo_42_aesw0_clipw100_irw0_hpsw0_psw0
-  - results_sepcmaes_sdxl_balanced/sepcmaes_clip_laionv2_sdxl_sdxlturbo_42_aesw50_clipw50_irw0_hpsw0_psw0
-  - results_ga_sdxl_clip/ga_clip_laionv2_sdxl_sdxlturbo_42_aesw0_clipw100_irw0_hpsw0_psw0
-  - results_ga_sdxl_balanced/ga_clip_laionv2_sdxl_sdxlturbo_42_aesw50_clipw50_irw0_hpsw0_psw0
+- results_adam_sdxl_balanced/adam_clip_laionv2_sdxl_sdxlturbo_42_aesw50_clipw50_irw0_hpsw0_psw0
+- results_adam_sdxl_clip/adam_clip_laionv2_sdxl_sdxlturbo_42_aesw0_clipw100_irw0_hpsw0_psw0
+- results_ga_sdxl_balanced/ga_clip_laionv2_sdxl_sdxlturbo_42_aesw50_clipw50_irw0_hpsw0_psw0
+- results_ga_sdxl_clip/ga_clip_laionv2_sdxl_sdxlturbo_42_aesw0_clipw100_irw0_hpsw0_psw0
+- results_sepcmaes_sdxl_balanced/sepcmaes_clip_laionv2_sdxl_sdxlturbo_42_aesw50_clipw50_irw0_hpsw0_psw0
+- results_sepcmaes_sdxl_clip/sepcmaes_clip_laionv2_sdxl_sdxlturbo_42_aesw0_clipw100_irw0_hpsw0_psw0
 
 
 # Optional recursive discovery for larger batches. For example, add
@@ -24,7 +24,13 @@ discover:
   exclude:
     - /results_processed
 
-save_folder: results_processed
+save_folder: results_processed_sliced_10
+
+# Optional slicing for truncated analyses.
+# When set, AdamW and random sampler runs are truncated at the given iteration,
+# and evolutionary methods are truncated at the given generation.
+slice_index_iterations: 200
+slice_index_generations: 10
 
 outputs:
   summary: true

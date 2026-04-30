@@ -83,6 +83,9 @@ class PromptRun:
     category: str
     prompt_id: str
     seed: Optional[int]
+    best_image_path: Path
+    slice_end_index: Optional[int]
+    sliced: bool
 
 
 @dataclass
@@ -257,12 +260,87 @@ def clean_prompt_df(df: pd.DataFrame, kind: str, step_name: str) -> Optional[pd.
     return df
 
 
-def load_prompt_run(run_dir: Path, prompt_dir: Path, seed: Optional[int]) -> Optional[PromptRun]:
+def slice_limit_for_method(method_key: str, config: dict) -> Optional[int]:
+    key = "slice_index_iterations" if method_key in {"adam", "randomsampler"} else "slice_index_generations"
+    value = config.get(key)
+    if value is None:
+        return None
+    limit = int(value)
+    if limit < 0:
+        raise ValueError(f"{key} must be >= 0 when provided.")
+    return limit
+
+
+def apply_slice(df: pd.DataFrame, step_name: str, slice_end_index: Optional[int]) -> Optional[pd.DataFrame]:
+    if slice_end_index is None:
+        return df
+    sliced = df[df[step_name] <= slice_end_index].copy()
+    if sliced.empty:
+        return None
+    return sliced.reset_index(drop=True)
+
+
+def best_row_step_index(df: pd.DataFrame, step_name: str, csv_kind: str) -> Optional[int]:
+    objective_col = "combined_score" if csv_kind == "score" else "max_fitness"
+    values = numeric_series(df, objective_col)
+    if values.notna().any():
+        best_idx = int(values.idxmax())
+        return int(pd.to_numeric(df.loc[best_idx, step_name], errors="coerce"))
+    steps = pd.to_numeric(df[step_name], errors="coerce").dropna()
+    return int(steps.iloc[-1]) if not steps.empty else None
+
+
+def find_existing_image(prompt_dir: Path, prefixes: Sequence[str], index: int) -> Optional[Path]:
+    if index < 0:
+        return None
+    for prefix in prefixes:
+        candidate = prompt_dir / f"{prefix}_{index}.png"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def resolve_best_image_path(prompt_dir: Path, df: pd.DataFrame, step_name: str, csv_kind: str, slice_end_index: Optional[int]) -> Path:
+    full_best = prompt_dir / "best_all.png"
+    if slice_end_index is None:
+        return full_best if full_best.exists() else prompt_dir / "it_0.png"
+
+    if slice_end_index == 0:
+        return prompt_dir / "it_0.png"
+
+    if csv_kind == "score":
+        best_step = best_row_step_index(df, step_name, csv_kind)
+        if best_step is not None:
+            image = find_existing_image(prompt_dir, ("it", "best"), best_step)
+            if image is not None:
+                return image
+    else:
+        last_steps = pd.to_numeric(df[step_name], errors="coerce").dropna()
+        if not last_steps.empty:
+            end_step = int(last_steps.iloc[-1])
+            image = find_existing_image(prompt_dir, ("best", "it"), end_step)
+            if image is not None:
+                return image
+
+    return full_best if full_best.exists() else prompt_dir / "it_0.png"
+
+
+def load_prompt_run(
+    run_dir: Path,
+    prompt_dir: Path,
+    seed: Optional[int],
+    method_key: str,
+    config: dict,
+) -> Optional[PromptRun]:
     loaded = read_prompt_csv(prompt_dir)
     if loaded is None:
         return None
     raw_df, csv_path, kind, step_name = loaded
     df = clean_prompt_df(raw_df, kind, step_name)
+    if df is None:
+        return None
+    slice_end_index = slice_limit_for_method(method_key, config)
+    df = apply_slice(df, step_name, slice_end_index)
     if df is None:
         return None
     prompt = first_non_empty(df["prompt"]) if "prompt" in df.columns else None
@@ -278,6 +356,9 @@ def load_prompt_run(run_dir: Path, prompt_dir: Path, seed: Optional[int]) -> Opt
         category=category or "Unknown",
         prompt_id=prompt_dir.name,
         seed=seed,
+        best_image_path=resolve_best_image_path(prompt_dir, df, step_name, kind, slice_end_index),
+        slice_end_index=slice_end_index,
+        sliced=slice_end_index is not None,
     )
 
 
@@ -354,7 +435,7 @@ def load_experiment(run_dir: Path, config: dict, metric_order: Sequence[MetricSp
     for child in sorted(run_dir.iterdir(), key=prompt_sort_key):
         if not child.is_dir() or not child.name.startswith("results_"):
             continue
-        loaded = load_prompt_run(run_dir, child, seed)
+        loaded = load_prompt_run(run_dir, child, seed, method_key, config)
         if loaded is not None:
             prompt_runs.append(loaded)
 
@@ -430,6 +511,47 @@ def enabled_metrics(config: dict) -> List[MetricSpec]:
     return [m for m in METRICS if m.key in selected_set]
 
 
+def compute_method_prompt_wins(runs: Sequence[ExperimentRun]) -> pd.DataFrame:
+    rows = []
+    method_cols = ["method", "method_key", "weights", "backend", "model"]
+    for run in runs:
+        for prompt_run in run.prompt_runs:
+            value = final_objective(prompt_run)
+            if not np.isfinite(value):
+                continue
+            rows.append({
+                "method": run.method_label,
+                "method_key": run.method_key,
+                "weights": run.weights_label,
+                "backend": run.backend,
+                "model": run.model_tag,
+                "prompt": prompt_run.prompt,
+                "objective": value,
+            })
+
+    if not rows:
+        return pd.DataFrame(columns=method_cols + ["n_prompt_wins"])
+
+    values = pd.DataFrame(rows)
+    per_method_prompt = values.groupby(method_cols + ["prompt"], dropna=False, as_index=False).agg(
+        objective=("objective", "mean")
+    )
+
+    wins = {tuple(row): 0 for row in per_method_prompt[method_cols].drop_duplicates().itertuples(index=False, name=None)}
+    for (_, prompt), group in per_method_prompt.groupby(["weights", "prompt"], dropna=False):
+        if group[method_cols].drop_duplicates().shape[0] < 2:
+            continue
+        best = group["objective"].max()
+        winners = group[np.isclose(group["objective"], best)]
+        for winner in winners[method_cols].itertuples(index=False, name=None):
+            wins[winner] = wins.get(winner, 0) + 1
+
+    return pd.DataFrame([
+        dict(zip(method_cols, key), n_prompt_wins=count)
+        for key, count in wins.items()
+    ])
+
+
 def write_summary_tables(runs: Sequence[ExperimentRun], out_dir: Path, metrics: Sequence[MetricSpec]) -> None:
     run_rows = []
     for run in runs:
@@ -473,6 +595,9 @@ def write_summary_tables(runs: Sequence[ExperimentRun], out_dir: Path, metrics: 
     agg_spec["seed"] = "count"
     by_method = by_run.groupby(group_cols, dropna=False, as_index=False).agg(agg_spec)
     by_method = by_method.rename(columns={"seed": "n_seeds"})
+    prompt_wins = compute_method_prompt_wins(runs)
+    by_method = by_method.merge(prompt_wins, on=group_cols, how="left")
+    by_method["n_prompt_wins"] = by_method["n_prompt_wins"].fillna(0).astype(int)
 
     out_path = out_dir / "summary_results.xlsx"
     with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
@@ -519,19 +644,73 @@ def plot_series_ci(ax, x, mean, std, count, label):
         ax.fill_between(xv[ci_valid], lower[ci_valid], upper[ci_valid], color=line.get_color(), alpha=0.15)
 
 
+def metric_series(prompt_run: PromptRun, metric_key: str, metric: Optional[MetricSpec]) -> pd.Series:
+    if metric_key == OBJECTIVE_KEY:
+        return get_objective_values(prompt_run)
+    if metric is not None:
+        return get_metric_values(prompt_run, metric)
+    return pd.Series(dtype=float)
+
+
 def collect_curves(run: ExperimentRun, metric_key: str, metric: Optional[MetricSpec], x_percent: np.ndarray) -> List[np.ndarray]:
     curves = []
     for prompt_run in run.prompt_runs:
-        if metric_key == OBJECTIVE_KEY:
-            values = get_objective_values(prompt_run)
-        elif metric is not None:
-            values = get_metric_values(prompt_run, metric)
-        else:
-            continue
+        values = metric_series(prompt_run, metric_key, metric)
         values = values.dropna().to_numpy(dtype=float)
         if values.size:
             curves.append(resample_to_percent(values, x_percent))
     return curves
+
+
+def collect_time_curves(run: ExperimentRun, metric_key: str, metric: Optional[MetricSpec], time_axis: np.ndarray) -> List[np.ndarray]:
+    curves = []
+    for prompt_run in run.prompt_runs:
+        values = pd.to_numeric(metric_series(prompt_run, metric_key, metric), errors="coerce")
+        elapsed = numeric_series(prompt_run.df, "elapsed_time")
+        valid = np.isfinite(values.to_numpy(dtype=float)) & np.isfinite(elapsed.to_numpy(dtype=float))
+        if not valid.any():
+            continue
+
+        aligned = pd.DataFrame({
+            "elapsed_time": elapsed[valid].to_numpy(dtype=float),
+            "value": values[valid].to_numpy(dtype=float),
+        }).sort_values("elapsed_time")
+        aligned = aligned.drop_duplicates(subset=["elapsed_time"], keep="last")
+        if aligned.empty:
+            continue
+
+        time_values = aligned["elapsed_time"].to_numpy(dtype=float)
+        metric_values = aligned["value"].to_numpy(dtype=float)
+        if time_values.size == 1:
+            curve = np.full_like(time_axis, np.nan, dtype=float)
+            curve[time_axis >= time_values[0]] = metric_values[0]
+        else:
+            curve = np.interp(time_axis, time_values, metric_values, left=np.nan, right=np.nan)
+            mask = (time_axis >= time_values.min()) & (time_axis <= time_values.max())
+            curve = np.where(mask, curve, np.nan)
+        curves.append(curve)
+    return curves
+
+
+def save_evolution_plot(
+    methods: Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]],
+    x_axis: np.ndarray,
+    x_label: str,
+    y_label: str,
+    title: str,
+    out_path: Path,
+) -> None:
+    fig, ax = plt.subplots(figsize=(10, 6))
+    for method_label, (mean, std, count) in sorted(methods.items()):
+        plot_series_ci(ax, x_axis, mean, std, count, method_label)
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+    ax.set_title(title)
+    ax.grid(alpha=0.3)
+    ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), borderaxespad=0.0)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=180, bbox_inches="tight")
+    plt.close(fig)
 
 
 def create_evolution_plots(runs: Sequence[ExperimentRun], out_dir: Path, metrics: Sequence[MetricSpec], config: dict) -> None:
@@ -549,44 +728,91 @@ def create_evolution_plots(runs: Sequence[ExperimentRun], out_dir: Path, metrics
         grouped.setdefault((run.weights_label, run.method_label), []).append(run)
 
     for metric_key, label, metric in plot_metrics:
-        rows = []
-        by_weight: Dict[str, Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]]] = {}
+        rows_progress = []
+        rows_time = []
+        by_weight_progress: Dict[str, Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]]] = {}
+        by_weight_time: Dict[str, Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]]] = {}
+        grouped_by_weight: Dict[str, Dict[str, List[ExperimentRun]]] = {}
         for (w_label, method_label), group_runs in grouped.items():
-            curves = []
-            for run in group_runs:
-                curves.extend(collect_curves(run, metric_key, metric, x_percent))
-            if not curves:
-                continue
-            mean, std, count = stack_stats(curves)
-            by_weight.setdefault(w_label, {})[method_label] = (mean, std, count)
-            for x, avg, sd, n in zip(x_percent, mean, std, count):
-                rows.append({
-                    "weights": w_label,
-                    "method": method_label,
-                    "metric": metric_key,
-                    "iteration_percent": x,
-                    "mean": avg,
-                    "std": sd,
-                    "count": n,
-                })
+            grouped_by_weight.setdefault(w_label, {})[method_label] = group_runs
 
-        if rows:
-            pd.DataFrame(rows).to_csv(plot_dir / f"{metric_key}_evolution.csv", index=False)
+        for w_label, methods_runs in grouped_by_weight.items():
+            time_max = np.nanmax([
+                elapsed_final(prompt_run)
+                for group_runs in methods_runs.values()
+                for run in group_runs
+                for prompt_run in run.prompt_runs
+            ])
+            time_axis = np.linspace(0.0, time_max, points) if np.isfinite(time_max) and time_max > 0 else np.array([0.0])
 
-        for w_label, methods in sorted(by_weight.items(), key=lambda item: weights_sort_key(item[0])):
-            fig, ax = plt.subplots(figsize=(10, 6))
-            for method_label, (mean, std, count) in sorted(methods.items()):
-                plot_series_ci(ax, x_percent, mean, std, count, method_label)
-            ax.set_xlabel("Optimization progress (%)")
-            ax.set_ylabel(label)
-            ax.set_title(f"{label} evolution ({w_label})")
-            ax.grid(alpha=0.3)
-            ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), borderaxespad=0.0)
-            fig.tight_layout()
+            for method_label, group_runs in methods_runs.items():
+                progress_curves = []
+                time_curves = []
+                for run in group_runs:
+                    progress_curves.extend(collect_curves(run, metric_key, metric, x_percent))
+                    time_curves.extend(collect_time_curves(run, metric_key, metric, time_axis))
+
+                if progress_curves:
+                    mean, std, count = stack_stats(progress_curves)
+                    by_weight_progress.setdefault(w_label, {})[method_label] = (mean, std, count)
+                    for x, avg, sd, n in zip(x_percent, mean, std, count):
+                        rows_progress.append({
+                            "weights": w_label,
+                            "method": method_label,
+                            "metric": metric_key,
+                            "iteration_percent": x,
+                            "mean": avg,
+                            "std": sd,
+                            "count": n,
+                        })
+
+                if time_curves:
+                    mean, std, count = stack_stats(time_curves)
+                    by_weight_time.setdefault(w_label, {})[method_label] = (mean, std, count)
+                    for x, avg, sd, n in zip(time_axis, mean, std, count):
+                        rows_time.append({
+                            "weights": w_label,
+                            "method": method_label,
+                            "metric": metric_key,
+                            "elapsed_time_seconds": x,
+                            "mean": avg,
+                            "std": sd,
+                            "count": n,
+                        })
+
+        if rows_progress:
+            pd.DataFrame(rows_progress).to_csv(plot_dir / f"{metric_key}_evolution.csv", index=False)
+        if rows_time:
+            pd.DataFrame(rows_time).to_csv(plot_dir / f"{metric_key}_evolution_by_time.csv", index=False)
+
+        for w_label, methods in sorted(by_weight_progress.items(), key=lambda item: weights_sort_key(item[0])):
             safe_w = re.sub(r"[^a-zA-Z0-9]+", "_", w_label).strip("_") or "unweighted"
-            out_path = plot_dir / f"{metric_key}_evolution_{safe_w}.png"
-            fig.savefig(out_path, dpi=180, bbox_inches="tight")
-            plt.close(fig)
+            save_evolution_plot(
+                methods,
+                x_percent,
+                "Optimization progress (%)",
+                label,
+                f"{label} evolution ({w_label})",
+                plot_dir / f"{metric_key}_evolution_{safe_w}.png",
+            )
+        for w_label, methods in sorted(by_weight_time.items(), key=lambda item: weights_sort_key(item[0])):
+            safe_w = re.sub(r"[^a-zA-Z0-9]+", "_", w_label).strip("_") or "unweighted"
+            time_values = [
+                row["elapsed_time_seconds"]
+                for row in rows_time
+                if row["weights"] == w_label
+            ]
+            if not time_values:
+                continue
+            time_axis = np.array(sorted(set(time_values)), dtype=float)
+            save_evolution_plot(
+                methods,
+                time_axis,
+                "Elapsed time (s)",
+                label,
+                f"{label} evolution by elapsed time ({w_label})",
+                plot_dir / f"{metric_key}_evolution_by_time_{safe_w}.png",
+            )
     print(f"Saved evolution plots under: {plot_dir}")
 
 
@@ -633,35 +859,50 @@ def draw_centered_lines(draw, lines, font, x0, x1, y, fill=(0, 0, 0)) -> int:
 
 
 def image_grid_scores(prompt_run: PromptRun, metrics: Sequence[MetricSpec], initial: bool = False) -> Dict[str, float]:
-    metric_by_key = {metric.key: metric for metric in metrics}
-    aesthetic_metric = metric_by_key.get("aesthetic_score")
-    clip_metric = metric_by_key.get("clip_score")
-    return {
+    scores = {
         "fitness": baseline_objective(prompt_run) if initial else final_objective(prompt_run),
-        "aesthetic": (
-            baseline_value(prompt_run, aesthetic_metric)
-            if initial and aesthetic_metric is not None
-            else final_value(prompt_run, aesthetic_metric)
-            if aesthetic_metric is not None
-            else np.nan
-        ),
-        "clip": (
-            baseline_value(prompt_run, clip_metric)
-            if initial and clip_metric is not None
-            else final_value(prompt_run, clip_metric)
-            if clip_metric is not None
-            else np.nan
-        ),
     }
+    for metric in metrics:
+        value = baseline_value(prompt_run, metric) if initial else final_value(prompt_run, metric)
+        scores[metric.key] = value
+    return scores
 
 
-def image_grid_score_text(scores: Dict[str, float]) -> str:
-    parts = [
-        ("Aes", scores.get("aesthetic", np.nan)),
-        ("CLIP", scores.get("clip", np.nan)),
-        ("Fit", scores.get("fitness", np.nan)),
-    ]
-    return "  ".join(f"{name}: {value:.3g}" for name, value in parts if np.isfinite(value))
+def image_grid_score_lines(
+    draw: ImageDraw.ImageDraw,
+    scores: Dict[str, float],
+    metrics: Sequence[MetricSpec],
+    font: ImageFont.ImageFont,
+    max_width: int,
+) -> List[str]:
+    label_map = {
+        "fitness": "Fit",
+        "aesthetic_score": "Aes",
+        "clip_score": "CLIP",
+        "image_reward_score": "IR",
+        "hpsv2_score": "HPS",
+        "pickscore_score": "Pick",
+    }
+    parts = []
+    order = ["fitness"] + [metric.key for metric in metrics]
+    for key in order:
+        value = scores.get(key, np.nan)
+        if np.isfinite(value):
+            parts.append(f"{label_map.get(key, key)}: {value:.3g}")
+    if not parts:
+        return [""]
+
+    lines: List[str] = []
+    current = parts[0]
+    for part in parts[1:]:
+        candidate = f"{current}  {part}"
+        if draw.textlength(candidate, font=font) <= max_width:
+            current = candidate
+        else:
+            lines.append(current)
+            current = part
+    lines.append(current)
+    return lines
 
 
 def best_score_color(scores: Dict[str, float], row_scores: Sequence[Dict[str, float]]) -> Tuple[int, int, int]:
@@ -717,7 +958,7 @@ def create_image_grids(runs: Sequence[ExperimentRun], out_dir: Path, metrics: Se
                     entries.append(None)
                     continue
                 base = prompt_run.prompt_dir / "it_0.png"
-                best = prompt_run.prompt_dir / "best_all.png"
+                best = prompt_run.best_image_path
                 entries.append(prompt_run if base.exists() and best.exists() else None)
             if any(entries):
                 rows.append((key, entries))
@@ -736,15 +977,31 @@ def create_image_grids(runs: Sequence[ExperimentRun], out_dir: Path, metrics: Se
             baseline_source = present[0]
             baseline_img = baseline_source.prompt_dir / "it_0.png"
             imgs = [baseline_img] + [
-                entry.prompt_dir / "best_all.png" if entry is not None else None for entry in entries
+                entry.best_image_path if entry is not None else None for entry in entries
             ]
 
             prompt_canvas = Image.new("RGB", (canvas_w, 100), (255, 255, 255))
             prompt_draw = ImageDraw.Draw(prompt_canvas)
             prompt_lines = wrap_text(prompt_draw, prompt_text.get(prompt_key, prompt_key), prompt_font, grid_w)
             prompt_h = len(prompt_lines) * font_height(prompt_font)
-            title_lines = 2 if row_idx == 0 else 1
-            title_h = title_lines * font_height(title_font)
+
+            labels = ["Initial"] + [r.method_label for r in selected_runs]
+            row_scores = [image_grid_scores(baseline_source, metrics, initial=True)]
+            for entry in entries:
+                row_scores.append(image_grid_scores(entry, metrics) if entry is not None else {})
+            score_lines = [
+                image_grid_score_lines(prompt_draw, scores, metrics, title_font, tile_w)
+                for scores in row_scores
+            ]
+            title_colors = [best_score_color(scores, row_scores) for scores in row_scores]
+            title_blocks = []
+            max_title_line_count = 0
+            for col_idx in range(len(labels)):
+                block = ([labels[col_idx]] if row_idx == 0 else []) + score_lines[col_idx]
+                title_blocks.append(block)
+                max_title_line_count = max(max_title_line_count, len(block))
+
+            title_h = max_title_line_count * font_height(title_font)
             row_h = prompt_h + 6 + title_h + 6 + tile_h
             row_img = Image.new("RGB", (canvas_w, row_h), (255, 255, 255))
             draw = ImageDraw.Draw(row_img)
@@ -752,18 +1009,10 @@ def create_image_grids(runs: Sequence[ExperimentRun], out_dir: Path, metrics: Se
             y_titles = prompt_h + 6
             y_img = y_titles + title_h + 6
 
-            labels = ["Initial"] + [f"{r.method_label}" + (f" s={r.seed}" if r.seed is not None else "") for r in selected_runs]
-            row_scores = [image_grid_scores(baseline_source, metrics, initial=True)]
-            for entry in entries:
-                row_scores.append(image_grid_scores(entry, metrics) if entry is not None else {})
-            score_texts = [image_grid_score_text(scores) for scores in row_scores]
-            title_colors = [best_score_color(scores, row_scores) for scores in row_scores]
-
             for col_idx, img_path in enumerate(imgs):
-                lines = [labels[col_idx], score_texts[col_idx]] if row_idx == 0 else [score_texts[col_idx]]
                 draw_centered_lines(
                     draw,
-                    [line[:80] for line in lines],
+                    title_blocks[col_idx],
                     title_font,
                     x_positions[col_idx],
                     x_positions[col_idx] + tile_w,
@@ -790,7 +1039,7 @@ def create_image_grids(runs: Sequence[ExperimentRun], out_dir: Path, metrics: Se
         print(f"Saved: {out_path}")
 
     if saved == 0:
-        print("Warning: no image grids were created; missing it_0.png/best_all.png pairs.")
+        print("Warning: no image grids were created; missing it_0.png / sliced-best image pairs.")
 
 
 def create_prompt_category_tables(runs: Sequence[ExperimentRun], out_dir: Path, metrics: Sequence[MetricSpec]) -> None:
@@ -805,6 +1054,9 @@ def create_prompt_category_tables(runs: Sequence[ExperimentRun], out_dir: Path, 
                 "prompt": prompt_run.prompt,
                 "category": prompt_run.category,
                 "folder": str(prompt_run.prompt_dir.relative_to(REPO_ROOT) if prompt_run.prompt_dir.is_relative_to(REPO_ROOT) else prompt_run.prompt_dir),
+                "best_image": str(prompt_run.best_image_path.relative_to(REPO_ROOT) if prompt_run.best_image_path.is_relative_to(REPO_ROOT) else prompt_run.best_image_path),
+                "slice_end_index": prompt_run.slice_end_index,
+                "sliced": prompt_run.sliced,
                 "objective": final_objective(prompt_run),
                 "baseline_objective": baseline_objective(prompt_run),
                 "objective_diff_to_baseline_pct": pct_diff(final_objective(prompt_run), baseline_objective(prompt_run)),
@@ -952,6 +1204,7 @@ def create_distance_tables(runs: Sequence[ExperimentRun], out_dir: Path, config:
     compute_ssim_enabled = bool(dist_cfg.get("ssim", True))
     max_side = int(dist_cfg.get("ssim_max_side", 256))
 
+    slicing_active = any(prompt_run.sliced for run in runs for prompt_run in run.prompt_runs)
     rows = []
     clip_bundle = None
     if compute_clip:
@@ -963,10 +1216,10 @@ def create_distance_tables(runs: Sequence[ExperimentRun], out_dir: Path, config:
 
     for run in runs:
         precomp = run.path / "aggregate_prompt_similarity_values.csv"
-        precomp_df = pd.read_csv(precomp) if precomp.exists() else None
+        precomp_df = pd.read_csv(precomp) if precomp.exists() and not slicing_active else None
         for idx, prompt_run in enumerate(run.prompt_runs):
             base = prompt_run.prompt_dir / "it_0.png"
-            best = prompt_run.prompt_dir / "best_all.png"
+            best = prompt_run.best_image_path
             cosine = np.nan
             ssim_value = np.nan
             if precomp_df is not None and idx < len(precomp_df):
@@ -1066,6 +1319,14 @@ def run_pipeline(config: dict) -> None:
     metrics = enabled_metrics(config)
     out_dir = resolve_path(config.get("save_folder", "results_processed"))
     out_dir.mkdir(parents=True, exist_ok=True)
+    slice_iterations = config.get("slice_index_iterations")
+    slice_generations = config.get("slice_index_generations")
+    if slice_iterations is not None or slice_generations is not None:
+        print(
+            "Running sliced processing with "
+            f"slice_index_iterations={slice_iterations}, "
+            f"slice_index_generations={slice_generations}."
+        )
 
     run_dirs = discover_run_dirs(config)
     if not run_dirs:
@@ -1089,9 +1350,12 @@ def run_pipeline(config: dict) -> None:
             "method_key": run.method_key,
             "weights": run.weights_label,
             "seed": run.seed,
-            "backend": run.backend,
-            "model": run.model_tag,
-            "n_prompts": len(run.prompt_runs),
+                "backend": run.backend,
+                "model": run.model_tag,
+                "n_prompts": len(run.prompt_runs),
+                "slice_index_iterations": config.get("slice_index_iterations"),
+                "slice_index_generations": config.get("slice_index_generations"),
+                "sliced": any(prompt_run.sliced for prompt_run in run.prompt_runs),
         }
         for run in runs
     ])

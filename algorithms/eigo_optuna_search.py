@@ -6,6 +6,7 @@ import copy
 import json
 import math
 import os
+import random
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -25,7 +26,6 @@ from eigo_grid_search import (  # noqa: E402
     get_prompt_list,
     load_yaml,
     save_run_parameters,
-    validate_base_config,
 )
 
 
@@ -36,6 +36,17 @@ AUTO_METRICS = {
     "ga": "max_fitness",
     "cmaes": "max_fitness",
     "random_sampler": "max_fitness",
+}
+DEFAULT_OPTUNA_PLOTS = {
+    "optimization_history": "plot_optimization_history",
+    "param_importances": "plot_param_importances",
+    "slice": "plot_slice",
+    "contour": "plot_contour",
+    "parallel_coordinate": "plot_parallel_coordinate",
+    "edf": "plot_edf",
+    "timeline": "plot_timeline",
+    "intermediate_values": "plot_intermediate_values",
+    "rank": "plot_rank",
 }
 
 
@@ -76,9 +87,173 @@ def get_search_space(config):
     return search_space
 
 
-def validate_optuna_config(config):
-    validate_base_config(config)
+def get_optuna_prompt_source(config):
     optuna_config = get_optuna_config(config)
+    prompt_source = optuna_config.get("prompt_source")
+    if prompt_source is None:
+        return {"type": "config"}
+    if not isinstance(prompt_source, dict):
+        raise ValueError("'optuna.prompt_source' must be a dictionary.")
+    return prompt_source
+
+
+def _is_clip_tokenizable(prompt, context_length=77):
+    try:
+        import clip
+
+        clip.tokenize([prompt], context_length=context_length, truncate=False)
+        return True
+    except RuntimeError as exc:
+        if "too long for context length" in str(exc):
+            return False
+        raise
+
+
+def _append_prompt_if_valid(prompts, skipped, prompt, require_clip_tokenizable, clip_context_length):
+    if not isinstance(prompt, str) or not prompt.strip():
+        return
+
+    prompt = prompt.strip()
+    if require_clip_tokenizable and not _is_clip_tokenizable(prompt, clip_context_length):
+        skipped["too_long_for_clip"] += 1
+        return
+
+    prompts.append(prompt)
+
+
+def _sample_diffusiondb_prompts(prompt_source):
+    try:
+        from datasets import load_dataset
+    except ImportError as exc:
+        raise ImportError(
+            "The 'datasets' package is required to sample prompts from DiffusionDB."
+        ) from exc
+
+    dataset_name = str(prompt_source.get("dataset", "poloclub/diffusiondb"))
+    subset = prompt_source.get("subset", "2m_random_1k")
+    split = str(prompt_source.get("split", "train"))
+    prompt_column = str(prompt_source.get("prompt_column", "prompt"))
+    count = int(prompt_source.get("count", 10))
+    seed = int(prompt_source.get("seed", 42))
+    streaming = bool(prompt_source.get("streaming", False))
+    require_clip_tokenizable = bool(prompt_source.get("require_clip_tokenizable", True))
+    clip_context_length = int(prompt_source.get("clip_context_length", 77))
+
+    if count <= 0:
+        raise ValueError("'optuna.prompt_source.count' must be greater than zero.")
+    if clip_context_length <= 0:
+        raise ValueError("'optuna.prompt_source.clip_context_length' must be greater than zero.")
+
+    print(
+        "Loading DiffusionDB prompts "
+        f"(dataset={dataset_name}, subset={subset}, split={split}, count={count}, seed={seed})"
+    )
+
+    load_args = [dataset_name]
+    if subset is not None:
+        load_args.append(str(subset))
+    dataset = load_dataset(*load_args, split=split, streaming=streaming)
+    skipped = {"too_long_for_clip": 0}
+
+    if streaming:
+        buffer_size = int(prompt_source.get("buffer_size", max(count * 20, 1000)))
+        dataset = dataset.shuffle(seed=seed, buffer_size=buffer_size)
+        prompts = []
+        for row in dataset:
+            _append_prompt_if_valid(
+                prompts,
+                skipped,
+                row.get(prompt_column),
+                require_clip_tokenizable,
+                clip_context_length,
+            )
+            if len(prompts) >= count:
+                break
+    else:
+        if prompt_column not in dataset.column_names:
+            raise ValueError(
+                f"Prompt column '{prompt_column}' not found in DiffusionDB split. "
+                f"Available columns: {', '.join(dataset.column_names)}"
+            )
+        candidates = list(dataset[prompt_column])
+        rng = random.Random(seed)
+        rng.shuffle(candidates)
+        prompts = []
+        for prompt in candidates:
+            _append_prompt_if_valid(
+                prompts,
+                skipped,
+                prompt,
+                require_clip_tokenizable,
+                clip_context_length,
+            )
+            if len(prompts) >= count:
+                break
+
+    if len(prompts) < count:
+        raise ValueError(
+            f"DiffusionDB prompt source yielded {len(prompts)} prompt(s), "
+            f"but {count} were requested. Skipped prompts: {skipped}."
+        )
+    if skipped["too_long_for_clip"]:
+        print(
+            "Skipped "
+            f"{skipped['too_long_for_clip']} DiffusionDB prompt(s) longer than "
+            f"CLIP context length {clip_context_length}."
+        )
+    return prompts
+
+
+def get_optuna_prompt_list(config):
+    prompt_source = get_optuna_prompt_source(config)
+    source_type = str(prompt_source.get("type", "config")).lower()
+
+    if source_type == "config":
+        return get_prompt_list(config)
+    if source_type == "diffusiondb":
+        return _sample_diffusiondb_prompts(prompt_source)
+
+    raise ValueError(
+        "Unsupported 'optuna.prompt_source.type': "
+        f"{source_type}. Supported values: config, diffusiondb."
+    )
+
+
+def validate_prompt_source_config(config):
+    prompt_source = get_optuna_prompt_source(config)
+    source_type = str(prompt_source.get("type", "config")).lower()
+
+    if source_type == "config":
+        get_prompt_list(config)
+        return
+
+    if source_type == "diffusiondb":
+        count = int(prompt_source.get("count", 10))
+        if count <= 0:
+            raise ValueError("'optuna.prompt_source.count' must be greater than zero.")
+        if "dataset" in prompt_source and not str(prompt_source["dataset"]).strip():
+            raise ValueError("'optuna.prompt_source.dataset' must be non-empty.")
+        if "subset" in prompt_source and prompt_source["subset"] is not None:
+            if not str(prompt_source["subset"]).strip():
+                raise ValueError("'optuna.prompt_source.subset' must be non-empty or null.")
+        if "split" in prompt_source and not str(prompt_source["split"]).strip():
+            raise ValueError("'optuna.prompt_source.split' must be non-empty.")
+        if "prompt_column" in prompt_source and not str(prompt_source["prompt_column"]).strip():
+            raise ValueError("'optuna.prompt_source.prompt_column' must be non-empty.")
+        return
+
+    raise ValueError(
+        "Unsupported 'optuna.prompt_source.type': "
+        f"{source_type}. Supported values: config, diffusiondb."
+    )
+
+
+def validate_optuna_config(config):
+    optuna_config = get_optuna_config(config)
+    validate_prompt_source_config(config)
+    if "results_folder" not in config:
+        raise ValueError("Missing required key 'results_folder' in config.")
+
     n_trials = int(optuna_config.get("n_trials", 20))
     if n_trials <= 0:
         raise ValueError("'optuna.n_trials' must be greater than zero.")
@@ -102,6 +277,8 @@ def validate_optuna_config(config):
             continue
         if not isinstance(method_space, dict):
             raise ValueError(f"'optuna.search_space.{method}' must be a dictionary.")
+
+    _get_enabled_plot_names(_get_plot_config(config))
 
 
 def _suggest_categorical(trial, name, values):
@@ -185,6 +362,23 @@ def create_sampler(optuna_config):
     raise ValueError(f"Unsupported Optuna sampler: {name}")
 
 
+def ensure_optuna_storage_path(storage):
+    """Create parent directories for local SQLite Optuna storage."""
+    if not storage or not isinstance(storage, str):
+        return
+
+    if storage == "sqlite:///:memory:" or not storage.startswith("sqlite:///"):
+        return
+
+    db_path = storage.removeprefix("sqlite:///")
+    if not db_path:
+        return
+
+    db_path = Path(db_path)
+    if db_path.parent != Path("."):
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+
+
 def objective_metric(final_results, method, metric_name):
     if not isinstance(final_results, dict) or final_results.get("status") != "ok":
         raise ValueError(f"Cannot compute objective from final results: {final_results}")
@@ -241,7 +435,8 @@ def run_optuna_search(config, dry_run=False):
     validate_optuna_config(config)
 
     optuna_config = get_optuna_config(config)
-    prompt_list = get_prompt_list(config)
+    prompt_list = get_optuna_prompt_list(config)
+    config["_resolved_optuna_prompts"] = prompt_list
     enabled_methods = get_enabled_methods(config)
     search_space = get_search_space(config)
     n_trials = int(optuna_config.get("n_trials", 20))
@@ -273,6 +468,7 @@ def run_optuna_search(config, dry_run=False):
 
     study_name = optuna_config.get("study_name") or f"eigo_optuna_{timestamp}"
     storage = optuna_config.get("storage")
+    ensure_optuna_storage_path(storage)
     load_if_exists = bool(optuna_config.get("load_if_exists", True))
     study = optuna.create_study(
         direction=direction,
@@ -389,7 +585,8 @@ def save_summary(config, study, trial_rows):
     optuna_config = get_optuna_config(config)
 
     payload = {
-        "selected_prompts": get_prompt_list(config),
+        "selected_prompts": config.get("_resolved_optuna_prompts") or get_optuna_prompt_list(config),
+        "prompt_source": get_optuna_prompt_source(config),
         "enabled_methods": get_enabled_methods(config),
         "n_trials": int(optuna_config.get("n_trials", 20)),
         "direction": optuna_config.get("direction", "maximize"),
@@ -403,6 +600,116 @@ def save_summary(config, study, trial_rows):
         yaml.safe_dump(payload, f, sort_keys=False)
 
     print(f"Summary saved to: {summary_path}")
+
+
+def _get_plot_config(config):
+    optuna_config = get_optuna_config(config)
+    plot_config = optuna_config.get("plots", {})
+    if plot_config is None:
+        plot_config = {}
+    if not isinstance(plot_config, dict):
+        raise ValueError("'optuna.plots' must be a dictionary when provided.")
+    return plot_config
+
+
+def _get_enabled_plot_names(plot_config):
+    enabled = plot_config.get("enabled", True)
+    if isinstance(enabled, bool):
+        return list(DEFAULT_OPTUNA_PLOTS.keys()) if enabled else []
+    if isinstance(enabled, list):
+        unknown = sorted(set(enabled) - set(DEFAULT_OPTUNA_PLOTS.keys()))
+        if unknown:
+            raise ValueError(
+                "'optuna.plots.enabled' contains unsupported plot names: "
+                f"{', '.join(unknown)}"
+            )
+        return list(enabled)
+    raise ValueError("'optuna.plots.enabled' must be a boolean or list of plot names.")
+
+
+def save_optuna_plots(config, study):
+    """Save Optuna visualization plots as HTML files.
+
+    Plot generation is intentionally best-effort: a finished study should not fail
+    just because one diagnostic plot is unavailable for the completed trials.
+    """
+    if study is None:
+        return
+
+    plot_config = _get_plot_config(config)
+    plot_names = _get_enabled_plot_names(plot_config)
+    if not plot_names:
+        print("Optuna plot generation disabled.")
+        return
+
+    try:
+        import optuna
+        from optuna.trial import TrialState
+        import optuna.visualization as vis
+    except ImportError as exc:
+        print(f"Warning: Optuna visualization unavailable ({exc}). Skipping plots.")
+        return
+
+    completed_trials = study.get_trials(
+        deepcopy=False,
+        states=(TrialState.COMPLETE,),
+    )
+    if not completed_trials:
+        print("No completed Optuna trials available. Skipping plots.")
+        return
+
+    output_root = Path(str(config.get("results_folder", "results")))
+    output_dir = plot_config.get("output_dir")
+    if output_dir is None:
+        output_dir = output_root / "optuna_plots"
+    else:
+        output_dir = Path(str(output_dir))
+        if not output_dir.is_absolute():
+            output_dir = output_root / output_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    include_plotlyjs = plot_config.get("include_plotlyjs", "cdn")
+    saved = []
+    failed = []
+
+    for plot_name in plot_names:
+        function_name = DEFAULT_OPTUNA_PLOTS[plot_name]
+        plot_function = getattr(vis, function_name, None)
+        if plot_function is None:
+            failed.append(
+                {
+                    "plot": plot_name,
+                    "error": f"optuna.visualization.{function_name} is unavailable",
+                }
+            )
+            continue
+
+        try:
+            fig = plot_function(study)
+            out_path = output_dir / f"{plot_name}.html"
+            fig.write_html(str(out_path), include_plotlyjs=include_plotlyjs)
+            saved.append(str(out_path))
+        except Exception as exc:
+            failed.append({"plot": plot_name, "error": str(exc)})
+            print(f"Warning: failed to save Optuna plot '{plot_name}': {exc}")
+
+    manifest_path = output_dir / "plot_manifest.yaml"
+    with manifest_path.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(
+            {
+                "study_name": study.study_name,
+                "completed_trials": len(completed_trials),
+                "saved": saved,
+                "failed": failed,
+            },
+            f,
+            sort_keys=False,
+        )
+
+    if saved:
+        print(f"Optuna plots saved under: {output_dir}")
+    else:
+        print(f"No Optuna plots were saved. See: {manifest_path}")
 
 
 def build_parser():
@@ -432,6 +739,7 @@ def main():
     config = load_yaml(Path(args.config).resolve())
     study, trial_rows = run_optuna_search(config, dry_run=args.dry_run)
     save_summary(config, study, trial_rows)
+    save_optuna_plots(config, study)
 
 
 if __name__ == "__main__":

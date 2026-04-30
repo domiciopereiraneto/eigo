@@ -1,24 +1,19 @@
-# Prompts evaluated by each Optuna trial
-selected_prompts:
-  - "an astronaut riding a horse on mars"
-  - "a serene mountain landscape with a tranquil lake at sunset"
-  - "a futuristic cyberpunk city with neon lights and flying cars"
-  - "a cozy library with ancient books and warm candlelight"
-  - "a vibrant underwater coral reef with colorful tropical fish"
+# Prompts evaluated by each Optuna trial are sampled from optuna.prompt_source.
+# To use explicit prompts instead, set optuna.prompt_source.type: "config" and
+# add selected_prompts here.
 
 # Select which optimizers Optuna can sample.
 # If more than one is enabled, Optuna samples the optimizer as a categorical parameter.
-test_adam: true
-test_ga: false
+test_adam: false
+test_ga: true
 test_cmaes: false
-test_random_sampler: false
 
 # General parameters (copied from config_eigo.yaml)
 seed: 42
-cuda: 1
+cuda: 2
 predictor: 2
-num_inference_steps: 4
-guidance_scale: 4
+num_inference_steps: 1
+guidance_scale: 0
 lcm_origin_steps: 50
 height: 512
 width: 512
@@ -37,7 +32,7 @@ hpsv2_version: "v2.1"  # Set to null to disable HPSv2 calculation
 pickscore_model: "yuvalkirstain/PickScore_v1"  # Set to null to disable PickScore calculation
 pickscore_processor: "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"  # Set to null to disable PickScore calculation
 evaluate_zero_weight_metrics: true  # Keep zero-weight scorer models/graphs out of Adam VRAM
-model_id: "SimianLuo/LCM_Dreamshaper_v7" # Model ID (e.g., "black-forest-labs/FLUX.1-schnell", "PixArt-alpha/PixArt-XL-2-1024-MS", "stabilityai/sdxl-turbo", "SimianLuo/LCM_Dreamshaper_v7")
+model_id: "stabilityai/sdxl-turbo" # Model ID (e.g., "black-forest-labs/FLUX.1-schnell", "PixArt-alpha/PixArt-XL-2-1024-MS", "stabilityai/sdxl-turbo", "SimianLuo/LCM_Dreamshaper_v7")
 model_backend: "auto" # "auto", "sdxl", "flux", "pixart", or "lcm"
 torch_dtype: "float32"
 max_sequence_length: 256
@@ -49,11 +44,11 @@ enable_gradient_checkpointing: false
 enable_attention_slicing: false
 enable_vae_slicing: false
 enable_vae_tiling: false
-results_folder: "results_optuna_sdxlturbo_lcm"
+results_folder: "results_optuna_sdxlturbo_ga_balanced"
 
 # CMA-ES defaults (used if not overridden by optuna.search_space.cmaes)
-num_generations: 50
-pop_size: 50
+num_generations: 30
+pop_size: 20
 cmaes_variant: "sep"
 sigma: 0.5
 save_gens: false
@@ -73,23 +68,37 @@ ga_elite_count: 1
 ga_crossover_rate: 0.8
 ga_mutation_rate: 0.1
 
-# Random sampler defaults (used if not overridden by optuna.search_space.random_sampler)
-num_images_to_generate: 20
-
 # Time limit in seconds (null -> use num_generations/num_iterations)
 time_limit_seconds: null
 
 optuna:
-  n_trials: 10
+  n_trials: 30
   direction: "maximize"
   metric: "auto"  # auto -> combined_score for Adam, max_fitness for GA/CMA-ES
-  study_name: "eigo_optuna_search_lcm"
-  storage: null  # Example for resumable studies: "sqlite:///results_optuna_search_sdxlturbo_adam/optuna.db"
+  study_name: "eigo_optuna_search_sdxlturbo_ga_balanced"
+  storage: "sqlite:///results_optuna_sdxlturbo_ga_balanced/optuna.db"  # Example for resumable studies: "sqlite:///results_optuna_search_sdxlturbo_adam/optuna.db"
   load_if_exists: true
   catch_trial_errors: true
   sampler:
     name: "tpe"  # tpe or random
     seed: 42
+
+  prompt_source:
+    type: "diffusiondb"  # "diffusiondb" or "config"
+    dataset: "poloclub/diffusiondb"
+    subset: "2m_random_1k"
+    split: "train"
+    prompt_column: "prompt"
+    count: 10
+    seed: 42
+    streaming: false
+    require_clip_tokenizable: true
+    clip_context_length: 77
+
+  plots:
+    enabled: true  # true, false, or a list such as ["optimization_history", "slice"]
+    output_dir: "optuna_plots"
+    include_plotlyjs: "cdn"
 
   # Supported parameter specs:
   # - list -> categorical choices
@@ -100,64 +109,60 @@ optuna:
     adam:
       adam_lr:
         type: "float"
-        low: 1e-5
+        low: 1e-4
         high: 1e-2
         log: true
       adam_weight_decay:
         type: "float"
-        low: 0
-        high: 1e-3
+        low: 1e-6
+        high: 3e-3
+        log: true
       adam_beta1:
         type: "float"
-        low: 0.8
-        high: 0.99
-        log: true
+        low: 0.7
+        high: 0.95
       adam_beta2:
         type: "float"
         low: 0.9
-        high: 0.999
-        log: true
+        high: 0.995
       adam_eps:
         type: "float"
         low: 1e-10
-        high: 1e-6
+        high: 1e-7
         log: true
 
     ga:
-      pop_size:
-        type: "int"
-        low: 20
-        high: 50
-        step: 10
+      # pop_size:
+      #   type: "int"
+      #   low: 10
+      #   high: 50
+      #   step: 10
       ga_mutation_std:
         type: "float"
         low: 0.05
-        high: 0.5
+        high: 1.0
         log: true
       ga_mutation_rate:
         type: "float"
         low: 0.05
-        high: 0.3
+        high: 0.6
       ga_crossover_rate:
         type: "float"
-        low: 0.7
-        high: 0.9
+        low: 0.5
+        high: 0.95
+      ga_elite_count:
+        type: "int"
+        low: 1
+        high: 3
 
     cmaes:
-      pop_size:
-        type: "int"
-        low: 20
-        high: 50
-        step: 5
+      # pop_size:
+      #   type: "int"
+      #   low: 10
+      #   high: 60
+      #   step: 10
       sigma:
         type: "float"
         low: 0.05
-        high: 0.5
+        high: 1.0
         log: true
-
-    random_sampler:
-      num_images_to_generate:
-        type: "int"
-        low: 10
-        high: 100
-        step: 10
