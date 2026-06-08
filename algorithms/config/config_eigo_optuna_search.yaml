@@ -5,21 +5,21 @@
 # Select which optimizers Optuna can sample.
 # If more than one is enabled, Optuna samples the optimizer as a categorical parameter.
 test_adam: false
-test_ga: true
-test_cmaes: false
+test_ga: false
+test_cmaes: true
 
 # General parameters (copied from config_eigo.yaml)
 seed: 42
 cuda: 2
 predictor: 2
-num_inference_steps: 1
-guidance_scale: 0
+num_inference_steps: 2
+guidance_scale: 4.5
 lcm_origin_steps: 50
-height: 512
-width: 512
-aesthetic_score_weight: 0.5
-clip_score_weight: 0.5
-image_reward_score_weight: 0.0
+height: 1024
+width: 1024
+aesthetic_score_weight: 0.0
+clip_score_weight: 0.0
+image_reward_score_weight: 1.0
 hpsv2_score_weight: 0.0
 pickscore_score_weight: 0.0
 max_aesthetic_score: 10
@@ -31,11 +31,11 @@ image_reward_model: "ImageReward-v1.0" # Set to null to disable ImageReward calc
 hpsv2_version: "v2.1"  # Set to null to disable HPSv2 calculation
 pickscore_model: "yuvalkirstain/PickScore_v1"  # Set to null to disable PickScore calculation
 pickscore_processor: "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"  # Set to null to disable PickScore calculation
-evaluate_zero_weight_metrics: true  # Keep zero-weight scorer models/graphs out of Adam VRAM
-model_id: "stabilityai/sdxl-turbo" # Model ID (e.g., "black-forest-labs/FLUX.1-schnell", "PixArt-alpha/PixArt-XL-2-1024-MS", "stabilityai/sdxl-turbo", "SimianLuo/LCM_Dreamshaper_v7")
-model_backend: "auto" # "auto", "sdxl", "flux", "pixart", or "lcm"
-torch_dtype: "float32"
-max_sequence_length: 256
+evaluate_zero_weight_metrics: false  # Keep zero-weight scorer models/graphs out of Adam VRAM
+model_id: "Efficient-Large-Model/Sana_Sprint_0.6B_1024px_diffusers" # Model ID (e.g., "black-forest-labs/FLUX.1-schnell", "PixArt-alpha/PixArt-XL-2-1024-MS", "Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers", "Efficient-Large-Model/Sana_1600M_1024px_diffusers", "stabilityai/sdxl-turbo", "SimianLuo/LCM_Dreamshaper_v7")
+model_backend: "auto" # "auto", "sdxl", "flux", "pixart", "lcm", "sana", or "sana_sprint"
+torch_dtype: "bfloat16"
+max_sequence_length: 256  # FLUX/Sana text encoder token limit
 use_safetensors: true
 use_multi_gpu: false
 pipeline_device_map: "balanced"
@@ -44,7 +44,7 @@ enable_gradient_checkpointing: false
 enable_attention_slicing: false
 enable_vae_slicing: false
 enable_vae_tiling: false
-results_folder: "results_optuna_sdxlturbo_ga_balanced"
+results_folder: "results_optuna_sana_sprint_sepcmaes_imagereward"
 
 # CMA-ES defaults (used if not overridden by optuna.search_space.cmaes)
 num_generations: 30
@@ -54,7 +54,7 @@ sigma: 0.5
 save_gens: false
 
 # Adam defaults (used if not overridden by optuna.search_space.adam)
-num_iterations: 300
+num_iterations: 600
 adam_lr: 5e-3
 adam_weight_decay: 0
 adam_eps: 1e-8
@@ -75,8 +75,8 @@ optuna:
   n_trials: 30
   direction: "maximize"
   metric: "auto"  # auto -> combined_score for Adam, max_fitness for GA/CMA-ES
-  study_name: "eigo_optuna_search_sdxlturbo_ga_balanced"
-  storage: "sqlite:///results_optuna_sdxlturbo_ga_balanced/optuna.db"  # Example for resumable studies: "sqlite:///results_optuna_search_sdxlturbo_adam/optuna.db"
+  study_name: "eigo_optuna_search_sana_sprint_sepcmaes_imagereward"
+  storage: "sqlite:///results_optuna_sana_sprint_sepcmaes_imagereward/optuna.db"  # Example for resumable studies: "sqlite:///results_optuna_search_sana_sprint_sepcmaes_imagereward/optuna.db"
   load_if_exists: true
   catch_trial_errors: true
   sampler:

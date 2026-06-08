@@ -70,6 +70,8 @@ The backend supports these diffusion backends:
 - `flux` via `FluxPipeline`
 - `pixart` via `PixArtAlphaPipeline`
 - `lcm` via Diffusers' `LatentConsistencyModelPipeline`/`DiffusionPipeline`
+- `sana` via `SanaPipeline`
+- `sana_sprint` via `SanaSprintPipeline`
 - `auto` to infer the backend from `model_id`
 
 Backends are configured through YAML, mainly with:

@@ -85,6 +85,7 @@ class PromptRun:
     seed: Optional[int]
     best_image_path: Path
     slice_end_index: Optional[int]
+    slice_end_time: Optional[float]
     sliced: bool
 
 
@@ -200,7 +201,7 @@ def parse_method(name: str) -> str:
 def parse_backend_and_model(name: str) -> Tuple[str, str]:
     lowered = name.lower()
     match = re.search(
-        r"_clip_[^_]+_(sdxl|flux|pixart|lcm)_([^_]+)_\d+_(?:aesw|a)",
+        r"_clip_[^_]+_(sdxl|flux|pixart|lcm|sana|sana_sprint)_([^_]+)_\d+_(?:aesw|a)",
         lowered,
     )
     if match:
@@ -271,6 +272,16 @@ def slice_limit_for_method(method_key: str, config: dict) -> Optional[int]:
     return limit
 
 
+def slice_time_limit(config: dict) -> Optional[float]:
+    value = config.get("slice_time_seconds")
+    if value is None:
+        return None
+    limit = float(value)
+    if limit < 0:
+        raise ValueError("slice_time_seconds must be >= 0 when provided.")
+    return limit
+
+
 def apply_slice(df: pd.DataFrame, step_name: str, slice_end_index: Optional[int]) -> Optional[pd.DataFrame]:
     if slice_end_index is None:
         return df
@@ -278,6 +289,36 @@ def apply_slice(df: pd.DataFrame, step_name: str, slice_end_index: Optional[int]
     if sliced.empty:
         return None
     return sliced.reset_index(drop=True)
+
+
+def apply_time_slice(df: pd.DataFrame, slice_end_time: Optional[float]) -> Optional[pd.DataFrame]:
+    if slice_end_time is None:
+        return df
+    elapsed = numeric_series(df, "elapsed_time")
+    before_limit = df[elapsed <= slice_end_time]
+    after_elapsed = elapsed[elapsed > slice_end_time]
+    if after_elapsed.empty:
+        after_limit = df.iloc[0:0]
+    else:
+        after_limit = df.loc[[after_elapsed.idxmin()]]
+    sliced = pd.concat([before_limit, after_limit], ignore_index=False)
+    if sliced.empty:
+        return None
+    return sliced.reset_index(drop=True)
+
+
+def validate_slicing_config(config: dict) -> None:
+    slice_iterations = config.get("slice_index_iterations")
+    slice_generations = config.get("slice_index_generations")
+    slice_time = config.get("slice_time_seconds")
+    if slice_time is not None and (slice_iterations is not None or slice_generations is not None):
+        raise ValueError(
+            "slice_time_seconds is not compatible with slice_index_iterations or "
+            "slice_index_generations. Set both index slicing parameters to null "
+            "when using slice_time_seconds."
+        )
+    if slice_time is not None:
+        slice_time_limit(config)
 
 
 def best_row_step_index(df: pd.DataFrame, step_name: str, csv_kind: str) -> Optional[int]:
@@ -300,9 +341,16 @@ def find_existing_image(prompt_dir: Path, prefixes: Sequence[str], index: int) -
     return None
 
 
-def resolve_best_image_path(prompt_dir: Path, df: pd.DataFrame, step_name: str, csv_kind: str, slice_end_index: Optional[int]) -> Path:
+def resolve_best_image_path(
+    prompt_dir: Path,
+    df: pd.DataFrame,
+    step_name: str,
+    csv_kind: str,
+    sliced: bool,
+    slice_end_index: Optional[int] = None,
+) -> Path:
     full_best = prompt_dir / "best_all.png"
-    if slice_end_index is None:
+    if not sliced:
         return full_best if full_best.exists() else prompt_dir / "it_0.png"
 
     if slice_end_index == 0:
@@ -340,7 +388,9 @@ def load_prompt_run(
     if df is None:
         return None
     slice_end_index = slice_limit_for_method(method_key, config)
+    slice_end_time = slice_time_limit(config)
     df = apply_slice(df, step_name, slice_end_index)
+    df = apply_time_slice(df, slice_end_time)
     if df is None:
         return None
     prompt = first_non_empty(df["prompt"]) if "prompt" in df.columns else None
@@ -356,9 +406,17 @@ def load_prompt_run(
         category=category or "Unknown",
         prompt_id=prompt_dir.name,
         seed=seed,
-        best_image_path=resolve_best_image_path(prompt_dir, df, step_name, kind, slice_end_index),
+        best_image_path=resolve_best_image_path(
+            prompt_dir,
+            df,
+            step_name,
+            kind,
+            sliced=slice_end_index is not None or slice_end_time is not None,
+            slice_end_index=slice_end_index,
+        ),
         slice_end_index=slice_end_index,
-        sliced=slice_end_index is not None,
+        slice_end_time=slice_end_time,
+        sliced=slice_end_index is not None or slice_end_time is not None,
     )
 
 
@@ -499,6 +557,72 @@ def elapsed_final(prompt_run: PromptRun) -> float:
     return float(vals.iloc[-1]) if not vals.empty else np.nan
 
 
+def _initial_metric_value(prompt_run: PromptRun, metric: MetricSpec) -> float:
+    col = metric_column(prompt_run, metric)
+    values = numeric_series(prompt_run.df, col)
+    return float(values.iloc[0]) if not values.empty and np.isfinite(values.iloc[0]) else np.nan
+
+
+def _initial_objective_value(prompt_run: PromptRun) -> float:
+    col = objective_column(prompt_run)
+    values = numeric_series(prompt_run.df, col)
+    return float(values.iloc[0]) if not values.empty and np.isfinite(values.iloc[0]) else np.nan
+
+
+def apply_random_sampler_baseline_hotfix(runs: Sequence[ExperimentRun], metrics: Sequence[MetricSpec]) -> None:
+    # TEMPORARY HOTFIX: remove after random_sampler runs have been regenerated with
+    # generation 0 evaluated from the run seed. Older random_sampler CSVs used the
+    # first sampled image as generation 0, so process-results borrows any other
+    # method's initial row for the same weight/prompt group.
+    donor_by_group: Dict[Tuple[str, str], PromptRun] = {}
+    for run in runs:
+        if run.method_key == "randomsampler":
+            continue
+        for prompt_run in run.prompt_runs:
+            key = (run.weights_label, prompt_run.prompt)
+            donor_by_group.setdefault(key, prompt_run)
+
+    patched = 0
+    for run in runs:
+        if run.method_key != "randomsampler":
+            continue
+        for prompt_run in run.prompt_runs:
+            donor = donor_by_group.get((run.weights_label, prompt_run.prompt))
+            if donor is None or prompt_run.df.empty:
+                continue
+
+            baseline_idx = prompt_run.df.index[0]
+            objective = _initial_objective_value(donor)
+            if np.isfinite(objective):
+                for col in ("avg_fitness", "max_fitness"):
+                    if col in prompt_run.df.columns:
+                        prompt_run.df.at[baseline_idx, col] = objective
+                if "std_fitness" in prompt_run.df.columns:
+                    prompt_run.df.at[baseline_idx, "std_fitness"] = 0.0
+
+            for metric in metrics:
+                value = _initial_metric_value(donor, metric)
+                if not np.isfinite(value):
+                    continue
+                base_name = metric.key
+                for prefix in ("avg", "max"):
+                    col = f"{prefix}_{base_name}"
+                    if col in prompt_run.df.columns:
+                        prompt_run.df.at[baseline_idx, col] = value
+                std_col = f"std_{base_name}"
+                if std_col in prompt_run.df.columns:
+                    prompt_run.df.at[baseline_idx, std_col] = 0.0
+
+            patched += 1
+
+    if patched:
+        print(
+            "TEMPORARY HOTFIX: replaced random_sampler generation-0 metrics "
+            f"from other methods for {patched} prompt runs. Remove after old "
+            "random_sampler outputs are regenerated."
+        )
+
+
 def enabled_metrics(config: dict) -> List[MetricSpec]:
     selected = config.get("metrics", "auto")
     if selected == "auto" or selected is None:
@@ -621,8 +745,12 @@ def resample_to_percent(values: Sequence[float], target_percent: np.ndarray) -> 
 def stack_stats(curves: List[np.ndarray]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     mat = np.vstack(curves)
     count = np.sum(np.isfinite(mat), axis=0).astype(float)
-    mean = np.nanmean(mat, axis=0)
-    std = np.nanstd(mat, axis=0, ddof=0)
+    mean = np.full(mat.shape[1], np.nan, dtype=float)
+    std = np.full(mat.shape[1], np.nan, dtype=float)
+    populated = count > 0
+    if populated.any():
+        mean[populated] = np.nanmean(mat[:, populated], axis=0)
+        std[populated] = np.nanstd(mat[:, populated], axis=0, ddof=0)
     return mean, std, count
 
 
@@ -662,21 +790,55 @@ def collect_curves(run: ExperimentRun, metric_key: str, metric: Optional[MetricS
     return curves
 
 
-def collect_time_curves(run: ExperimentRun, metric_key: str, metric: Optional[MetricSpec], time_axis: np.ndarray) -> List[np.ndarray]:
+def prompt_time_limit(prompt_run: PromptRun, metric_key: str, metric: Optional[MetricSpec]) -> float:
+    values = pd.to_numeric(metric_series(prompt_run, metric_key, metric), errors="coerce")
+    elapsed = numeric_series(prompt_run.df, "elapsed_time")
+    valid = np.isfinite(values.to_numpy(dtype=float)) & np.isfinite(elapsed.to_numpy(dtype=float))
+    if not valid.any():
+        return np.nan
+    return float(np.nanmax(elapsed[valid].to_numpy(dtype=float)))
+
+
+def time_aligned_values(
+    prompt_run: PromptRun,
+    metric_key: str,
+    metric: Optional[MetricSpec],
+    time_limit: Optional[float] = None,
+) -> Optional[pd.DataFrame]:
+    values = pd.to_numeric(metric_series(prompt_run, metric_key, metric), errors="coerce")
+    elapsed = numeric_series(prompt_run.df, "elapsed_time")
+    valid = np.isfinite(values.to_numpy(dtype=float)) & np.isfinite(elapsed.to_numpy(dtype=float))
+    if not valid.any():
+        return None
+
+    aligned = pd.DataFrame({
+        "elapsed_time": elapsed[valid].to_numpy(dtype=float),
+        "value": values[valid].to_numpy(dtype=float),
+    }).sort_values("elapsed_time")
+    aligned = aligned.drop_duplicates(subset=["elapsed_time"], keep="last")
+    if aligned.empty:
+        return None
+
+    if time_limit is not None and np.isfinite(time_limit):
+        before_limit = aligned[aligned["elapsed_time"] <= time_limit]
+        after_limit = aligned[aligned["elapsed_time"] > time_limit].head(1)
+        aligned = pd.concat([before_limit, after_limit], ignore_index=True)
+        if aligned.empty:
+            return None
+    return aligned
+
+
+def collect_time_curves(
+    run: ExperimentRun,
+    metric_key: str,
+    metric: Optional[MetricSpec],
+    time_axis: np.ndarray,
+    time_limit: Optional[float] = None,
+) -> List[np.ndarray]:
     curves = []
     for prompt_run in run.prompt_runs:
-        values = pd.to_numeric(metric_series(prompt_run, metric_key, metric), errors="coerce")
-        elapsed = numeric_series(prompt_run.df, "elapsed_time")
-        valid = np.isfinite(values.to_numpy(dtype=float)) & np.isfinite(elapsed.to_numpy(dtype=float))
-        if not valid.any():
-            continue
-
-        aligned = pd.DataFrame({
-            "elapsed_time": elapsed[valid].to_numpy(dtype=float),
-            "value": values[valid].to_numpy(dtype=float),
-        }).sort_values("elapsed_time")
-        aligned = aligned.drop_duplicates(subset=["elapsed_time"], keep="last")
-        if aligned.empty:
+        aligned = time_aligned_values(prompt_run, metric_key, metric, time_limit)
+        if aligned is None:
             continue
 
         time_values = aligned["elapsed_time"].to_numpy(dtype=float)
@@ -692,6 +854,27 @@ def collect_time_curves(run: ExperimentRun, metric_key: str, metric: Optional[Me
     return curves
 
 
+def method_time_axis(
+    group_runs: Sequence[ExperimentRun],
+    metric_key: str,
+    metric: Optional[MetricSpec],
+    points: int,
+) -> Tuple[np.ndarray, float]:
+    run_limits = [
+        prompt_time_limit(prompt_run, metric_key, metric)
+        for run in group_runs
+        for prompt_run in run.prompt_runs
+    ]
+    run_limits = [limit for limit in run_limits if np.isfinite(limit)]
+    if not run_limits:
+        return np.array([0.0]), np.nan
+
+    time_limit = float(np.min(run_limits))
+    if time_limit > 0:
+        return np.linspace(0.0, time_limit, points), time_limit
+    return np.array([0.0]), time_limit
+
+
 def save_evolution_plot(
     methods: Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]],
     x_axis: np.ndarray,
@@ -702,6 +885,26 @@ def save_evolution_plot(
 ) -> None:
     fig, ax = plt.subplots(figsize=(10, 6))
     for method_label, (mean, std, count) in sorted(methods.items()):
+        plot_series_ci(ax, x_axis, mean, std, count, method_label)
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+    ax.set_title(title)
+    ax.grid(alpha=0.3)
+    ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), borderaxespad=0.0)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+
+
+def save_time_evolution_plot(
+    methods: Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]],
+    x_label: str,
+    y_label: str,
+    title: str,
+    out_path: Path,
+) -> None:
+    fig, ax = plt.subplots(figsize=(10, 6))
+    for method_label, (x_axis, mean, std, count) in sorted(methods.items()):
         plot_series_ci(ax, x_axis, mean, std, count, method_label)
     ax.set_xlabel(x_label)
     ax.set_ylabel(y_label)
@@ -731,26 +934,19 @@ def create_evolution_plots(runs: Sequence[ExperimentRun], out_dir: Path, metrics
         rows_progress = []
         rows_time = []
         by_weight_progress: Dict[str, Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]]] = {}
-        by_weight_time: Dict[str, Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]]] = {}
+        by_weight_time: Dict[str, Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]] = {}
         grouped_by_weight: Dict[str, Dict[str, List[ExperimentRun]]] = {}
         for (w_label, method_label), group_runs in grouped.items():
             grouped_by_weight.setdefault(w_label, {})[method_label] = group_runs
 
         for w_label, methods_runs in grouped_by_weight.items():
-            time_max = np.nanmax([
-                elapsed_final(prompt_run)
-                for group_runs in methods_runs.values()
-                for run in group_runs
-                for prompt_run in run.prompt_runs
-            ])
-            time_axis = np.linspace(0.0, time_max, points) if np.isfinite(time_max) and time_max > 0 else np.array([0.0])
-
             for method_label, group_runs in methods_runs.items():
                 progress_curves = []
                 time_curves = []
+                time_axis, time_limit = method_time_axis(group_runs, metric_key, metric, points)
                 for run in group_runs:
                     progress_curves.extend(collect_curves(run, metric_key, metric, x_percent))
-                    time_curves.extend(collect_time_curves(run, metric_key, metric, time_axis))
+                    time_curves.extend(collect_time_curves(run, metric_key, metric, time_axis, time_limit))
 
                 if progress_curves:
                     mean, std, count = stack_stats(progress_curves)
@@ -768,13 +964,14 @@ def create_evolution_plots(runs: Sequence[ExperimentRun], out_dir: Path, metrics
 
                 if time_curves:
                     mean, std, count = stack_stats(time_curves)
-                    by_weight_time.setdefault(w_label, {})[method_label] = (mean, std, count)
+                    by_weight_time.setdefault(w_label, {})[method_label] = (time_axis, mean, std, count)
                     for x, avg, sd, n in zip(time_axis, mean, std, count):
                         rows_time.append({
                             "weights": w_label,
                             "method": method_label,
                             "metric": metric_key,
                             "elapsed_time_seconds": x,
+                            "method_time_limit_seconds": time_limit,
                             "mean": avg,
                             "std": sd,
                             "count": n,
@@ -797,17 +994,8 @@ def create_evolution_plots(runs: Sequence[ExperimentRun], out_dir: Path, metrics
             )
         for w_label, methods in sorted(by_weight_time.items(), key=lambda item: weights_sort_key(item[0])):
             safe_w = re.sub(r"[^a-zA-Z0-9]+", "_", w_label).strip("_") or "unweighted"
-            time_values = [
-                row["elapsed_time_seconds"]
-                for row in rows_time
-                if row["weights"] == w_label
-            ]
-            if not time_values:
-                continue
-            time_axis = np.array(sorted(set(time_values)), dtype=float)
-            save_evolution_plot(
+            save_time_evolution_plot(
                 methods,
-                time_axis,
                 "Elapsed time (s)",
                 label,
                 f"{label} evolution by elapsed time ({w_label})",
@@ -1316,12 +1504,16 @@ def plot_distance_boxplots(values: pd.DataFrame, out_dir: Path) -> None:
 
 
 def run_pipeline(config: dict) -> None:
+    validate_slicing_config(config)
     metrics = enabled_metrics(config)
     out_dir = resolve_path(config.get("save_folder", "results_processed"))
     out_dir.mkdir(parents=True, exist_ok=True)
     slice_iterations = config.get("slice_index_iterations")
     slice_generations = config.get("slice_index_generations")
-    if slice_iterations is not None or slice_generations is not None:
+    slice_time = config.get("slice_time_seconds")
+    if slice_time is not None:
+        print(f"Running time-sliced processing with slice_time_seconds={slice_time}.")
+    elif slice_iterations is not None or slice_generations is not None:
         print(
             "Running sliced processing with "
             f"slice_index_iterations={slice_iterations}, "
@@ -1343,6 +1535,8 @@ def run_pipeline(config: dict) -> None:
     if not runs:
         raise FileNotFoundError("No valid prompt-level score_results.csv or fitness_results.csv files were parsed.")
 
+    apply_random_sampler_baseline_hotfix(runs, metrics)
+
     manifest = pd.DataFrame([
         {
             "folder": str(run.path.relative_to(REPO_ROOT) if run.path.is_relative_to(REPO_ROOT) else run.path),
@@ -1350,12 +1544,13 @@ def run_pipeline(config: dict) -> None:
             "method_key": run.method_key,
             "weights": run.weights_label,
             "seed": run.seed,
-                "backend": run.backend,
-                "model": run.model_tag,
-                "n_prompts": len(run.prompt_runs),
-                "slice_index_iterations": config.get("slice_index_iterations"),
-                "slice_index_generations": config.get("slice_index_generations"),
-                "sliced": any(prompt_run.sliced for prompt_run in run.prompt_runs),
+            "backend": run.backend,
+            "model": run.model_tag,
+            "n_prompts": len(run.prompt_runs),
+            "slice_index_iterations": config.get("slice_index_iterations"),
+            "slice_index_generations": config.get("slice_index_generations"),
+            "slice_time_seconds": config.get("slice_time_seconds"),
+            "sliced": any(prompt_run.sliced for prompt_run in run.prompt_runs),
         }
         for run in runs
     ])

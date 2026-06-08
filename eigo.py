@@ -19,6 +19,11 @@ from diffusers import (
     PixArtAlphaPipeline,
     StableDiffusionXLPipeline,
 )
+try:
+    from diffusers import SanaPipeline, SanaSprintPipeline
+except ImportError:
+    SanaPipeline = None
+    SanaSprintPipeline = None
 import random
 from PIL import Image
 import matplotlib.pyplot as plt
@@ -82,6 +87,8 @@ class Eigo:
         self.enable_vae_tiling = bool(config_parameters.get("enable_vae_tiling", False))
         self.enable_gradient_checkpointing = bool(config_parameters.get("enable_gradient_checkpointing", False))
         self._active_prompt_attention_mask = None
+        self._active_negative_prompt_embeds = None
+        self._active_negative_prompt_attention_mask = None
         self.aesthetic_score_weight = float(
             config_parameters.get("aesthetic_score_weight", config_parameters.get("alpha", 0.0))
         )
@@ -358,24 +365,28 @@ class Eigo:
 
     @staticmethod
     def _resolve_model_backend(config_parameters):
-        requested = str(config_parameters.get("model_backend", "auto")).lower()
-        if requested in ("sdxl", "flux", "pixart", "lcm"):
+        requested = str(config_parameters.get("model_backend", "auto")).lower().replace("-", "_")
+        if requested in ("sdxl", "flux", "pixart", "lcm", "sana", "sana_sprint"):
             return requested
         if requested != "auto":
             raise ValueError(
-                f"Invalid model_backend '{requested}'. Expected one of: auto, sdxl, flux, pixart, lcm."
+                f"Invalid model_backend '{requested}'. Expected one of: auto, sdxl, flux, pixart, lcm, sana, sana_sprint."
             )
         model_id = config_parameters["model_id"].lower()
         if "lcm" in model_id or "latent-consistency" in model_id:
             return "lcm"
         if "pixart" in model_id:
             return "pixart"
+        if "sana_sprint" in model_id or "sana-sprint" in model_id or "sanasprint" in model_id:
+            return "sana_sprint"
+        if "sana" in model_id:
+            return "sana"
         return "flux" if "flux" in model_id else "sdxl"
 
     def _resolve_model_dtype(self, config_parameters):
         dtype_name = str(config_parameters.get("torch_dtype", "auto")).lower()
         if dtype_name == "auto":
-            if self.model_backend == "flux" and torch.cuda.is_available():
+            if self.model_backend in ("flux", "sana", "sana_sprint") and torch.cuda.is_available():
                 return torch.bfloat16
             return torch.float32
 
@@ -499,6 +510,14 @@ class Eigo:
             return PixArtAlphaPipeline.from_pretrained(model_id, **common_kwargs), is_sharded
         if self.model_backend == "lcm":
             return DiffusionPipeline.from_pretrained(model_id, **common_kwargs), is_sharded
+        if self.model_backend == "sana":
+            if SanaPipeline is None:
+                raise ImportError("Sana backend requires a diffusers version that provides SanaPipeline.")
+            return SanaPipeline.from_pretrained(model_id, **common_kwargs), is_sharded
+        if self.model_backend == "sana_sprint":
+            if SanaSprintPipeline is None:
+                raise ImportError("Sana Sprint backend requires a diffusers version that provides SanaSprintPipeline.")
+            return SanaSprintPipeline.from_pretrained(model_id, **common_kwargs), is_sharded
         if self.model_backend == "sdxl":
             return StableDiffusionXLPipeline.from_pretrained(model_id, **common_kwargs), is_sharded
         raise ValueError(f"Unsupported model backend: {self.model_backend}")
@@ -527,15 +546,23 @@ class Eigo:
         elif self.model_backend == "pixart":
             encode_kwargs["negative_prompt"] = ""
             encode_kwargs["do_classifier_free_guidance"] = self.guidance_scale > 1.0
+        elif self.model_backend == "sana":
+            encode_kwargs["negative_prompt"] = ""
+            encode_kwargs["do_classifier_free_guidance"] = self.guidance_scale > 1.0
+            encode_kwargs["max_sequence_length"] = self.max_sequence_length
+        elif self.model_backend == "sana_sprint":
+            encode_kwargs["max_sequence_length"] = self.max_sequence_length
 
         encoded = self.pipe.encode_prompt(**encode_kwargs)
         if not isinstance(encoded, tuple):
             raise RuntimeError("Unexpected encode_prompt output type. Expected tuple.")
 
-        if self.model_backend == "pixart":
+        if self.model_backend in ("pixart", "sana", "sana_sprint"):
             if len(encoded) < 2:
-                raise RuntimeError("Unexpected PixArt encode_prompt output length.")
+                raise RuntimeError(f"Unexpected {self.model_backend} encode_prompt output length.")
             self._active_prompt_attention_mask = encoded[1]
+            self._active_negative_prompt_embeds = encoded[2] if self.model_backend == "sana" and len(encoded) >= 3 else None
+            self._active_negative_prompt_attention_mask = encoded[3] if self.model_backend == "sana" and len(encoded) >= 4 else None
             # Keep the optimization loop shape contract unchanged with a small dummy tensor.
             aux = torch.zeros((1, 1), dtype=encoded[0].dtype, device=self.device)
             return encoded[0], aux
@@ -584,13 +611,23 @@ class Eigo:
             "output_type": "pt",
         }
 
-        if self.model_backend == "pixart":
+        if self.model_backend in ("pixart", "sana", "sana_sprint"):
             if self._active_prompt_attention_mask is None:
                 raise RuntimeError(
-                    "PixArt prompt attention mask is not initialized. Call _encode_prompt_embeddings first."
+                    f"{self.model_backend} prompt attention mask is not initialized. Call _encode_prompt_embeddings first."
                 )
             kwargs["prompt_embeds"] = prompt_embeds
             kwargs["prompt_attention_mask"] = self._active_prompt_attention_mask.to(prompt_device)
+            if self.model_backend == "sana":
+                if self.guidance_scale > 1.0 and self._active_negative_prompt_embeds is None:
+                    raise RuntimeError("Sana negative prompt embeddings are required when guidance_scale > 1.")
+                if self._active_negative_prompt_embeds is not None:
+                    kwargs["negative_prompt_embeds"] = self._active_negative_prompt_embeds.to(
+                        device=prompt_device,
+                        dtype=self.model_dtype,
+                    )
+                if self._active_negative_prompt_attention_mask is not None:
+                    kwargs["negative_prompt_attention_mask"] = self._active_negative_prompt_attention_mask.to(prompt_device)
         elif self.model_backend == "lcm":
             kwargs["prompt_embeds"] = prompt_embeds
             kwargs[self._lcm_origin_steps_call_key()] = self.lcm_origin_steps
@@ -598,15 +635,36 @@ class Eigo:
             kwargs["prompt_embeds"] = prompt_embeds
             kwargs["pooled_prompt_embeds"] = pooled_prompt_embeds
 
-        if self.model_backend == "flux":
+        if self.model_backend in ("flux", "sana", "sana_sprint"):
             kwargs["max_sequence_length"] = self.max_sequence_length
 
         return kwargs
+
+    def _call_generation_pipeline(self, call_fn, generation_kwargs):
+        try:
+            return call_fn(**generation_kwargs)["images"]
+        except UnboundLocalError as exc:
+            if (
+                self.model_backend in ("sana", "sana_sprint")
+                and "local variable 'image' referenced before assignment" in str(exc)
+            ):
+                raise RuntimeError(
+                    "Sana/Sana Sprint generation failed while decoding latents to an image. "
+                    "Diffusers raised a misleading UnboundLocalError after catching a VAE "
+                    "out-of-memory error internally. For Adam with Sana Sprint, reduce memory "
+                    "pressure by using torch_dtype: auto or bfloat16, setting "
+                    "evaluate_zero_weight_metrics: false, enabling gradient checkpointing, "
+                    "lowering height/width, or enabling VAE tiling/slicing."
+                ) from exc
+            raise
         
     def generate_image_from_embeddings_cmaes(self, prompt_embeds, pooled_prompt_embeds, seed):
         generator = torch.Generator(device=self._pipeline_input_device()).manual_seed(seed)
 
-        out = self.pipe(**self._build_generation_kwargs(prompt_embeds, pooled_prompt_embeds, generator))["images"]
+        out = self._call_generation_pipeline(
+            self.pipe,
+            self._build_generation_kwargs(prompt_embeds, pooled_prompt_embeds, generator),
+        )
 
         image = out.clamp(0, 1).squeeze(0).permute(1, 2, 0)      # HWC
         return image.to(self.device)
@@ -617,7 +675,10 @@ class Eigo:
         prompt_embeds = text_embeddings[0]
         pooled_prompt_embeds = text_embeddings[1]
 
-        out = self.call_with_grad(**self._build_generation_kwargs(prompt_embeds, pooled_prompt_embeds, generator))["images"]
+        out = self._call_generation_pipeline(
+            self.call_with_grad,
+            self._build_generation_kwargs(prompt_embeds, pooled_prompt_embeds, generator),
+        )
 
         image = out.clamp(0, 1).squeeze(0).permute(1, 2, 0)      # HWC
         return image.to(self.device)
@@ -1738,10 +1799,10 @@ class Eigo:
         )
 
     @staticmethod
-    def _generate_sample_seeds(seed, num_images):
+    def _generate_sample_seeds(seed, num_images, excluded_seeds=None):
         rng = np.random.default_rng(int(seed))
         sample_seeds = []
-        seen = set()
+        seen = set(int(s) for s in (excluded_seeds or []))
         while len(sample_seeds) < num_images:
             candidate = int(rng.integers(0, 2**32 - 1, dtype=np.uint32))
             if candidate in seen:
@@ -1785,14 +1846,13 @@ class Eigo:
         ]).to(torch.float32).cpu().numpy()
 
         text_embeddings_init_shape = [prompt_embeds.shape, pooled_prompt_embeds.shape]
-        sample_seeds = self._generate_sample_seeds(seed, num_images)
+        sample_seeds = self._generate_sample_seeds(seed, num_images, excluded_seeds={seed})
 
         sample_rows = []
         sample_paths = []
-        time_list = []
+        sample_times = []
+        time_list = [0.0]
         start_time = time.time()
-        best_fitness_overall = -np.inf
-        best_sample_path = None
 
         fitness_history = []
         aesthetic_history = []
@@ -1800,6 +1860,74 @@ class Eigo:
         image_reward_history = []
         hpsv2_history = []
         pickscore_history = []
+
+        baseline_path = os.path.join(results_folder, "it_0.png")
+        initial_fitness, initial_aesthetic_score, initial_clip_score, initial_image_reward_score, initial_hpsv2_score, initial_pickscore_score, _ = self.evaluate(
+            trainable_params_init,
+            seed,
+            text_embeddings_init_shape,
+            selected_prompt,
+            baseline_path,
+        )
+        initial_positive_fitness = float(-initial_fitness)
+        initial_aesthetic_score = float(initial_aesthetic_score)
+        initial_clip_score = float(initial_clip_score)
+        initial_image_reward_score = float(initial_image_reward_score)
+        initial_hpsv2_score = float(initial_hpsv2_score)
+        initial_pickscore_score = float(initial_pickscore_score)
+
+        best_fitness_overall = initial_positive_fitness
+        best_sample_path = baseline_path
+
+        fitness_history.append(initial_positive_fitness)
+        aesthetic_history.append(initial_aesthetic_score)
+        clip_history.append(initial_clip_score)
+        image_reward_history.append(initial_image_reward_score)
+        hpsv2_history.append(initial_hpsv2_score)
+        pickscore_history.append(initial_pickscore_score)
+
+        sample_rows.append({
+            "sample": 0,
+            "generation": 0,
+            "seed": seed,
+            "prompt": selected_prompt,
+            "fitness": initial_positive_fitness,
+            "aesthetic_score": initial_aesthetic_score,
+            "clip_score": initial_clip_score,
+            "image_reward_score": initial_image_reward_score,
+            "hpsv2_score": initial_hpsv2_score,
+            "pickscore_score": initial_pickscore_score,
+            "elapsed_time": 0.0,
+        })
+        if category is not None:
+            sample_rows[-1]["category"] = category
+
+        def build_random_sampler_results(histories, elapsed_times, sampled_seeds):
+            row_count = len(histories["fitness"])
+            return pd.DataFrame({
+                "generation": list(range(row_count)),
+                "prompt": [selected_prompt] + [''] * (row_count - 1),
+                "sampled_seed": sampled_seeds[:row_count],
+                "avg_fitness": [float(np.mean(histories["fitness"][:i])) for i in range(1, row_count + 1)],
+                "std_fitness": [float(np.std(histories["fitness"][:i])) for i in range(1, row_count + 1)],
+                "max_fitness": [float(np.max(histories["fitness"][:i])) for i in range(1, row_count + 1)],
+                "avg_aesthetic_score": [float(np.mean(histories["aesthetic"][:i])) for i in range(1, row_count + 1)],
+                "std_aesthetic_score": [float(np.std(histories["aesthetic"][:i])) for i in range(1, row_count + 1)],
+                "max_aesthetic_score": [float(np.max(histories["aesthetic"][:i])) for i in range(1, row_count + 1)],
+                "avg_clip_score": [float(np.mean(histories["clip"][:i])) for i in range(1, row_count + 1)],
+                "std_clip_score": [float(np.std(histories["clip"][:i])) for i in range(1, row_count + 1)],
+                "max_clip_score": [float(np.max(histories["clip"][:i])) for i in range(1, row_count + 1)],
+                "avg_image_reward_score": [float(np.mean(histories["image_reward"][:i])) for i in range(1, row_count + 1)],
+                "std_image_reward_score": [float(np.std(histories["image_reward"][:i])) for i in range(1, row_count + 1)],
+                "max_image_reward_score": [float(np.max(histories["image_reward"][:i])) for i in range(1, row_count + 1)],
+                "avg_hpsv2_score": [float(np.mean(histories["hpsv2"][:i])) for i in range(1, row_count + 1)],
+                "std_hpsv2_score": [float(np.std(histories["hpsv2"][:i])) for i in range(1, row_count + 1)],
+                "max_hpsv2_score": [float(np.max(histories["hpsv2"][:i])) for i in range(1, row_count + 1)],
+                "avg_pickscore_score": [float(np.mean(histories["pickscore"][:i])) for i in range(1, row_count + 1)],
+                "std_pickscore_score": [float(np.std(histories["pickscore"][:i])) for i in range(1, row_count + 1)],
+                "max_pickscore_score": [float(np.max(histories["pickscore"][:i])) for i in range(1, row_count + 1)],
+                "elapsed_time": elapsed_times[:row_count],
+            })
 
         for sample_index, sample_seed in enumerate(sample_seeds, start=1):
             elapsed_time = time.time() - start_time
@@ -1827,9 +1955,6 @@ class Eigo:
             hpsv2_score = float(hpsv2_score)
             pickscore_score = float(pickscore_score)
 
-            if sample_index == 1:
-                shutil.copyfile(sample_path, os.path.join(results_folder, "it_0.png"))
-
             if positive_fitness > best_fitness_overall:
                 best_fitness_overall = positive_fitness
                 best_sample_path = sample_path
@@ -1843,12 +1968,13 @@ class Eigo:
             pickscore_history.append(pickscore_score)
             elapsed_time = time.time() - start_time
             time_list.append(elapsed_time)
+            sample_times.append(elapsed_time)
 
             sample_rows.append({
                 "sample": sample_index,
                 "generation": sample_index,
                 "seed": sample_seed,
-                "prompt": selected_prompt if sample_index == 1 else "",
+                "prompt": "",
                 "fitness": positive_fitness,
                 "aesthetic_score": aesthetic_score,
                 "clip_score": clip_score,
@@ -1859,34 +1985,18 @@ class Eigo:
             })
             sample_paths.append(sample_path)
 
-            results = pd.DataFrame({
-                "generation": list(range(1, sample_index + 1)),
-                "prompt": [selected_prompt] + [''] * (sample_index - 1),
-                "sampled_seed": sample_seeds[:sample_index],
-                "avg_fitness": [float(np.mean(fitness_history[:i])) for i in range(1, sample_index + 1)],
-                "std_fitness": [float(np.std(fitness_history[:i])) for i in range(1, sample_index + 1)],
-                "max_fitness": [float(np.max(fitness_history[:i])) for i in range(1, sample_index + 1)],
-                "avg_aesthetic_score": [float(np.mean(aesthetic_history[:i])) for i in range(1, sample_index + 1)],
-                "std_aesthetic_score": [float(np.std(aesthetic_history[:i])) for i in range(1, sample_index + 1)],
-                "max_aesthetic_score": [float(np.max(aesthetic_history[:i])) for i in range(1, sample_index + 1)],
-                "avg_clip_score": [float(np.mean(clip_history[:i])) for i in range(1, sample_index + 1)],
-                "std_clip_score": [float(np.std(clip_history[:i])) for i in range(1, sample_index + 1)],
-                "max_clip_score": [float(np.max(clip_history[:i])) for i in range(1, sample_index + 1)],
-                "avg_image_reward_score": [float(np.mean(image_reward_history[:i])) for i in range(1, sample_index + 1)],
-                "std_image_reward_score": [float(np.std(image_reward_history[:i])) for i in range(1, sample_index + 1)],
-                "max_image_reward_score": [float(np.max(image_reward_history[:i])) for i in range(1, sample_index + 1)],
-                "avg_hpsv2_score": [float(np.mean(hpsv2_history[:i])) for i in range(1, sample_index + 1)],
-                "std_hpsv2_score": [float(np.std(hpsv2_history[:i])) for i in range(1, sample_index + 1)],
-                "max_hpsv2_score": [float(np.max(hpsv2_history[:i])) for i in range(1, sample_index + 1)],
-                "avg_pickscore_score": [float(np.mean(pickscore_history[:i])) for i in range(1, sample_index + 1)],
-                "std_pickscore_score": [float(np.std(pickscore_history[:i])) for i in range(1, sample_index + 1)],
-                "max_pickscore_score": [float(np.max(pickscore_history[:i])) for i in range(1, sample_index + 1)],
-                "elapsed_time": time_list
-            })
+            results = build_random_sampler_results({
+                "fitness": fitness_history,
+                "aesthetic": aesthetic_history,
+                "clip": clip_history,
+                "image_reward": image_reward_history,
+                "hpsv2": hpsv2_history,
+                "pickscore": pickscore_history,
+            }, time_list, [seed] + sample_seeds[:sample_index])
 
             if category is not None:
-                results["category"] = [category] + [''] * (sample_index - 1)
-                sample_rows[-1]["category"] = category if sample_index == 1 else ""
+                results["category"] = [category] + [''] * (len(results) - 1)
+                sample_rows[-1]["category"] = ""
 
             results.to_csv(f"{results_folder}/fitness_results.csv", index=False, na_rep='nan')
             pd.DataFrame(sample_rows).to_csv(f"{results_folder}/sample_results.csv", index=False, na_rep='nan')
@@ -1899,8 +2009,6 @@ class Eigo:
                 f"PickScore: {pickscore_score}, Best fitness: {best_fitness_overall}"
             )
 
-        if best_sample_path is None:
-            raise RuntimeError("Random sampler did not evaluate any images.")
         shutil.copyfile(best_sample_path, f"{results_folder}/best_all.png")
 
         canonical_sample_rows = []
@@ -1911,7 +2019,17 @@ class Eigo:
         canonical_hpsv2_history = []
         canonical_pickscore_history = []
 
-        for idx, (sample_seed, sample_path, elapsed_time) in enumerate(zip(sample_seeds[:len(sample_paths)], sample_paths, time_list), start=1):
+        canonical_entries = [(0, seed, baseline_path, 0.0)] + [
+            (idx, sample_seed, sample_path, elapsed_time)
+            for idx, (sample_seed, sample_path, elapsed_time) in enumerate(
+                zip(sample_seeds[:len(sample_paths)], sample_paths, sample_times),
+                start=1,
+            )
+        ]
+
+        best_canonical_fitness = -np.inf
+        best_canonical_path = baseline_path
+        for idx, sample_seed, sample_path, elapsed_time in canonical_entries:
             (
                 canonical_fitness,
                 canonical_aesthetic_score,
@@ -1921,6 +2039,10 @@ class Eigo:
                 canonical_pickscore_score,
                 _,
             ) = self._evaluate_canonical_image_path_scores(sample_path, selected_prompt)
+
+            if float(canonical_fitness) > best_canonical_fitness:
+                best_canonical_fitness = float(canonical_fitness)
+                best_canonical_path = sample_path
 
             canonical_fitness_history.append(float(canonical_fitness))
             canonical_aesthetic_history.append(float(canonical_aesthetic_score))
@@ -1933,7 +2055,7 @@ class Eigo:
                 "sample": idx,
                 "generation": idx,
                 "seed": sample_seed,
-                "prompt": selected_prompt if idx == 1 else "",
+                "prompt": selected_prompt if idx == 0 else "",
                 "fitness": float(canonical_fitness),
                 "aesthetic_score": float(canonical_aesthetic_score),
                 "clip_score": float(canonical_clip_score),
@@ -1943,30 +2065,16 @@ class Eigo:
                 "elapsed_time": elapsed_time,
             })
 
-        results = pd.DataFrame({
-            "generation": list(range(1, len(canonical_sample_rows) + 1)),
-            "prompt": [selected_prompt] + [''] * (len(canonical_sample_rows) - 1),
-            "sampled_seed": sample_seeds[:len(canonical_sample_rows)],
-            "avg_fitness": [float(np.mean(canonical_fitness_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
-            "std_fitness": [float(np.std(canonical_fitness_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
-            "max_fitness": [float(np.max(canonical_fitness_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
-            "avg_aesthetic_score": [float(np.mean(canonical_aesthetic_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
-            "std_aesthetic_score": [float(np.std(canonical_aesthetic_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
-            "max_aesthetic_score": [float(np.max(canonical_aesthetic_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
-            "avg_clip_score": [float(np.mean(canonical_clip_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
-            "std_clip_score": [float(np.std(canonical_clip_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
-            "max_clip_score": [float(np.max(canonical_clip_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
-            "avg_image_reward_score": [float(np.mean(canonical_image_reward_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
-            "std_image_reward_score": [float(np.std(canonical_image_reward_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
-            "max_image_reward_score": [float(np.max(canonical_image_reward_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
-            "avg_hpsv2_score": [float(np.mean(canonical_hpsv2_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
-            "std_hpsv2_score": [float(np.std(canonical_hpsv2_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
-            "max_hpsv2_score": [float(np.max(canonical_hpsv2_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
-            "avg_pickscore_score": [float(np.mean(canonical_pickscore_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
-            "std_pickscore_score": [float(np.std(canonical_pickscore_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
-            "max_pickscore_score": [float(np.max(canonical_pickscore_history[:i])) for i in range(1, len(canonical_sample_rows) + 1)],
-            "elapsed_time": time_list[:len(canonical_sample_rows)]
-        })
+        shutil.copyfile(best_canonical_path, f"{results_folder}/best_all.png")
+
+        results = build_random_sampler_results({
+            "fitness": canonical_fitness_history,
+            "aesthetic": canonical_aesthetic_history,
+            "clip": canonical_clip_history,
+            "image_reward": canonical_image_reward_history,
+            "hpsv2": canonical_hpsv2_history,
+            "pickscore": canonical_pickscore_history,
+        }, time_list, [seed] + sample_seeds[:len(sample_paths)])
 
         if category is not None:
             results["category"] = [category] + [''] * (len(canonical_sample_rows) - 1)

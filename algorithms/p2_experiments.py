@@ -1,19 +1,19 @@
 """
-Population-based optimization of text embeddings for image generation using SDXL.
+Population-based optimization of text embeddings for image generation using the configured diffusion backend.
 
 This script employs an optimizer or sampler (CMA-ES, GA, Adam, or random sampling) to modify or sample text-to-image generations while maximizing aesthetic and CLIP scores. It supports configuration through a YAML file and provides functionality for prompt sampling, image generation, and evaluation.
 
 Main Features:
 - Loads configuration parameters from a YAML file.
 - Samples prompts from a dataset and groups them by category.
-- Generates images using Stable Diffusion XL with optimized text embeddings.
+- Generates images using the configured diffusion backend with optimized text embeddings.
 - Evaluates images using aesthetic and CLIP scores.
 - Saves results, including metrics and generated images, to an output folder.
 - Provides visualization of score evolution over generations.
 
 Dependencies:
 - PyTorch for deep learning operations.
-- diffusers for Stable Diffusion pipelines.
+- diffusers for text-to-image diffusion pipelines.
 - PIL for image processing.
 - datasets for loading prompt datasets.
 - matplotlib for plotting results.
