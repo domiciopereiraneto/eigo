@@ -1,12 +1,13 @@
 # EIGO
 
-Evolutionary Image Generation Optimization (EIGO) is a backend and experiment suite for optimizing text-to-image generation through prompt embedding search. The core engine combines diffusion pipelines, aesthetic predictors, CLIP-based prompt alignment, ImageReward, and HPSv2 to run black-box or gradient-based optimization without retraining the image model.
+Evolutionary Image Generation Optimization (EIGO) is a backend and experiment suite for optimizing text-to-image generation through prompt embedding or latent noise search. The core engine combines diffusion pipelines, aesthetic predictors, CLIP-based prompt alignment, ImageReward, and HPSv2 to run black-box or gradient-based optimization without retraining the image model.
 
 The repository currently exposes:
 
 - `eigo.py`: the main backend engine (`Eigo`) used by all experiment scripts
+- `src/optimization_targets.py`: shared prompt-embedding and latent-noise optimization target helpers
 - `algorithms/eigo_single_prompt.py`: run one prompt with Adam, GA, or CMA-ES
-- `algorithms/p2_experiments.py`: run batches over sampled Parti Prompts categories
+- `algorithms/p2_experiments.py`: run batches over sampled Parti Prompts or DrawBench categories
 - `algorithms/p2_schedule.py`: launch multiple `p2_experiments.py` runs from scheduled config overrides
 - `algorithms/eigo_grid_search.py`: run parameter sweeps for one prompt
 - `algorithms/tools/process_results.py`: generate summary tables, plots, and image grids from completed runs
@@ -39,6 +40,8 @@ conda activate eigo
 
 ```text
 eigo.py
+src/
+  optimization_targets.py
 algorithms/
   config/
     config_eigo.yaml
@@ -60,6 +63,7 @@ algorithms/
 
 - loading the selected diffusion pipeline
 - encoding prompt embeddings
+- preparing the selected optimization target (`prompt_embeddings` or `latent_noise`)
 - running Adam, GA, or CMA-ES optimization
 - scoring generated images with CLIP, an aesthetic predictor, ImageReward, and HPSv2
 - saving images, metrics, and run configuration
@@ -67,6 +71,7 @@ algorithms/
 The backend supports these diffusion backends:
 
 - `sdxl` via `StableDiffusionXLPipeline`
+- `sd` via `StableDiffusionPipeline` for Stable Diffusion v1/v2-family checkpoints
 - `flux` via `FluxPipeline`
 - `pixart` via `PixArtAlphaPipeline`
 - `lcm` via Diffusers' `LatentConsistencyModelPipeline`/`DiffusionPipeline`
@@ -78,6 +83,7 @@ Backends are configured through YAML, mainly with:
 
 - `model_id`
 - `model_backend`
+- `optimization_target`
 - `torch_dtype`
 - `max_sequence_length`
 - `use_multi_gpu`
@@ -117,6 +123,7 @@ Important fields in `config_eigo.yaml`:
 
 - `selected_prompt`
 - `optimization_method`
+- `optimization_target`
 - `seed`
 - `cuda`
 - `predictor`
@@ -146,7 +153,9 @@ Algorithm-specific fields:
 - GA: `num_generations`, `pop_size`, `ga_mutation_std`, `ga_elite_count`, `ga_crossover_rate`, `ga_mutation_rate`, `save_gens`
 - CMA-ES: `num_generations`, `pop_size`, `sigma`, `cmaes_variant`, `save_gens`
 
-### Parti Prompts Batch Experiments
+Set `optimization_target: "prompt_embeddings"` to optimize text conditioning, or `optimization_target: "latent_noise"` to optimize/sample the initial diffusion latent noise vector. With `random_sampler`, `prompt_embeddings` samples generation seeds and `latent_noise` samples random latent noise vectors.
+
+### Prompt Dataset Batch Experiments
 
 Edit [`algorithms/config/config_p2_experiments.yaml`](/home/posgrad/phd2025/dneto/eigo/algorithms/config/config_p2_experiments.yaml) and run:
 
@@ -157,6 +166,7 @@ python algorithms/p2_experiments.py --config algorithms/config/config_p2_experim
 This script:
 
 - loads the `nateraw/parti-prompts` dataset
+- or loads the `sayakpaul/drawbench` dataset when `prompt_dataset: "drawbench"`
 - samples prompts per category
 - runs EIGO for each selected prompt
 - saves run artifacts and aggregate plots/statistics inside the configured results directory
@@ -164,13 +174,14 @@ This script:
 Relevant config keys:
 
 - `prompt_per_categorie`
+- `prompt_dataset`
 - `prompt_sample_seed`
 - `seed` or `seed_path`
 - all shared backend/model parameters from `config_eigo.yaml`
 
 ### Scheduled Batch Runs
 
-To launch multiple Parti Prompts runs with different overrides:
+To launch multiple prompt dataset runs with different overrides:
 
 ```bash
 python algorithms/p2_schedule.py \

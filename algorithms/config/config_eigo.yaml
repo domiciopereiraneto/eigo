@@ -26,10 +26,11 @@
 "pickscore_model": "yuvalkirstain/PickScore_v1"  # PickScore checkpoint name; set to null to disable PickScore calculation
 "pickscore_processor": "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"  # Processor backbone for PickScore; set to null to disable PickScore calculation
 "evaluate_zero_weight_metrics": false  # If false, zero-weight metrics are not loaded/evaluated; recommended for Adam VRAM
-"model_id": "Efficient-Large-Model/Sana_Sprint_0.6B_1024px_diffusers" # Model ID (e.g., "black-forest-labs/FLUX.1-schnell", "PixArt-alpha/PixArt-XL-2-1024-MS", "Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers", "Efficient-Large-Model/Sana_1600M_1024px_diffusers", "stabilityai/sdxl-turbo", "SimianLuo/LCM_Dreamshaper_v7")
-"model_backend": "auto"  # Diffusion backend: "auto", "sdxl", "flux", "pixart", "lcm", "sana", or "sana_sprint"
+"optimization_target": "prompt_embeddings"  # "prompt_embeddings" or "latent_noise" for CMA-ES/GA/Adam/random_sampler
+"model_id": "Efficient-Large-Model/Sana_Sprint_0.6B_1024px_diffusers" # Model ID (e.g., "runwayml/stable-diffusion-v1-5", "stabilityai/stable-diffusion-2-1-base", "black-forest-labs/FLUX.1-schnell", "PixArt-alpha/PixArt-XL-2-1024-MS", "Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers", "Efficient-Large-Model/Sana_1600M_1024px_diffusers", "stabilityai/sdxl-turbo", "SimianLuo/LCM_Dreamshaper_v7")
+"model_backend": "auto"  # Diffusion backend: "auto", "sd", "sdxl", "flux", "pixart", "lcm", "sana", or "sana_sprint"
 "torch_dtype": "bfloat16"  # "auto", "float32", "float16", or "bfloat16" (FLUX on GPU usually benefits from bfloat16)
-"max_sequence_length": 256  # Max token length for FLUX/Sana text encoding (ignored for SDXL)
+"max_sequence_length": 256  # Max token length for FLUX/Sana text encoding (ignored for SD/SDXL)
 "use_safetensors": true  # Load model weights from safetensors when available
 "use_multi_gpu": false  # If true and multiple CUDA devices exist, shard the diffusion pipeline across GPUs
 "pipeline_device_map": "balanced"  # Device-map strategy for multi-GPU sharding (e.g., "balanced", "auto")
@@ -63,7 +64,7 @@ save_gens: false # Save individuals of each generation to the results folder
 "ga_mutation_rate": 0.1  # Per-dimension probability of applying mutation noise
 
 # Random sampler specific parameters (if selected)
-"num_images_to_generate": 20  # Number of random generation seeds/images to evaluate
+"num_images_to_generate": 20  # Number of random seeds/images to evaluate; latent_noise samples random latent vectors
 
 # Time limit specification
 time_limit_seconds: null # Time limit in seconds, if null then it follows the number of generations/iterations

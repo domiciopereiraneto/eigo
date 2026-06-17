@@ -78,20 +78,99 @@ else:
 
 # Prompt dataset loading and preprocessing
 # Supports either per-category prompt sampling or a single prompt per seed.
-prompt_dataset = load_dataset("nateraw/parti-prompts")["train"]
+PROMPT_DATASET_PRESETS = {
+    "parti": {
+        "path": "nateraw/parti-prompts",
+        "split": "train",
+        "prompt_columns": ("Prompt", "prompt", "Prompts", "prompts"),
+        "category_columns": ("Category", "category"),
+    },
+    "parti_prompts": {
+        "path": "nateraw/parti-prompts",
+        "split": "train",
+        "prompt_columns": ("Prompt", "prompt", "Prompts", "prompts"),
+        "category_columns": ("Category", "category"),
+    },
+    "drawbench": {
+        "path": "sayakpaul/drawbench",
+        "split": "train",
+        "prompt_columns": ("Prompts", "Prompt", "prompt", "prompts"),
+        "category_columns": ("Category", "category"),
+    },
+}
+
+
+def _normalize_prompt_dataset_name(name):
+    return str(name).strip().lower().replace("-", "_")
+
+
+def _first_present_value(item, candidate_columns):
+    for column in candidate_columns:
+        if column in item and item[column] is not None:
+            value = str(item[column]).strip()
+            if value:
+                return value
+    return None
+
+
+def _load_prompt_dataset(config):
+    dataset_name = _normalize_prompt_dataset_name(config.get("prompt_dataset", "parti"))
+    preset = PROMPT_DATASET_PRESETS.get(dataset_name)
+    if preset is None:
+        valid_names = ", ".join(sorted(PROMPT_DATASET_PRESETS))
+        raise ValueError(
+            f"Invalid prompt_dataset '{dataset_name}'. Expected one of: {valid_names}."
+        )
+
+    dataset_path = config.get("prompt_dataset_path", None) or preset["path"]
+    dataset_config = config.get("prompt_dataset_config", None)
+    dataset_split = config.get("prompt_dataset_split", None) or preset["split"]
+    prompt_columns = config.get("prompt_column", None) or preset["prompt_columns"]
+    category_columns = config.get("prompt_category_column", None) or preset["category_columns"]
+    if isinstance(prompt_columns, str):
+        prompt_columns = (prompt_columns,)
+    if isinstance(category_columns, str):
+        category_columns = (category_columns,)
+
+    if dataset_config is None:
+        dataset = load_dataset(dataset_path)[dataset_split]
+    else:
+        dataset = load_dataset(dataset_path, dataset_config)[dataset_split]
+
+    category_prompts = defaultdict(list)
+    all_prompts_with_category = []
+    skipped = 0
+    for item in dataset:
+        prompt = _first_present_value(item, prompt_columns)
+        if prompt is None:
+            skipped += 1
+            continue
+        category = _first_present_value(item, category_columns) or "Uncategorized"
+        category_prompts[category].append(prompt)
+        all_prompts_with_category.append((prompt, category))
+
+    if not all_prompts_with_category:
+        available_columns = ", ".join(dataset.column_names)
+        raise ValueError(
+            f"No prompts found in dataset '{dataset_path}' split '{dataset_split}'. "
+            f"Tried prompt column(s): {', '.join(prompt_columns)}. "
+            f"Available columns: {available_columns}."
+        )
+
+    print(
+        f"Loaded {len(all_prompts_with_category)} prompts from {dataset_path} "
+        f"({dataset_split}) across {len(category_prompts)} categories."
+    )
+    if skipped:
+        print(f"Skipped {skipped} dataset row(s) without a non-empty prompt.")
+    return category_prompts, all_prompts_with_category
+
+
+category_prompts, all_prompts_with_category = _load_prompt_dataset(config)
 
 N_PER_CATEGORY = config['prompt_per_categorie']  # Number of prompts to sample per category
 SUBSET_SEED = config['prompt_sample_seed']
 SINGLE_PROMPT_PER_SEED = config.get("single_prompt_per_seed", False)
-
-# Group prompts by category and also keep a flat prompt/category list.
-category_prompts = defaultdict(list)
-all_prompts_with_category = []
-for item in prompt_dataset:
-    category = item.get("Category", "Uncategorized")
-    prompt = item["Prompt"]
-    category_prompts[category].append(prompt)
-    all_prompts_with_category.append((prompt, category))
 
 
 def build_selected_prompts(seed):

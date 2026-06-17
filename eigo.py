@@ -17,6 +17,7 @@ from diffusers import (
     DiffusionPipeline,
     FluxPipeline,
     PixArtAlphaPipeline,
+    StableDiffusionPipeline,
     StableDiffusionXLPipeline,
 )
 try:
@@ -43,6 +44,16 @@ import inspect
 from contextlib import nullcontext
 from pathlib import Path
 from transformers import AutoModel, AutoProcessor
+from src.optimization_targets import (
+    LATENT_NOISE,
+    PROMPT_EMBEDDINGS,
+    adam_parameters_from_state,
+    adam_tensors,
+    build_target_state,
+    clone_best_adam_tensors,
+    resolve_optimization_target,
+    tensors_from_vector,
+)
 
 class Eigo:
     _MODEL_CACHE = {}
@@ -73,6 +84,7 @@ class Eigo:
         cls = type(self)
         self.parameters = config_parameters
         self.model_backend = self._resolve_model_backend(config_parameters)
+        self.optimization_target = resolve_optimization_target(config_parameters)
         self.guidance_scale = float(config_parameters.get("guidance_scale", 0.0))
         self.lcm_origin_steps = int(config_parameters.get("lcm_origin_steps", 50))
         if self.lcm_origin_steps <= 0:
@@ -171,7 +183,7 @@ class Eigo:
         model_tag = self._model_id_tag(config_parameters["model_id"])
         self.OUTPUT_FOLDER = (
             f"{config_parameters['results_folder']}/"
-            f"{method_save_name}_clip_{predictor_name}_{self.model_backend}_{model_tag}_"
+            f"{method_save_name}_{self.optimization_target}_clip_{predictor_name}_{self.model_backend}_{model_tag}_"
             f"{config_parameters['seed']}_"
             f"aesw{int(self.aesthetic_score_weight*100)}_"
             f"clipw{int(self.clip_score_weight*100)}_"
@@ -366,11 +378,13 @@ class Eigo:
     @staticmethod
     def _resolve_model_backend(config_parameters):
         requested = str(config_parameters.get("model_backend", "auto")).lower().replace("-", "_")
-        if requested in ("sdxl", "flux", "pixart", "lcm", "sana", "sana_sprint"):
+        if requested in ("sd", "stable_diffusion", "sdxl", "flux", "pixart", "lcm", "sana", "sana_sprint"):
+            if requested == "stable_diffusion":
+                return "sd"
             return requested
         if requested != "auto":
             raise ValueError(
-                f"Invalid model_backend '{requested}'. Expected one of: auto, sdxl, flux, pixart, lcm, sana, sana_sprint."
+                f"Invalid model_backend '{requested}'. Expected one of: auto, sd, sdxl, flux, pixart, lcm, sana, sana_sprint."
             )
         model_id = config_parameters["model_id"].lower()
         if "lcm" in model_id or "latent-consistency" in model_id:
@@ -381,6 +395,23 @@ class Eigo:
             return "sana_sprint"
         if "sana" in model_id:
             return "sana"
+        if (
+            "stable-diffusion-xl" in model_id
+            or "stable_diffusion_xl" in model_id
+            or "sdxl" in model_id
+        ):
+            return "sdxl"
+        if (
+            "stable-diffusion-v1" in model_id
+            or "stable-diffusion-1" in model_id
+            or "stable-diffusion-v2" in model_id
+            or "stable-diffusion-2" in model_id
+            or "stable-diffusion" in model_id
+            or "sd-v1" in model_id
+            or "sd-v2" in model_id
+            or "sd-turbo" in model_id
+        ):
+            return "sd"
         return "flux" if "flux" in model_id else "sdxl"
 
     def _resolve_model_dtype(self, config_parameters):
@@ -486,7 +517,7 @@ class Eigo:
                     module.enable_gradient_checkpointing()
 
     def _configure_pipeline_output_options(self, pipe):
-        if self.model_backend == "lcm" and hasattr(pipe, "safety_checker"):
+        if self.model_backend in ("sd", "lcm") and hasattr(pipe, "safety_checker"):
             pipe.safety_checker = None
             if hasattr(pipe, "requires_safety_checker"):
                 pipe.requires_safety_checker = False
@@ -518,6 +549,8 @@ class Eigo:
             if SanaSprintPipeline is None:
                 raise ImportError("Sana Sprint backend requires a diffusers version that provides SanaSprintPipeline.")
             return SanaSprintPipeline.from_pretrained(model_id, **common_kwargs), is_sharded
+        if self.model_backend == "sd":
+            return StableDiffusionPipeline.from_pretrained(model_id, **common_kwargs), is_sharded
         if self.model_backend == "sdxl":
             return StableDiffusionXLPipeline.from_pretrained(model_id, **common_kwargs), is_sharded
         raise ValueError(f"Unsupported model backend: {self.model_backend}")
@@ -529,13 +562,17 @@ class Eigo:
         return self.device
 
     def _encode_prompt_embeddings(self, prompt):
+        self._active_prompt_attention_mask = None
+        self._active_negative_prompt_embeds = None
+        self._active_negative_prompt_attention_mask = None
+
         encode_kwargs = {
             "prompt": prompt,
             "device": self._pipeline_input_device(),
             "num_images_per_prompt": 1,
         }
 
-        if self.model_backend == "sdxl":
+        if self.model_backend in ("sd", "sdxl"):
             encode_kwargs["negative_prompt"] = ""
             encode_kwargs["do_classifier_free_guidance"] = self.guidance_scale > 1.0
         elif self.model_backend == "lcm":
@@ -575,6 +612,19 @@ class Eigo:
             aux = torch.zeros((1, 1), dtype=encoded[0].dtype, device=self.device)
             return encoded[0], aux
 
+        if self.model_backend == "sd":
+            if len(encoded) < 1:
+                raise RuntimeError("Unexpected Stable Diffusion encode_prompt output length.")
+            if self.guidance_scale > 1.0:
+                if len(encoded) < 2 or encoded[1] is None:
+                    raise RuntimeError(
+                        "Stable Diffusion negative prompt embeddings are required when guidance_scale > 1."
+                    )
+                return encoded[0], encoded[1]
+            # Keep the optimization loop shape contract unchanged when CFG is disabled.
+            aux = torch.zeros((1, 1), dtype=encoded[0].dtype, device=self.device)
+            return encoded[0], aux
+
         if len(encoded) >= 4:
             # SDXL: prompt, negative_prompt, pooled_prompt, negative_pooled_prompt
             return encoded[0], encoded[2]
@@ -593,10 +643,88 @@ class Eigo:
             return "original_inference_steps"
         return "lcm_origin_steps"
 
-    def _build_generation_kwargs(self, prompt_embeds, pooled_prompt_embeds, generator):
+    def _latent_channel_count(self):
+        if self.model_backend == "flux":
+            transformer = getattr(self.pipe, "transformer", None)
+            config = getattr(transformer, "config", None)
+            in_channels = getattr(config, "in_channels", None)
+            if in_channels is not None:
+                return int(in_channels) // 4
+
+        for module_name in ("unet", "transformer"):
+            module = getattr(self.pipe, module_name, None)
+            config = getattr(module, "config", None)
+            in_channels = getattr(config, "in_channels", None)
+            if in_channels is not None:
+                return int(in_channels)
+        return int(self.parameters.get("num_channels_latents", 4))
+
+    def _prepare_initial_latents(self, seed):
+        prepare_latents = getattr(self.pipe, "prepare_latents", None)
+        if not callable(prepare_latents):
+            raise RuntimeError(
+                f"{self.model_backend} pipeline does not expose prepare_latents; "
+                "latent_noise optimization is not supported for this backend."
+            )
+
+        generator = torch.Generator(device=self._pipeline_input_device()).manual_seed(int(seed))
+        prompt_device = self._pipeline_input_device()
+        kwargs = {
+            "batch_size": 1,
+            "num_channels_latents": self._latent_channel_count(),
+            "height": self.parameters["height"],
+            "width": self.parameters["width"],
+            "dtype": self.model_dtype,
+            "device": prompt_device,
+            "generator": generator,
+            "latents": None,
+        }
+
+        try:
+            signature = inspect.signature(prepare_latents)
+            call_kwargs = {key: value for key, value in kwargs.items() if key in signature.parameters}
+            latents = prepare_latents(**call_kwargs)
+        except TypeError:
+            latents = prepare_latents(
+                kwargs["batch_size"],
+                kwargs["num_channels_latents"],
+                kwargs["height"],
+                kwargs["width"],
+                kwargs["dtype"],
+                prompt_device,
+                generator,
+                None,
+            )
+
+        if isinstance(latents, tuple):
+            latents = latents[0]
+        if not torch.is_tensor(latents):
+            raise RuntimeError("prepare_latents did not return a tensor or tensor tuple.")
+        init_noise_sigma = getattr(getattr(self.pipe, "scheduler", None), "init_noise_sigma", None)
+        if init_noise_sigma is not None:
+            sigma = float(init_noise_sigma)
+            if sigma != 0:
+                latents = latents / sigma
+        return latents.detach().to(device=self.device, dtype=torch.float32)
+
+    def _build_optimization_target_state(self, selected_prompt, seed):
+        prompt_embeds, pooled_prompt_embeds = self._encode_prompt_embeddings(selected_prompt)
+        latents = None
+        if self.optimization_target == LATENT_NOISE:
+            latents = self._prepare_initial_latents(seed)
+        return build_target_state(
+            self.optimization_target,
+            prompt_embeds,
+            pooled_prompt_embeds,
+            latents=latents,
+        )
+
+    def _build_generation_kwargs(self, prompt_embeds, pooled_prompt_embeds, generator, latents=None):
         prompt_device = self._pipeline_input_device()
         prompt_embeds = prompt_embeds.to(device=prompt_device, dtype=self.model_dtype)
         pooled_prompt_embeds = pooled_prompt_embeds.to(device=prompt_device, dtype=self.model_dtype)
+        if latents is not None:
+            latents = latents.to(device=prompt_device, dtype=self.model_dtype)
         effective_steps = int(self.parameters["num_inference_steps"])
         if self.model_backend == "pixart" and effective_steps == 1:
             # Some PixArt scheduler paths in diffusers expect >=2 steps.
@@ -631,12 +759,18 @@ class Eigo:
         elif self.model_backend == "lcm":
             kwargs["prompt_embeds"] = prompt_embeds
             kwargs[self._lcm_origin_steps_call_key()] = self.lcm_origin_steps
+        elif self.model_backend == "sd":
+            kwargs["prompt_embeds"] = prompt_embeds
+            if self.guidance_scale > 1.0:
+                kwargs["negative_prompt_embeds"] = pooled_prompt_embeds
         else:
             kwargs["prompt_embeds"] = prompt_embeds
             kwargs["pooled_prompt_embeds"] = pooled_prompt_embeds
 
         if self.model_backend in ("flux", "sana", "sana_sprint"):
             kwargs["max_sequence_length"] = self.max_sequence_length
+        if latents is not None:
+            kwargs["latents"] = latents
 
         return kwargs
 
@@ -658,30 +792,39 @@ class Eigo:
                 ) from exc
             raise
         
-    def generate_image_from_embeddings_cmaes(self, prompt_embeds, pooled_prompt_embeds, seed):
+    def generate_image_from_tensors_cmaes(self, prompt_embeds, pooled_prompt_embeds, seed, latents=None):
         generator = torch.Generator(device=self._pipeline_input_device()).manual_seed(seed)
 
         out = self._call_generation_pipeline(
             self.pipe,
-            self._build_generation_kwargs(prompt_embeds, pooled_prompt_embeds, generator),
+            self._build_generation_kwargs(prompt_embeds, pooled_prompt_embeds, generator, latents=latents),
+        )
+
+        image = out.clamp(0, 1).squeeze(0).permute(1, 2, 0)      # HWC
+        return image.to(self.device)
+
+    def generate_image_from_embeddings_cmaes(self, prompt_embeds, pooled_prompt_embeds, seed):
+        return self.generate_image_from_tensors_cmaes(prompt_embeds, pooled_prompt_embeds, seed)
+
+    def generate_image_from_tensors_adam(self, prompt_embeds, pooled_prompt_embeds, seed, latents=None):
+        generator = torch.Generator(device=self._pipeline_input_device()).manual_seed(seed)
+
+        out = self._call_generation_pipeline(
+            self.call_with_grad,
+            self._build_generation_kwargs(prompt_embeds, pooled_prompt_embeds, generator, latents=latents),
         )
 
         image = out.clamp(0, 1).squeeze(0).permute(1, 2, 0)      # HWC
         return image.to(self.device)
 
     def generate_image_from_embeddings_adam(self, text_embeddings, seed):
-        generator = torch.Generator(device=self._pipeline_input_device()).manual_seed(seed)
-
-        prompt_embeds = text_embeddings[0]
-        pooled_prompt_embeds = text_embeddings[1]
-
-        out = self._call_generation_pipeline(
-            self.call_with_grad,
-            self._build_generation_kwargs(prompt_embeds, pooled_prompt_embeds, generator),
+        latents = text_embeddings[2] if len(text_embeddings) > 2 else None
+        return self.generate_image_from_tensors_adam(
+            text_embeddings[0],
+            text_embeddings[1],
+            seed,
+            latents=latents,
         )
-
-        image = out.clamp(0, 1).squeeze(0).permute(1, 2, 0)      # HWC
-        return image.to(self.device)
 
     def _adam_autocast_context(self):
         autocast_dtype = self.model_dtype
@@ -1078,6 +1221,7 @@ class Eigo:
         run_config["resolved_model_backend"] = self.model_backend
         run_config["resolved_torch_dtype"] = str(self.model_dtype).replace("torch.", "")
         run_config["resolved_lcm_origin_steps"] = self.lcm_origin_steps
+        run_config["resolved_optimization_target"] = self.optimization_target
 
         if category is not None:
             run_config["category"] = category
@@ -1088,17 +1232,11 @@ class Eigo:
         with open(config_save_path, "w", encoding="utf-8") as file:
             yaml.safe_dump(run_config, file, sort_keys=False, allow_unicode=True)
 
-    def evaluate(self, input_embedding, seed, embedding_shape, selected_prompt, save_path=None):
-        # x is a NumPy array representing the embedding vector
-        # Convert it to a torch tensor
-
-        # Reshape the embedding to the original shape
-        split = np.prod(embedding_shape[0])
-        pe  = torch.tensor(input_embedding[:split],  dtype=torch.float32, device=self.device).view(embedding_shape[0])
-        ppe = torch.tensor(input_embedding[split:], dtype=torch.float32, device=self.device).view(embedding_shape[1])
+    def evaluate(self, input_embedding, seed, target_state, selected_prompt, save_path=None):
+        pe, ppe, latents = tensors_from_vector(input_embedding, target_state, self.device)
 
         with torch.no_grad():
-            image = self.generate_image_from_embeddings_cmaes(pe, ppe, seed)
+            image = self.generate_image_from_tensors_cmaes(pe, ppe, seed, latents=latents)
 
             fitness, aesthetic_score, clip_score, image_reward_score, hpsv2_score, pickscore_score, components = (
                 self._evaluate_canonical_image_scores(image, selected_prompt)
@@ -1226,7 +1364,7 @@ class Eigo:
         save_path = None
 
         with torch.no_grad():
-            prompt_embeds, pooled_prompt_embeds = self._encode_prompt_embeddings(selected_prompt)
+            target_state = self._build_optimization_target_state(selected_prompt, seed)
 
         # Set CMA-ES options
         es_options = {
@@ -1249,26 +1387,23 @@ class Eigo:
         else:
             raise ValueError(f"Unknown CMA-ES variant: {self.parameters['cmaes_variant']}")
 
-        trainable_params_init = torch.cat([
-            prompt_embeds.flatten(),
-            pooled_prompt_embeds.flatten()
-            ]).to(torch.float32).cpu().numpy()
-
-        sh_prompt  = prompt_embeds.shape         
-        sh_pooled  = pooled_prompt_embeds.shape  
-
-        text_embeddings_init_shape = [sh_prompt, sh_pooled]
+        trainable_params_init = target_state["initial_vector"]
 
         es = cma.CMAEvolutionStrategy(trainable_params_init, self.parameters["sigma"], es_options)
 
         with torch.no_grad():
-            initial_image = self.generate_image_from_embeddings_cmaes(prompt_embeds.clone(), pooled_prompt_embeds.clone(), seed)
+            initial_image = self.generate_image_from_tensors_cmaes(
+                target_state["prompt_embeds"].clone(),
+                target_state["pooled_prompt_embeds"].clone(),
+                seed,
+                latents=None if target_state["latents"] is None else target_state["latents"].clone(),
+            )
             image_np = initial_image.detach().clone().to(torch.float32).cpu().numpy()
             image_np = (image_np * 255).astype(np.uint8)
             pil_image = Image.fromarray(image_np)
             pil_image.save(f"{results_folder}/it_0.png")
 
-            initial_fitness, initial_aesthetic_score, initial_clip_score, initial_image_reward_score, initial_hpsv2_score, initial_pickscore_score, initial_components = self.evaluate(trainable_params_init, seed, text_embeddings_init_shape, selected_prompt)
+            initial_fitness, initial_aesthetic_score, initial_clip_score, initial_image_reward_score, initial_hpsv2_score, initial_pickscore_score, initial_components = self.evaluate(trainable_params_init, seed, target_state, selected_prompt)
 
         time_list = [0]
         best_aesthetic_score_overall = initial_aesthetic_score
@@ -1329,7 +1464,7 @@ class Eigo:
             for x in solutions:
                 if self.parameters["save_gens"]:
                     save_path = results_folder + "/gen_%d/id_%d.png" % (generation+1, ind_id)
-                fitness, aesthetic_score, clip_score, image_reward_score, hpsv2_score, pickscore_score, _ = self.evaluate(x, seed, text_embeddings_init_shape, selected_prompt, save_path)
+                fitness, aesthetic_score, clip_score, image_reward_score, hpsv2_score, pickscore_score, _ = self.evaluate(x, seed, target_state, selected_prompt, save_path)
                 tmp_fitnesses.append(fitness)
                 aesthetic_scores.append(aesthetic_score)
                 clip_scores.append(clip_score)
@@ -1395,10 +1530,8 @@ class Eigo:
 
             with torch.no_grad():
                 # Save the best image from the current generation.
-                split = np.prod(text_embeddings_init_shape[0])
-                best_pe  = torch.tensor(current_best_x[:split],  dtype=torch.float32, device=self.device).view(text_embeddings_init_shape[0])
-                best_ppe = torch.tensor(current_best_x[split:], dtype=torch.float32, device=self.device).view(text_embeddings_init_shape[1])
-                best_image = self.generate_image_from_embeddings_cmaes(best_pe, best_ppe, seed)
+                best_pe, best_ppe, best_latents = tensors_from_vector(current_best_x, target_state, self.device)
+                best_image = self.generate_image_from_tensors_cmaes(best_pe, best_ppe, seed, latents=best_latents)
                 image_np = best_image.detach().clone().to(torch.float32).cpu().numpy()
                 image_np = (image_np * 255).astype(np.uint8)
                 pil_image = Image.fromarray(image_np)
@@ -1457,10 +1590,17 @@ class Eigo:
 
         # Save the overall best image
         with torch.no_grad():
-            split = np.prod(text_embeddings_init_shape[0])
-            best_overall_pe  = torch.tensor(best_text_embeddings_overall[:split],  dtype=torch.float32, device=self.device).view(text_embeddings_init_shape[0])
-            best_overall_ppe = torch.tensor(best_text_embeddings_overall[split:], dtype=torch.float32, device=self.device).view(text_embeddings_init_shape[1])
-            best_image = self.generate_image_from_embeddings_cmaes(best_overall_pe, best_overall_ppe, seed)
+            best_overall_pe, best_overall_ppe, best_overall_latents = tensors_from_vector(
+                best_text_embeddings_overall,
+                target_state,
+                self.device,
+            )
+            best_image = self.generate_image_from_tensors_cmaes(
+                best_overall_pe,
+                best_overall_ppe,
+                seed,
+                latents=best_overall_latents,
+            )
         best_image_np = best_image.detach().to(torch.float32).cpu().numpy()
         best_image_np = (best_image_np * 255).astype(np.uint8)
         pil_image = Image.fromarray(best_image_np)
@@ -1541,24 +1681,22 @@ class Eigo:
         self._save_run_config(results_folder, seed, selected_prompt, category=category, prompt_number=prompt_number)
 
         with torch.no_grad():
-            prompt_embeds, pooled_prompt_embeds = self._encode_prompt_embeddings(selected_prompt)
-            initial_image = self.generate_image_from_embeddings_cmaes(prompt_embeds.clone(), pooled_prompt_embeds.clone(), seed)
+            target_state = self._build_optimization_target_state(selected_prompt, seed)
+            initial_image = self.generate_image_from_tensors_cmaes(
+                target_state["prompt_embeds"].clone(),
+                target_state["pooled_prompt_embeds"].clone(),
+                seed,
+                latents=None if target_state["latents"] is None else target_state["latents"].clone(),
+            )
             image_np = initial_image.detach().clone().to(torch.float32).cpu().numpy()
             image_np = (image_np * 255).astype(np.uint8)
             pil_image = Image.fromarray(image_np)
             pil_image.save(f"{results_folder}/it_0.png")
 
-        trainable_params_init = torch.cat([
-            prompt_embeds.flatten(),
-            pooled_prompt_embeds.flatten()
-        ]).to(torch.float32).cpu().numpy()
-
-        sh_prompt = prompt_embeds.shape
-        sh_pooled = pooled_prompt_embeds.shape
-        text_embeddings_init_shape = [sh_prompt, sh_pooled]
+        trainable_params_init = target_state["initial_vector"]
 
         initial_fitness, initial_aesthetic_score, initial_clip_score, initial_image_reward_score, initial_hpsv2_score, initial_pickscore_score, initial_components = self.evaluate(
-            trainable_params_init, seed, text_embeddings_init_shape, selected_prompt
+            trainable_params_init, seed, target_state, selected_prompt
         )
 
         population = np.repeat(trainable_params_init[None, :], pop_size, axis=0)
@@ -1615,7 +1753,7 @@ class Eigo:
                 if self.parameters["save_gens"]:
                     save_path = results_folder + "/gen_%d/id_%d.png" % (generation, ind_id)
                 fitness, aesthetic_score, clip_score, image_reward_score, hpsv2_score, pickscore_score, _ = self.evaluate(
-                    x, seed, text_embeddings_init_shape, selected_prompt, save_path
+                    x, seed, target_state, selected_prompt, save_path
                 )
                 tmp_fitnesses.append(fitness)
                 aesthetic_scores.append(aesthetic_score)
@@ -1678,10 +1816,8 @@ class Eigo:
                 best_text_embeddings_overall = best_x.copy()
 
             with torch.no_grad():
-                split = np.prod(text_embeddings_init_shape[0])
-                best_pe = torch.tensor(best_x[:split], dtype=torch.float32, device=self.device).view(text_embeddings_init_shape[0])
-                best_ppe = torch.tensor(best_x[split:], dtype=torch.float32, device=self.device).view(text_embeddings_init_shape[1])
-                best_image = self.generate_image_from_embeddings_cmaes(best_pe, best_ppe, seed)
+                best_pe, best_ppe, best_latents = tensors_from_vector(best_x, target_state, self.device)
+                best_image = self.generate_image_from_tensors_cmaes(best_pe, best_ppe, seed, latents=best_latents)
                 image_np = best_image.detach().clone().to(torch.float32).cpu().numpy()
                 image_np = (image_np * 255).astype(np.uint8)
                 pil_image = Image.fromarray(image_np)
@@ -1746,10 +1882,17 @@ class Eigo:
             population[0] = best_text_embeddings_overall.copy()
 
         with torch.no_grad():
-            split = np.prod(text_embeddings_init_shape[0])
-            best_overall_pe = torch.tensor(best_text_embeddings_overall[:split], dtype=torch.float32, device=self.device).view(text_embeddings_init_shape[0])
-            best_overall_ppe = torch.tensor(best_text_embeddings_overall[split:], dtype=torch.float32, device=self.device).view(text_embeddings_init_shape[1])
-            best_image = self.generate_image_from_embeddings_cmaes(best_overall_pe, best_overall_ppe, seed)
+            best_overall_pe, best_overall_ppe, best_overall_latents = tensors_from_vector(
+                best_text_embeddings_overall,
+                target_state,
+                self.device,
+            )
+            best_image = self.generate_image_from_tensors_cmaes(
+                best_overall_pe,
+                best_overall_ppe,
+                seed,
+                latents=best_overall_latents,
+            )
         best_image_np = best_image.detach().to(torch.float32).cpu().numpy()
         best_image_np = (best_image_np * 255).astype(np.uint8)
         pil_image = Image.fromarray(best_image_np)
@@ -1838,15 +1981,15 @@ class Eigo:
         self._save_run_config(results_folder, seed, selected_prompt, category=category, prompt_number=prompt_number)
 
         with torch.no_grad():
-            prompt_embeds, pooled_prompt_embeds = self._encode_prompt_embeddings(selected_prompt)
+            if self.optimization_target == LATENT_NOISE:
+                target_state = self._build_optimization_target_state(selected_prompt, seed)
+            else:
+                prompt_embeds, pooled_prompt_embeds = self._encode_prompt_embeddings(selected_prompt)
+                target_state = build_target_state(PROMPT_EMBEDDINGS, prompt_embeds, pooled_prompt_embeds)
 
-        trainable_params_init = torch.cat([
-            prompt_embeds.flatten(),
-            pooled_prompt_embeds.flatten()
-        ]).to(torch.float32).cpu().numpy()
-
-        text_embeddings_init_shape = [prompt_embeds.shape, pooled_prompt_embeds.shape]
+        trainable_params_init = target_state["initial_vector"]
         sample_seeds = self._generate_sample_seeds(seed, num_images, excluded_seeds={seed})
+        random_sampler_uses_latents = self.optimization_target == LATENT_NOISE
 
         sample_rows = []
         sample_paths = []
@@ -1865,7 +2008,7 @@ class Eigo:
         initial_fitness, initial_aesthetic_score, initial_clip_score, initial_image_reward_score, initial_hpsv2_score, initial_pickscore_score, _ = self.evaluate(
             trainable_params_init,
             seed,
-            text_embeddings_init_shape,
+            target_state,
             selected_prompt,
             baseline_path,
         )
@@ -1890,6 +2033,8 @@ class Eigo:
             "sample": 0,
             "generation": 0,
             "seed": seed,
+            "generation_seed": seed,
+            "sample_target": self.optimization_target,
             "prompt": selected_prompt,
             "fitness": initial_positive_fitness,
             "aesthetic_score": initial_aesthetic_score,
@@ -1908,6 +2053,7 @@ class Eigo:
                 "generation": list(range(row_count)),
                 "prompt": [selected_prompt] + [''] * (row_count - 1),
                 "sampled_seed": sampled_seeds[:row_count],
+                "sample_target": [self.optimization_target] * row_count,
                 "avg_fitness": [float(np.mean(histories["fitness"][:i])) for i in range(1, row_count + 1)],
                 "std_fitness": [float(np.std(histories["fitness"][:i])) for i in range(1, row_count + 1)],
                 "max_fitness": [float(np.max(histories["fitness"][:i])) for i in range(1, row_count + 1)],
@@ -1938,13 +2084,26 @@ class Eigo:
                 )
                 break
 
-            print(f"Random sample {sample_index}/{num_images} with generation seed {sample_seed}")
+            if random_sampler_uses_latents:
+                print(f"Random sample {sample_index}/{num_images} with latent seed {sample_seed}")
+                rng = np.random.default_rng(sample_seed)
+                sampled_vector = rng.normal(
+                    0.0,
+                    1.0,
+                    size=trainable_params_init.shape,
+                ).astype(np.float32)
+                evaluation_seed = seed
+                sample_path = os.path.join(results_folder, f"sample_{sample_index}_latent_seed_{sample_seed}.png")
+            else:
+                print(f"Random sample {sample_index}/{num_images} with generation seed {sample_seed}")
+                sampled_vector = trainable_params_init
+                evaluation_seed = sample_seed
+                sample_path = os.path.join(results_folder, f"sample_{sample_index}_seed_{sample_seed}.png")
 
-            sample_path = os.path.join(results_folder, f"sample_{sample_index}_seed_{sample_seed}.png")
             fitness, aesthetic_score, clip_score, image_reward_score, hpsv2_score, pickscore_score, _ = self.evaluate(
-                trainable_params_init,
-                sample_seed,
-                text_embeddings_init_shape,
+                sampled_vector,
+                evaluation_seed,
+                target_state,
                 selected_prompt,
                 sample_path,
             )
@@ -1974,6 +2133,8 @@ class Eigo:
                 "sample": sample_index,
                 "generation": sample_index,
                 "seed": sample_seed,
+                "generation_seed": evaluation_seed,
+                "sample_target": self.optimization_target,
                 "prompt": "",
                 "fitness": positive_fitness,
                 "aesthetic_score": aesthetic_score,
@@ -2055,6 +2216,8 @@ class Eigo:
                 "sample": idx,
                 "generation": idx,
                 "seed": sample_seed,
+                "generation_seed": seed if random_sampler_uses_latents else sample_seed,
+                "sample_target": self.optimization_target,
                 "prompt": selected_prompt if idx == 0 else "",
                 "fitness": float(canonical_fitness),
                 "aesthetic_score": float(canonical_aesthetic_score),
@@ -2244,19 +2407,22 @@ class Eigo:
             else:
                 pickscore_text_inputs = None
 
-        prompt_embeds, pooled_prompt_embeds = self._encode_prompt_embeddings(selected_prompt)
-        text_embeddings_init = [
-            prompt_embeds.detach().clone().to(torch.float32),
-            pooled_prompt_embeds.detach().clone().to(torch.float32),
-        ]
-        text_embeddings = [
-            torch.nn.Parameter(text_embeddings_init[0].clone()),
-            torch.nn.Parameter(text_embeddings_init[1].clone()),
-        ]
+        target_state = self._build_optimization_target_state(selected_prompt, seed)
+        trainable_params, fixed_target_tensors = adam_parameters_from_state(target_state)
+        initial_prompt_embeds, initial_pooled_prompt_embeds, initial_latents = adam_tensors(
+            trainable_params,
+            fixed_target_tensors,
+            self.optimization_target,
+        )
 
         with torch.no_grad():
             with self._adam_autocast_context():
-                initial_image = self.generate_image_from_embeddings_adam(text_embeddings_init, seed)
+                initial_image = self.generate_image_from_tensors_adam(
+                    initial_prompt_embeds,
+                    initial_pooled_prompt_embeds,
+                    seed,
+                    latents=initial_latents,
+                )
             image_np = self._tensor_to_uint8_image(initial_image)
             pil_image = Image.fromarray(image_np)
             pil_image.save(f"{results_folder}/it_0.png")
@@ -2289,10 +2455,14 @@ class Eigo:
         combined_loss_list = [initial_combined_loss.item()]
         time_list = [0]
         best_score = initial_combined_score.item()
-        best_text_embeddings = [t.detach().clone() for t in text_embeddings_init]
+        best_target_tensors = clone_best_adam_tensors(
+            trainable_params,
+            fixed_target_tensors,
+            self.optimization_target,
+        )
 
         optimizer = torch.optim.AdamW(
-            text_embeddings,
+            trainable_params,
             lr=adam_lr,
             betas=(adam_beta1, adam_beta2),
             weight_decay=adam_weight_decay,
@@ -2337,7 +2507,17 @@ class Eigo:
             optimizer.zero_grad(set_to_none=True)
 
             with self._adam_autocast_context():
-                image = self.generate_image_from_embeddings_adam(text_embeddings, seed)
+                prompt_embeds, pooled_prompt_embeds, latents = adam_tensors(
+                    trainable_params,
+                    fixed_target_tensors,
+                    self.optimization_target,
+                )
+                image = self.generate_image_from_tensors_adam(
+                    prompt_embeds,
+                    pooled_prompt_embeds,
+                    seed,
+                    latents=latents,
+                )
             aesthetic_score = self.aesthetic_evaluation(image)
             clip_score = self.evaluate_clip_score_adam(image, text_features)
             image_reward_score = self.evaluate_image_reward_adam(
@@ -2365,7 +2545,7 @@ class Eigo:
             # Calculate gradients
             combined_loss.backward()
             if adam_max_grad_norm is not None:
-                torch.nn.utils.clip_grad_norm_(text_embeddings, max_norm=adam_max_grad_norm)
+                torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=adam_max_grad_norm)
             # Update parameters
             optimizer.step()
 
@@ -2378,7 +2558,11 @@ class Eigo:
 
             if combined_score.item() > best_score:
                 best_score = combined_score.item()
-                best_text_embeddings = [t.detach().clone() for t in text_embeddings]
+                best_target_tensors = clone_best_adam_tensors(
+                    trainable_params,
+                    fixed_target_tensors,
+                    self.optimization_target,
+                )
 
             combined_score_list.append(combined_score.item())
             combined_loss_list.append(combined_loss.item())
@@ -2425,7 +2609,12 @@ class Eigo:
         # Save the overall best image
         with torch.no_grad():
             with self._adam_autocast_context():
-                best_image = self.generate_image_from_embeddings_adam(best_text_embeddings, seed)
+                best_image = self.generate_image_from_tensors_adam(
+                    best_target_tensors[0],
+                    best_target_tensors[1],
+                    seed,
+                    latents=best_target_tensors[2],
+                )
         best_image_np = self._tensor_to_uint8_image(best_image)
         pil_image = Image.fromarray(best_image_np)
         pil_image.save(f"{results_folder}/best_all.png")
