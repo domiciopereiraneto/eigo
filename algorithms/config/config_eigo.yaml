@@ -7,6 +7,7 @@
 "cuda": 1  # GPU device ID to use (e.g. 0 for the first GPU). If no GPU is available falls back to CPU.
 "predictor": 2  # Predictor type= 0 for SAM 1 for LAION V1 2 for LAION V2
 "num_inference_steps": 2  # Number of inference steps for the diffusion model during image generation; LCM usually works well with 1-8
+"batch_size": 1  # Number of candidates/images to generate and score at once for CMA-ES/GA/random_sampler
 "guidance_scale": 4.5  # Guidance scale for classifier-free guidance (set to 0 for no guidance)
 "lcm_origin_steps": 50  # Original diffusion steps for LCM backends; ignored by other backends
 "height": 512  # Height of the generated image in pixels
@@ -16,12 +17,16 @@
 "image_reward_score_weight": 0.0  # Weight for the ImageReward score in the combined fitness function
 "hpsv2_score_weight": 0.0  # Weight for the HPSv2 score in the combined fitness function
 "pickscore_score_weight": 0.0  # Weight for the PickScore score in the combined fitness function
+"jpeg_size_weight": 0.0  # Weight for JPEG size penalty in combined fitness (smaller is better)
 "max_aesthetic_score": 10  # Maximum possible aesthetic score (used for normalization)
 "max_clip_score": 0.5  # Maximum possible CLIP score (used for normalization)
 "max_image_reward_score": 1.0  # Approximate ImageReward normalization constant
 "max_hpsv2_score": 1.0  # Approximate HPSv2 normalization constant
 "max_pickscore_score": 1.0  # Approximate PickScore normalization constant
+"max_jpeg_size_kb": 1024.0  # JPEG size normalization constant in kilobytes
+"jpeg_quality": 95  # JPEG encoding quality used for saved images and size evaluation
 "image_reward_model": "ImageReward-v1.0"  # ImageReward checkpoint name; set to null to disable ImageReward calculation
+"clip_model_name": "ViT-L/14"  # OpenAI CLIP model used for CLIP score and LAION aesthetic predictors
 "hpsv2_version": "v2.1"  # HPSv2 checkpoint version; set to null to disable HPSv2 calculation
 "pickscore_model": "yuvalkirstain/PickScore_v1"  # PickScore checkpoint name; set to null to disable PickScore calculation
 "pickscore_processor": "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"  # Processor backbone for PickScore; set to null to disable PickScore calculation

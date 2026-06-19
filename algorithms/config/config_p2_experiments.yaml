@@ -2,7 +2,7 @@
 "optimization_method": "random_sampler" #"cmaes" for CMA-ES variants, "ga" for the genetic algorithm, "adam" for AdamW, "random_sampler" for random seed sampling
 
 # Prompt dataset parameters (used by p2_experiments.py)
-seed_path: "algorithms/config/seeds_2.txt"  # Path to a file with seeds; if null, uses the 'seed' below
+seed_path: "algorithms/config/seeds_1.txt"  # Path to a file with seeds; if null, uses the 'seed' below
 seed: 42  # Default seed value for reproducibility
 prompt_dataset: "drawbench"  # Prompt source: "parti" or "drawbench"
 prompt_dataset_path: null  # Optional HF dataset override; defaults to nateraw/parti-prompts or sayakpaul/drawbench
@@ -18,6 +18,7 @@ single_prompt_per_seed: true  # If true, ignore per-category sampling and pick o
 cuda: 0  # GPU device ID to use (e.g., 0 for first GPU); falls back to CPU if unavailable
 predictor: 2  # 0: SAM, 1: LAION V1, 2: LAION V2
 num_inference_steps: 50  # Diffusion inference steps during image generation; LCM usually works well with 1-8
+batch_size: 15  # Number of candidates/images to generate and score at once for CMA-ES/GA/random_sampler
 guidance_scale: 7.5 # Classifier-free guidance scale (0 means disabled)
 lcm_origin_steps: 50  # Original diffusion steps for LCM backends; ignored by other backends
 height: 512  # Generated image height (pixels)
@@ -27,18 +28,22 @@ clip_score_weight: 0.0  # Weight for CLIP score in combined fitness
 image_reward_score_weight: 1.0  # Weight for ImageReward score in combined fitness
 hpsv2_score_weight: 0.0  # Weight for HPSv2 score in combined fitness
 pickscore_score_weight: 0.0  # Weight for PickScore score in combined fitness
+jpeg_size_weight: 0.0  # Weight for JPEG size penalty in combined fitness (smaller is better)
 max_aesthetic_score: 10  # Maximum aesthetic score (normalization)
 max_clip_score: 0.5  # Maximum CLIP score (normalization)
 max_image_reward_score: 1.0  # Approximate ImageReward normalization constant
 max_hpsv2_score: 1.0  # Approximate HPSv2 normalization constant
 max_pickscore_score: 1.0  # Approximate PickScore normalization constant
+max_jpeg_size_kb: 1024.0  # JPEG size normalization constant in kilobytes
+jpeg_quality: 95  # JPEG encoding quality used for saved images and size evaluation
 image_reward_model: "ImageReward-v1.0"  # ImageReward checkpoint name; set to null to disable ImageReward calculation
+clip_model_name: "ViT-L/14"  # OpenAI CLIP model used for CLIP score and LAION aesthetic predictors
 hpsv2_version: "v2.0"  # HPSv2 checkpoint version; set to null to disable HPSv2 calculation
 pickscore_model: "yuvalkirstain/PickScore_v1"  # PickScore checkpoint name; set to null to disable PickScore calculation
 pickscore_processor: "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"  # Processor backbone for PickScore; set to null to disable PickScore calculation
-evaluate_zero_weight_metrics: true  # Keep zero-weight scorer models/graphs out of Adam VRAM
+evaluate_zero_weight_metrics: false  # Keep zero-weight scorer models/graphs out of Adam VRAM
 optimization_target: "latent_noise"  # "prompt_embeddings" or "latent_noise" for CMA-ES/GA/Adam/random_sampler
-results_folder: "results_random_sd15_imagereward"  # Output directory for runs and artifacts
+results_folder: "results_randomsampler_sd15_imagereward"  # Output directory for runs and artifacts
 
 # Diffusion model parameters
 model_id: "stable-diffusion-v1-5/stable-diffusion-v1-5" # Model ID (e.g., "black-forest-labs/FLUX.1-schnell", "PixArt-alpha/PixArt-XL-2-1024-MS", "Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers", "Efficient-Large-Model/Sana_1600M_1024px_diffusers", "stabilityai/sdxl-turbo", "SimianLuo/LCM_Dreamshaper_v7")
@@ -57,10 +62,10 @@ enable_vae_slicing: false  # Lower VRAM use for VAE
 enable_vae_tiling: false  # Useful for high-res decode on limited VRAM
 
 # CMA-ES specific parameters
-num_generations: 100 # Number of CMA-ES generations
-pop_size: 20  # CMA-ES population size
+num_generations: 15 # Number of CMA-ES generations
+pop_size: 16  # CMA-ES population size
 cmaes_variant: "sep"  # "cmaes" (standard), "sep", or "vd"
-sigma: 0.9127815799510312  # Initial CMA-ES standard deviation
+sigma: 0.1  # Initial CMA-ES standard deviation
 save_gens: true # Save individuals of each generation to the results folder
 
 # AdamW specific parameters (if selected)

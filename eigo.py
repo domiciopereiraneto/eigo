@@ -41,6 +41,7 @@ import argparse
 import re
 import ast
 import inspect
+from io import BytesIO
 from contextlib import nullcontext
 from pathlib import Path
 from transformers import AutoModel, AutoProcessor
@@ -89,6 +90,9 @@ class Eigo:
         self.lcm_origin_steps = int(config_parameters.get("lcm_origin_steps", 50))
         if self.lcm_origin_steps <= 0:
             raise ValueError("lcm_origin_steps must be a positive integer.")
+        self.batch_size = int(config_parameters.get("batch_size", 1))
+        if self.batch_size <= 0:
+            raise ValueError("batch_size must be a positive integer.")
         self.max_sequence_length = int(config_parameters.get("max_sequence_length", 512))
         self.model_dtype = self._resolve_model_dtype(config_parameters)
         self.use_multi_gpu = bool(config_parameters.get("use_multi_gpu", False))
@@ -112,6 +116,15 @@ class Eigo:
         )
         self.hpsv2_score_weight = float(config_parameters.get("hpsv2_score_weight", 0.0))
         self.pickscore_score_weight = float(config_parameters.get("pickscore_score_weight", 0.0))
+        self.jpeg_size_weight = float(config_parameters.get("jpeg_size_weight", 0.0))
+        self.jpeg_quality = int(config_parameters.get("jpeg_quality", 95))
+        if not 1 <= self.jpeg_quality <= 100:
+            raise ValueError("jpeg_quality must be between 1 and 100.")
+        if config_parameters["optimization_method"] == "adam" and self.jpeg_size_weight != 0.0:
+            raise ValueError(
+                "Adam cannot optimize jpeg_size_weight because JPEG encoding is non-differentiable. "
+                "Set jpeg_size_weight to 0 to record the metric without optimizing it."
+            )
         self.evaluate_zero_weight_metrics = bool(config_parameters.get("evaluate_zero_weight_metrics", False))
         self._metric_scales = {
             "aesthetic_score": float(config_parameters.get("max_aesthetic_score", 1.0)),
@@ -119,7 +132,10 @@ class Eigo:
             "image_reward_score": float(config_parameters.get("max_image_reward_score", 1.0)),
             "hpsv2_score": float(config_parameters.get("max_hpsv2_score", 1.0)),
             "pickscore_score": float(config_parameters.get("max_pickscore_score", 1.0)),
+            "jpeg_size_kb": float(config_parameters.get("max_jpeg_size_kb", 1024.0)),
         }
+        if self._metric_scales["jpeg_size_kb"] <= 0:
+            raise ValueError("max_jpeg_size_kb must be greater than 0.")
         image_reward_model_name = config_parameters.get(
             "image_reward_model_name",
             config_parameters.get("image_reward_model", "ImageReward-v1.0"),
@@ -152,6 +168,18 @@ class Eigo:
             and self.pickscore_processor_name is not None
             and self._should_evaluate_metric("pickscore_score")
         )
+        clip_model_name = config_parameters.get("clip_model_name", "ViT-L/14")
+        self.clip_model_name = None if clip_model_name is None else str(clip_model_name)
+        if self.clip_model_name is None and (
+            self._should_evaluate_metric("clip_score")
+            or (
+                config_parameters["predictor"] in (1, 2)
+                and self._should_evaluate_metric("aesthetic_score")
+            )
+        ):
+            raise ValueError(
+                "clip_model_name must be configured when CLIP score or LAION aesthetic score is evaluated."
+            )
 
         if config_parameters["predictor"] == 0:
             predictor_name = 'simulacra'
@@ -189,7 +217,8 @@ class Eigo:
             f"clipw{int(self.clip_score_weight*100)}_"
             f"irw{int(self.image_reward_score_weight*100)}_"
             f"hpsw{int(self.hpsv2_score_weight*100)}_"
-            f"psw{int(self.pickscore_score_weight*100)}"
+            f"psw{int(self.pickscore_score_weight*100)}_"
+            f"jpgw{int(self.jpeg_size_weight*100)}"
         )
 
         # Save the selected prompts and their categories to a text file in the results folder
@@ -217,6 +246,7 @@ class Eigo:
             self.use_pickscore,
             self.pickscore_processor_name if self.use_pickscore else None,
             self.pickscore_model_name if self.use_pickscore else None,
+            self.clip_model_name,
             self._should_evaluate_metric("aesthetic_score"),
             self._should_evaluate_metric("clip_score"),
             self.evaluate_zero_weight_metrics,
@@ -237,11 +267,10 @@ class Eigo:
             self._freeze_module_params(pipe)
             self._configure_pipeline_memory_options(pipe)
 
-            clip_model_name = "ViT-L/14"
             clip_model = None
             clip_preprocess = None
-            if self._should_evaluate_metric("clip_score"):
-                clip_model, clip_preprocess = clip.load(clip_model_name, device=self.device)
+            if self.clip_model_name is not None and self._should_evaluate_metric("clip_score"):
+                clip_model, clip_preprocess = clip.load(self.clip_model_name, device=self.device)
                 self._freeze_module_params(clip_model)
 
             aesthetic_model = None
@@ -254,12 +283,12 @@ class Eigo:
                 model_name = "LAIONV1"
                 if self._should_evaluate_metric("aesthetic_score"):
                     from aesthetic_evaluation.src import laion_rank_image
-                    aesthetic_model = laion_rank_image.LAIONAesthetic(self.device, clip_model=clip_model_name)
+                    aesthetic_model = laion_rank_image.LAIONAesthetic(self.device, clip_model=self.clip_model_name)
             elif config_parameters["predictor"] == 2:
                 model_name = "LAIONV2"
                 if self._should_evaluate_metric("aesthetic_score"):
                     from aesthetic_evaluation.src import laion_v2_rank_image
-                    aesthetic_model = laion_v2_rank_image.LAIONV2Aesthetic(self.device, clip_model=clip_model_name)
+                    aesthetic_model = laion_v2_rank_image.LAIONV2Aesthetic(self.device, clip_model=self.clip_model_name)
             else:
                 raise ValueError("Invalid predictor option.")
 
@@ -372,6 +401,7 @@ class Eigo:
             "image_reward_score": self.image_reward_score_weight,
             "hpsv2_score": self.hpsv2_score_weight,
             "pickscore_score": self.pickscore_score_weight,
+            "jpeg_size_kb": self.jpeg_size_weight,
         }
         return metric_weights.get(metric_name, 0.0) != 0.0
 
@@ -719,8 +749,39 @@ class Eigo:
             latents=latents,
         )
 
+    @staticmethod
+    def _repeat_to_batch(tensor, batch_size):
+        if tensor is None or batch_size == 1:
+            return tensor
+        if tensor.shape[0] == batch_size:
+            return tensor
+        if tensor.shape[0] != 1:
+            raise ValueError(
+                f"Cannot expand tensor with batch dimension {tensor.shape[0]} to batch_size {batch_size}."
+            )
+        repeat_shape = [batch_size] + [1] * (tensor.ndim - 1)
+        return tensor.repeat(*repeat_shape)
+
+    def _generators_for_batch(self, seed, batch_size):
+        generator_device = self._pipeline_input_device()
+        if isinstance(seed, (list, tuple, np.ndarray)):
+            if len(seed) != batch_size:
+                raise ValueError("Seed lists must match the generation batch size.")
+            generators = [
+                torch.Generator(device=generator_device).manual_seed(int(seed_value))
+                for seed_value in seed
+            ]
+            return generators[0] if batch_size == 1 else generators
+        if batch_size == 1:
+            return torch.Generator(device=generator_device).manual_seed(int(seed))
+        return [
+            torch.Generator(device=generator_device).manual_seed(int(seed))
+            for _ in range(batch_size)
+        ]
+
     def _build_generation_kwargs(self, prompt_embeds, pooled_prompt_embeds, generator, latents=None):
         prompt_device = self._pipeline_input_device()
+        batch_size = int(prompt_embeds.shape[0])
         prompt_embeds = prompt_embeds.to(device=prompt_device, dtype=self.model_dtype)
         pooled_prompt_embeds = pooled_prompt_embeds.to(device=prompt_device, dtype=self.model_dtype)
         if latents is not None:
@@ -745,17 +806,26 @@ class Eigo:
                     f"{self.model_backend} prompt attention mask is not initialized. Call _encode_prompt_embeddings first."
                 )
             kwargs["prompt_embeds"] = prompt_embeds
-            kwargs["prompt_attention_mask"] = self._active_prompt_attention_mask.to(prompt_device)
+            kwargs["prompt_attention_mask"] = self._repeat_to_batch(
+                self._active_prompt_attention_mask,
+                batch_size,
+            ).to(prompt_device)
             if self.model_backend == "sana":
                 if self.guidance_scale > 1.0 and self._active_negative_prompt_embeds is None:
                     raise RuntimeError("Sana negative prompt embeddings are required when guidance_scale > 1.")
                 if self._active_negative_prompt_embeds is not None:
-                    kwargs["negative_prompt_embeds"] = self._active_negative_prompt_embeds.to(
+                    kwargs["negative_prompt_embeds"] = self._repeat_to_batch(
+                        self._active_negative_prompt_embeds,
+                        batch_size,
+                    ).to(
                         device=prompt_device,
                         dtype=self.model_dtype,
                     )
                 if self._active_negative_prompt_attention_mask is not None:
-                    kwargs["negative_prompt_attention_mask"] = self._active_negative_prompt_attention_mask.to(prompt_device)
+                    kwargs["negative_prompt_attention_mask"] = self._repeat_to_batch(
+                        self._active_negative_prompt_attention_mask,
+                        batch_size,
+                    ).to(prompt_device)
         elif self.model_backend == "lcm":
             kwargs["prompt_embeds"] = prompt_embeds
             kwargs[self._lcm_origin_steps_call_key()] = self.lcm_origin_steps
@@ -793,7 +863,7 @@ class Eigo:
             raise
         
     def generate_image_from_tensors_cmaes(self, prompt_embeds, pooled_prompt_embeds, seed, latents=None):
-        generator = torch.Generator(device=self._pipeline_input_device()).manual_seed(seed)
+        generator = self._generators_for_batch(seed, int(prompt_embeds.shape[0]))
 
         out = self._call_generation_pipeline(
             self.pipe,
@@ -802,6 +872,19 @@ class Eigo:
 
         image = out.clamp(0, 1).squeeze(0).permute(1, 2, 0)      # HWC
         return image.to(self.device)
+
+    def generate_images_from_tensors_cmaes(self, prompt_embeds, pooled_prompt_embeds, seed, latents=None):
+        batch_size = int(prompt_embeds.shape[0])
+        generator = self._generators_for_batch(seed, batch_size)
+
+        out = self._call_generation_pipeline(
+            self.pipe,
+            self._build_generation_kwargs(prompt_embeds, pooled_prompt_embeds, generator, latents=latents),
+        )
+
+        if out.ndim == 3:
+            out = out.unsqueeze(0)
+        return out.clamp(0, 1).permute(0, 2, 3, 1).to(self.device)
 
     def generate_image_from_embeddings_cmaes(self, prompt_embeds, pooled_prompt_embeds, seed):
         return self.generate_image_from_tensors_cmaes(prompt_embeds, pooled_prompt_embeds, seed)
@@ -844,6 +927,27 @@ class Eigo:
         image_np = np.nan_to_num(image_np, nan=0.0, posinf=1.0, neginf=0.0)
         image_np = np.clip(image_np, 0.0, 1.0)
         return (image_np * 255).astype(np.uint8)
+
+    def _jpeg_bytes(self, image):
+        if torch.is_tensor(image):
+            image = Image.fromarray(self._tensor_to_uint8_image(image))
+        elif isinstance(image, np.ndarray):
+            image = Image.fromarray(image.astype(np.uint8, copy=False))
+        image = image.convert("RGB")
+        buffer = BytesIO()
+        image.save(buffer, format="JPEG", quality=self.jpeg_quality)
+        return buffer.getvalue()
+
+    def _jpeg_size_kb(self, image):
+        return float(len(self._jpeg_bytes(image)) / 1024.0)
+
+    def _save_jpeg(self, image, path):
+        if not str(path).lower().endswith((".jpg", ".jpeg")):
+            raise ValueError(f"Generated images must use a .jpg or .jpeg extension: {path}")
+        jpeg_bytes = self._jpeg_bytes(image)
+        with open(path, "wb") as file:
+            file.write(jpeg_bytes)
+        return float(len(jpeg_bytes) / 1024.0)
 
     def _uint8_image_to_tensor(self, image_np):
         image_np = np.asarray(image_np, dtype=np.float32) / 255.0
@@ -1060,24 +1164,28 @@ class Eigo:
             "image_reward_score": self.image_reward_score_weight,
             "hpsv2_score": self.hpsv2_score_weight,
             "pickscore_score": self.pickscore_score_weight,
+            "jpeg_size_kb": self.jpeg_size_weight,
         }
         components = {}
         total = None
         for metric_name, raw_value in metric_values.items():
             weight = metric_weights.get(metric_name, 0.0)
             scale = self._metric_scales.get(metric_name, 1.0)
-            component = weight * raw_value / scale
+            direction = -1.0 if metric_name == "jpeg_size_kb" else 1.0
+            component = direction * weight * raw_value / scale
             components[metric_name] = component
             total = component if total is None else total + component
         return total, components
 
-    def _evaluate_canonical_image_scores(self, image, selected_prompt):
+    def _evaluate_canonical_image_scores(self, image, selected_prompt, jpeg_size_kb=None):
         with torch.no_grad():
             aesthetic_score = self.aesthetic_evaluation(image).item()
             clip_score = self.evaluate_clip_score_cmaes(image, selected_prompt).item()
             image_reward_score = self.evaluate_image_reward_cmaes(image, selected_prompt)
             hpsv2_score = self.evaluate_hpsv2_cmaes(image, selected_prompt)
             pickscore_score = self.evaluate_pickscore_cmaes(image, selected_prompt)
+            if jpeg_size_kb is None:
+                jpeg_size_kb = self._jpeg_size_kb(image)
 
         combined_score, components = self._combine_metric_components({
             "aesthetic_score": aesthetic_score,
@@ -1085,6 +1193,7 @@ class Eigo:
             "image_reward_score": image_reward_score,
             "hpsv2_score": hpsv2_score,
             "pickscore_score": pickscore_score,
+            "jpeg_size_kb": jpeg_size_kb,
         })
 
         return (
@@ -1094,12 +1203,14 @@ class Eigo:
             image_reward_score,
             hpsv2_score,
             pickscore_score,
+            jpeg_size_kb,
             components,
         )
 
     def _evaluate_canonical_image_path_scores(self, image_path, selected_prompt):
         image = self._load_saved_image_tensor(image_path)
-        return self._evaluate_canonical_image_scores(image, selected_prompt)
+        jpeg_size_kb = float(os.path.getsize(image_path) / 1024.0)
+        return self._evaluate_canonical_image_scores(image, selected_prompt, jpeg_size_kb=jpeg_size_kb)
 
     @staticmethod
     def _population_metric_columns():
@@ -1110,6 +1221,7 @@ class Eigo:
             "image_reward_score": ("avg_image_reward_score", "std_image_reward_score", "max_image_reward_score"),
             "hpsv2_score": ("avg_hpsv2_score", "std_hpsv2_score", "max_hpsv2_score"),
             "pickscore_score": ("avg_pickscore_score", "std_pickscore_score", "max_pickscore_score"),
+            "jpeg_size_kb": ("avg_jpeg_size_kb", "std_jpeg_size_kb", "min_jpeg_size_kb"),
         }
 
     def _postprocess_population_results_from_saved_images(self, results, results_folder, selected_prompt):
@@ -1117,7 +1229,7 @@ class Eigo:
         metric_columns = self._population_metric_columns()
         for row_idx in range(len(results)):
             if row_idx == 0:
-                image_path = os.path.join(results_folder, "it_0.png")
+                image_path = os.path.join(results_folder, "it_0.jpg")
                 if not os.path.exists(image_path):
                     raise FileNotFoundError(
                         f"Cannot rebuild fitness_results.csv because {image_path} is missing."
@@ -1129,6 +1241,7 @@ class Eigo:
                     canonical_image_reward_score,
                     canonical_hpsv2_score,
                     canonical_pickscore_score,
+                    canonical_jpeg_size_kb,
                     _,
                 ) = self._evaluate_canonical_image_path_scores(image_path, selected_prompt)
                 metric_values = {
@@ -1138,6 +1251,7 @@ class Eigo:
                     "image_reward_score": [canonical_image_reward_score],
                     "hpsv2_score": [canonical_hpsv2_score],
                     "pickscore_score": [canonical_pickscore_score],
+                    "jpeg_size_kb": [canonical_jpeg_size_kb],
                 }
             else:
                 metric_values = None
@@ -1146,7 +1260,7 @@ class Eigo:
                     gen_image_paths = sorted(
                         os.path.join(gen_folder, name)
                         for name in os.listdir(gen_folder)
-                        if name.lower().endswith(".png")
+                        if name.lower().endswith((".jpg", ".jpeg"))
                     )
                     if gen_image_paths:
                         metric_values = {key: [] for key in metric_columns}
@@ -1158,6 +1272,7 @@ class Eigo:
                                 canonical_image_reward_score,
                                 canonical_hpsv2_score,
                                 canonical_pickscore_score,
+                                canonical_jpeg_size_kb,
                                 _,
                             ) = self._evaluate_canonical_image_path_scores(image_path, selected_prompt)
                             metric_values["fitness"].append(canonical_score)
@@ -1166,9 +1281,10 @@ class Eigo:
                             metric_values["image_reward_score"].append(canonical_image_reward_score)
                             metric_values["hpsv2_score"].append(canonical_hpsv2_score)
                             metric_values["pickscore_score"].append(canonical_pickscore_score)
+                            metric_values["jpeg_size_kb"].append(canonical_jpeg_size_kb)
 
                 if metric_values is None:
-                    image_path = os.path.join(results_folder, f"best_{row_idx}.png")
+                    image_path = os.path.join(results_folder, f"best_{row_idx}.jpg")
                     if not os.path.exists(image_path):
                         raise FileNotFoundError(
                             f"Cannot rebuild fitness_results.csv because {image_path} is missing."
@@ -1180,6 +1296,7 @@ class Eigo:
                         canonical_image_reward_score,
                         canonical_hpsv2_score,
                         canonical_pickscore_score,
+                        canonical_jpeg_size_kb,
                         _,
                     ) = self._evaluate_canonical_image_path_scores(image_path, selected_prompt)
                     results.at[row_idx, "max_fitness"] = canonical_score
@@ -1188,6 +1305,7 @@ class Eigo:
                     results.at[row_idx, "max_image_reward_score"] = canonical_image_reward_score
                     results.at[row_idx, "max_hpsv2_score"] = canonical_hpsv2_score
                     results.at[row_idx, "max_pickscore_score"] = canonical_pickscore_score
+                    results.at[row_idx, "min_jpeg_size_kb"] = canonical_jpeg_size_kb
                     continue
 
             for metric_name, values in metric_values.items():
@@ -1195,7 +1313,8 @@ class Eigo:
                 values_arr = np.asarray(values, dtype=float)
                 results.at[row_idx, avg_col] = float(np.mean(values_arr))
                 results.at[row_idx, std_col] = float(np.std(values_arr))
-                results.at[row_idx, max_col] = float(np.max(values_arr))
+                reducer = np.min if metric_name == "jpeg_size_kb" else np.max
+                results.at[row_idx, max_col] = float(reducer(values_arr))
 
         return results
 
@@ -1210,6 +1329,16 @@ class Eigo:
             return f"{minutes}m {seconds}s"
         else:
             return f"{seconds}s"
+
+    def _reset_peak_vram(self):
+        if not torch.cuda.is_available() or torch.device(self.device).type != "cuda":
+            return
+        torch.cuda.reset_peak_memory_stats(self.device)
+
+    def _peak_vram_mb(self):
+        if not torch.cuda.is_available() or torch.device(self.device).type != "cuda":
+            return 0.0
+        return float(torch.cuda.max_memory_allocated(self.device) / (1024 ** 2))
 
     def _save_run_config(self, results_folder, seed, selected_prompt, category=None, prompt_number=None):
         run_config = dict(self.parameters)
@@ -1238,19 +1367,75 @@ class Eigo:
         with torch.no_grad():
             image = self.generate_image_from_tensors_cmaes(pe, ppe, seed, latents=latents)
 
-            fitness, aesthetic_score, clip_score, image_reward_score, hpsv2_score, pickscore_score, components = (
+            fitness, aesthetic_score, clip_score, image_reward_score, hpsv2_score, pickscore_score, jpeg_size_kb, components = (
                 self._evaluate_canonical_image_scores(image, selected_prompt)
             )
 
         if save_path is not None:
-            # Save the generated image
-            image_np = image.detach().clone().to(torch.float32).cpu().numpy()
-            image_np = (image_np * 255).astype(np.uint8)
-            pil_image = Image.fromarray(image_np)
-            pil_image.save(save_path)
+            jpeg_size_kb = self._save_jpeg(image, save_path)
 
         # CMA-ES minimizes the function, so we need to invert the score if higher is better
-        return -fitness, aesthetic_score, clip_score, image_reward_score, hpsv2_score, pickscore_score, components
+        return -fitness, aesthetic_score, clip_score, image_reward_score, hpsv2_score, pickscore_score, jpeg_size_kb, components
+
+    def evaluate_batch(self, input_embeddings, seeds, target_state, selected_prompt, save_paths=None):
+        if len(input_embeddings) == 0:
+            return []
+        if len(input_embeddings) != len(seeds):
+            raise ValueError("evaluate_batch requires one seed per input embedding.")
+        if save_paths is None:
+            save_paths = [None] * len(input_embeddings)
+        if len(save_paths) != len(input_embeddings):
+            raise ValueError("evaluate_batch requires one save path per input embedding.")
+
+        results = []
+        batch_size = self.batch_size
+        for batch_start in range(0, len(input_embeddings), batch_size):
+            batch_embeddings = input_embeddings[batch_start:batch_start + batch_size]
+            batch_seeds = seeds[batch_start:batch_start + batch_size]
+            batch_save_paths = save_paths[batch_start:batch_start + batch_size]
+
+            prompt_embeds = []
+            pooled_prompt_embeds = []
+            latents = []
+            for input_embedding in batch_embeddings:
+                pe, ppe, candidate_latents = tensors_from_vector(input_embedding, target_state, self.device)
+                prompt_embeds.append(pe)
+                pooled_prompt_embeds.append(ppe)
+                if candidate_latents is not None:
+                    latents.append(candidate_latents)
+
+            batch_prompt_embeds = torch.cat(prompt_embeds, dim=0)
+            batch_pooled_prompt_embeds = torch.cat(pooled_prompt_embeds, dim=0)
+            batch_latents = torch.cat(latents, dim=0) if latents else None
+
+            with torch.no_grad():
+                images = self.generate_images_from_tensors_cmaes(
+                    batch_prompt_embeds,
+                    batch_pooled_prompt_embeds,
+                    [int(seed_value) for seed_value in batch_seeds],
+                    latents=batch_latents,
+                )
+
+                for image, save_path in zip(images, batch_save_paths):
+                    fitness, aesthetic_score, clip_score, image_reward_score, hpsv2_score, pickscore_score, jpeg_size_kb, components = (
+                        self._evaluate_canonical_image_scores(image, selected_prompt)
+                    )
+
+                    if save_path is not None:
+                        jpeg_size_kb = self._save_jpeg(image, save_path)
+
+                    results.append((
+                        -fitness,
+                        aesthetic_score,
+                        clip_score,
+                        image_reward_score,
+                        hpsv2_score,
+                        pickscore_score,
+                        jpeg_size_kb,
+                        components,
+                    ))
+
+        return results
 
     def _save_population_plot_results(self, results, results_folder):
         def plot_mean_std(x_axis, m_vec, std_vec, description, title=None, y_label=None, x_label=None):
@@ -1275,7 +1460,7 @@ class Eigo:
         plt.grid()
         plt.legend(loc="upper left", bbox_to_anchor=(1, 1))
         plt.tight_layout()
-        plt.savefig(results_folder + "/fitness_evolution.png")
+        plt.savefig(results_folder + "/fitness_evolution.jpg")
         plt.close()
 
         plt.figure(figsize=(10, 6))
@@ -1287,7 +1472,7 @@ class Eigo:
         plt.grid()
         plt.legend(loc="upper left", bbox_to_anchor=(1, 1))
         plt.tight_layout()
-        plt.savefig(results_folder + "/aesthetic_score_evolution.png")
+        plt.savefig(results_folder + "/aesthetic_score_evolution.jpg")
         plt.close()
 
         plt.figure(figsize=(10, 6))
@@ -1299,7 +1484,7 @@ class Eigo:
         plt.grid()
         plt.legend(loc="upper left", bbox_to_anchor=(1, 1))
         plt.tight_layout()
-        plt.savefig(results_folder + "/clip_score_evolution.png")
+        plt.savefig(results_folder + "/clip_score_evolution.jpg")
         plt.close()
 
         plt.figure(figsize=(10, 6))
@@ -1310,7 +1495,7 @@ class Eigo:
         plt.grid()
         plt.legend(loc="upper left", bbox_to_anchor=(1, 1))
         plt.tight_layout()
-        plt.savefig(results_folder + "/image_reward_evolution.png")
+        plt.savefig(results_folder + "/image_reward_evolution.jpg")
         plt.close()
 
         plt.figure(figsize=(10, 6))
@@ -1321,7 +1506,7 @@ class Eigo:
         plt.grid()
         plt.legend(loc="upper left", bbox_to_anchor=(1, 1))
         plt.tight_layout()
-        plt.savefig(results_folder + "/hpsv2_evolution.png")
+        plt.savefig(results_folder + "/hpsv2_evolution.jpg")
         plt.close()
 
         plt.figure(figsize=(10, 6))
@@ -1332,7 +1517,18 @@ class Eigo:
         plt.grid()
         plt.legend(loc="upper left", bbox_to_anchor=(1, 1))
         plt.tight_layout()
-        plt.savefig(results_folder + "/pickscore_evolution.png")
+        plt.savefig(results_folder + "/pickscore_evolution.jpg")
+        plt.close()
+
+        plt.figure(figsize=(10, 6))
+        plot_mean_std(results['generation'], results['avg_jpeg_size_kb'], results['std_jpeg_size_kb'], "Population")
+        plt.plot(results['generation'], results['min_jpeg_size_kb'], 'r-', label="Smallest")
+        plt.xlabel('Generation')
+        plt.ylabel('JPEG Size (KB)')
+        plt.grid()
+        plt.legend(loc="upper left", bbox_to_anchor=(1, 1))
+        plt.tight_layout()
+        plt.savefig(results_folder + "/jpeg_size_evolution.jpg")
         plt.close()
 
     def run_cmaes_optimization(self, seed = None, seed_number = None, prompt = None, category = None, prompt_number = None):
@@ -1363,6 +1559,7 @@ class Eigo:
 
         save_path = None
 
+        self._reset_peak_vram()
         with torch.no_grad():
             target_state = self._build_optimization_target_state(selected_prompt, seed)
 
@@ -1398,14 +1595,12 @@ class Eigo:
                 seed,
                 latents=None if target_state["latents"] is None else target_state["latents"].clone(),
             )
-            image_np = initial_image.detach().clone().to(torch.float32).cpu().numpy()
-            image_np = (image_np * 255).astype(np.uint8)
-            pil_image = Image.fromarray(image_np)
-            pil_image.save(f"{results_folder}/it_0.png")
+            self._save_jpeg(initial_image, f"{results_folder}/it_0.jpg")
 
-            initial_fitness, initial_aesthetic_score, initial_clip_score, initial_image_reward_score, initial_hpsv2_score, initial_pickscore_score, initial_components = self.evaluate(trainable_params_init, seed, target_state, selected_prompt)
+            initial_fitness, initial_aesthetic_score, initial_clip_score, initial_image_reward_score, initial_hpsv2_score, initial_pickscore_score, initial_jpeg_size_kb, initial_components = self.evaluate(trainable_params_init, seed, target_state, selected_prompt)
 
         time_list = [0]
+        peak_vram_mb_list = [self._peak_vram_mb()]
         best_aesthetic_score_overall = initial_aesthetic_score
         best_clip_score_overall = initial_clip_score
         best_fitness_overall = initial_fitness
@@ -1435,6 +1630,9 @@ class Eigo:
         max_pickscore_score_list = [initial_pickscore_score]
         avg_pickscore_score_list = [initial_pickscore_score]
         std_pickscore_score_list = [0]
+        min_jpeg_size_kb_list = [initial_jpeg_size_kb]
+        avg_jpeg_size_kb_list = [initial_jpeg_size_kb]
+        std_jpeg_size_kb_list = [0]
 
         while not es.stop():
             elapsed_time = time.time() - start_time
@@ -1446,6 +1644,7 @@ class Eigo:
                 break
 
             print(f"Generation {generation+1}/{self.parameters['num_generations']}")
+            self._reset_peak_vram()
 
             if self.parameters["save_gens"]:
                 os.makedirs(results_folder+"/gen_%d" % (generation+1), exist_ok=True)
@@ -1459,19 +1658,29 @@ class Eigo:
             image_reward_scores = []
             hpsv2_scores = []
             pickscore_scores = []
+            jpeg_sizes_kb = []
 
-            ind_id = 1
-            for x in solutions:
+            save_paths = []
+            for ind_id, _ in enumerate(solutions, start=1):
                 if self.parameters["save_gens"]:
-                    save_path = results_folder + "/gen_%d/id_%d.png" % (generation+1, ind_id)
-                fitness, aesthetic_score, clip_score, image_reward_score, hpsv2_score, pickscore_score, _ = self.evaluate(x, seed, target_state, selected_prompt, save_path)
+                    save_paths.append(results_folder + "/gen_%d/id_%d.jpg" % (generation+1, ind_id))
+                else:
+                    save_paths.append(None)
+            evaluated_solutions = self.evaluate_batch(
+                solutions,
+                [seed] * len(solutions),
+                target_state,
+                selected_prompt,
+                save_paths,
+            )
+            for fitness, aesthetic_score, clip_score, image_reward_score, hpsv2_score, pickscore_score, jpeg_size_kb, _ in evaluated_solutions:
                 tmp_fitnesses.append(fitness)
                 aesthetic_scores.append(aesthetic_score)
                 clip_scores.append(clip_score)
                 image_reward_scores.append(image_reward_score)
                 hpsv2_scores.append(hpsv2_score)
                 pickscore_scores.append(pickscore_score)
-                ind_id += 1
+                jpeg_sizes_kb.append(jpeg_size_kb)
             # Tell CMA-ES the fitnesses
             es.tell(solutions, tmp_fitnesses)
 
@@ -1522,6 +1731,12 @@ class Eigo:
             max_pickscore_score_list.append(max_pickscore_score)
             avg_pickscore_score_list.append(avg_pickscore_score)
             std_pickscore_score_list.append(std_pickscore_score)
+            min_jpeg_size_kb = min(jpeg_sizes_kb)
+            avg_jpeg_size_kb = np.mean(jpeg_sizes_kb)
+            std_jpeg_size_kb = np.std(jpeg_sizes_kb)
+            min_jpeg_size_kb_list.append(min_jpeg_size_kb)
+            avg_jpeg_size_kb_list.append(avg_jpeg_size_kb)
+            std_jpeg_size_kb_list.append(std_jpeg_size_kb)
 
             current_best_idx = int(np.argmin(tmp_fitnesses))
             current_best_x = solutions[current_best_idx]
@@ -1532,10 +1747,7 @@ class Eigo:
                 # Save the best image from the current generation.
                 best_pe, best_ppe, best_latents = tensors_from_vector(current_best_x, target_state, self.device)
                 best_image = self.generate_image_from_tensors_cmaes(best_pe, best_ppe, seed, latents=best_latents)
-                image_np = best_image.detach().clone().to(torch.float32).cpu().numpy()
-                image_np = (image_np * 255).astype(np.uint8)
-                pil_image = Image.fromarray(image_np)
-                pil_image.save(results_folder + "/best_%d.png" % (generation+1))
+                self._save_jpeg(best_image, results_folder + "/best_%d.jpg" % (generation+1))
 
             if best_fitness > best_fitness_overall:
                 best_fitness_overall = best_fitness
@@ -1552,6 +1764,7 @@ class Eigo:
             formatted_time_remaining = self.format_time(estimated_time_remaining)
 
             time_list.append(elapsed_time)
+            peak_vram_mb_list.append(self._peak_vram_mb())
 
             # Save the metrics
             results = pd.DataFrame({
@@ -1575,7 +1788,11 @@ class Eigo:
                 "avg_pickscore_score": avg_pickscore_score_list,
                 "std_pickscore_score": std_pickscore_score_list,
                 "max_pickscore_score": max_pickscore_score_list,
-                "elapsed_time": time_list
+                "avg_jpeg_size_kb": avg_jpeg_size_kb_list,
+                "std_jpeg_size_kb": std_jpeg_size_kb_list,
+                "min_jpeg_size_kb": min_jpeg_size_kb_list,
+                "elapsed_time": time_list,
+                "peak_vram_mb": peak_vram_mb_list,
             })
 
             if category is not None:
@@ -1601,10 +1818,7 @@ class Eigo:
                 seed,
                 latents=best_overall_latents,
             )
-        best_image_np = best_image.detach().to(torch.float32).cpu().numpy()
-        best_image_np = (best_image_np * 255).astype(np.uint8)
-        pil_image = Image.fromarray(best_image_np)
-        pil_image.save(f"{results_folder}/best_all.png")
+        self._save_jpeg(best_image, f"{results_folder}/best_all.jpg")
 
         results = pd.DataFrame({
             "generation": list(range(0, generation + 1)),
@@ -1627,7 +1841,11 @@ class Eigo:
             "avg_pickscore_score": avg_pickscore_score_list,
             "std_pickscore_score": std_pickscore_score_list,
             "max_pickscore_score": max_pickscore_score_list,
-            "elapsed_time": time_list
+            "avg_jpeg_size_kb": avg_jpeg_size_kb_list,
+            "std_jpeg_size_kb": std_jpeg_size_kb_list,
+            "min_jpeg_size_kb": min_jpeg_size_kb_list,
+            "elapsed_time": time_list,
+            "peak_vram_mb": peak_vram_mb_list,
         })
         if category is not None:
             results["category"] = [category] + [''] * generation
@@ -1680,6 +1898,7 @@ class Eigo:
         os.makedirs(results_folder, exist_ok=True)
         self._save_run_config(results_folder, seed, selected_prompt, category=category, prompt_number=prompt_number)
 
+        self._reset_peak_vram()
         with torch.no_grad():
             target_state = self._build_optimization_target_state(selected_prompt, seed)
             initial_image = self.generate_image_from_tensors_cmaes(
@@ -1688,14 +1907,11 @@ class Eigo:
                 seed,
                 latents=None if target_state["latents"] is None else target_state["latents"].clone(),
             )
-            image_np = initial_image.detach().clone().to(torch.float32).cpu().numpy()
-            image_np = (image_np * 255).astype(np.uint8)
-            pil_image = Image.fromarray(image_np)
-            pil_image.save(f"{results_folder}/it_0.png")
+            self._save_jpeg(initial_image, f"{results_folder}/it_0.jpg")
 
         trainable_params_init = target_state["initial_vector"]
 
-        initial_fitness, initial_aesthetic_score, initial_clip_score, initial_image_reward_score, initial_hpsv2_score, initial_pickscore_score, initial_components = self.evaluate(
+        initial_fitness, initial_aesthetic_score, initial_clip_score, initial_image_reward_score, initial_hpsv2_score, initial_pickscore_score, initial_jpeg_size_kb, initial_components = self.evaluate(
             trainable_params_init, seed, target_state, selected_prompt
         )
 
@@ -1706,6 +1922,7 @@ class Eigo:
         best_fitness_overall = -initial_fitness
         best_text_embeddings_overall = trainable_params_init.copy()
         time_list = [0]
+        peak_vram_mb_list = [self._peak_vram_mb()]
         start_time = time.time()
 
         max_fit_list = [best_fitness_overall]
@@ -1726,6 +1943,9 @@ class Eigo:
         max_pickscore_score_list = [initial_pickscore_score]
         avg_pickscore_score_list = [initial_pickscore_score]
         std_pickscore_score_list = [0]
+        min_jpeg_size_kb_list = [initial_jpeg_size_kb]
+        avg_jpeg_size_kb_list = [initial_jpeg_size_kb]
+        std_jpeg_size_kb_list = [0]
 
         for generation in range(1, num_generations + 1):
             elapsed_time = time.time() - start_time
@@ -1737,6 +1957,7 @@ class Eigo:
                 break
 
             print(f"Generation {generation}/{num_generations}")
+            self._reset_peak_vram()
 
             if self.parameters["save_gens"]:
                 os.makedirs(results_folder + "/gen_%d" % generation, exist_ok=True)
@@ -1747,20 +1968,29 @@ class Eigo:
             image_reward_scores = []
             hpsv2_scores = []
             pickscore_scores = []
+            jpeg_sizes_kb = []
 
-            for ind_id, x in enumerate(population, start=1):
-                save_path = None
+            save_paths = []
+            for ind_id, _ in enumerate(population, start=1):
                 if self.parameters["save_gens"]:
-                    save_path = results_folder + "/gen_%d/id_%d.png" % (generation, ind_id)
-                fitness, aesthetic_score, clip_score, image_reward_score, hpsv2_score, pickscore_score, _ = self.evaluate(
-                    x, seed, target_state, selected_prompt, save_path
-                )
+                    save_paths.append(results_folder + "/gen_%d/id_%d.jpg" % (generation, ind_id))
+                else:
+                    save_paths.append(None)
+            evaluated_population = self.evaluate_batch(
+                list(population),
+                [seed] * len(population),
+                target_state,
+                selected_prompt,
+                save_paths,
+            )
+            for fitness, aesthetic_score, clip_score, image_reward_score, hpsv2_score, pickscore_score, jpeg_size_kb, _ in evaluated_population:
                 tmp_fitnesses.append(fitness)
                 aesthetic_scores.append(aesthetic_score)
                 clip_scores.append(clip_score)
                 image_reward_scores.append(image_reward_score)
                 hpsv2_scores.append(hpsv2_score)
                 pickscore_scores.append(pickscore_score)
+                jpeg_sizes_kb.append(jpeg_size_kb)
 
             fitnesses = np.array([-f for f in tmp_fitnesses], dtype=float)
             order = np.argsort(fitnesses)[::-1]
@@ -1771,6 +2001,7 @@ class Eigo:
             image_reward_scores = np.array(image_reward_scores, dtype=float)[order]
             hpsv2_scores = np.array(hpsv2_scores, dtype=float)[order]
             pickscore_scores = np.array(pickscore_scores, dtype=float)[order]
+            jpeg_sizes_kb = np.array(jpeg_sizes_kb, dtype=float)[order]
 
             max_fit = float(np.max(fitnesses))
             avg_fit = float(np.mean(fitnesses))
@@ -1790,6 +2021,9 @@ class Eigo:
             max_pickscore_score = float(np.max(pickscore_scores))
             avg_pickscore_score = float(np.mean(pickscore_scores))
             std_pickscore_score = float(np.std(pickscore_scores))
+            min_jpeg_size_kb = float(np.min(jpeg_sizes_kb))
+            avg_jpeg_size_kb = float(np.mean(jpeg_sizes_kb))
+            std_jpeg_size_kb = float(np.std(jpeg_sizes_kb))
 
             max_fit_list.append(max_fit)
             avg_fit_list.append(avg_fit)
@@ -1809,6 +2043,9 @@ class Eigo:
             max_pickscore_score_list.append(max_pickscore_score)
             avg_pickscore_score_list.append(avg_pickscore_score)
             std_pickscore_score_list.append(std_pickscore_score)
+            min_jpeg_size_kb_list.append(min_jpeg_size_kb)
+            avg_jpeg_size_kb_list.append(avg_jpeg_size_kb)
+            std_jpeg_size_kb_list.append(std_jpeg_size_kb)
 
             best_x = population[0].copy()
             if max_fit > best_fitness_overall:
@@ -1818,10 +2055,7 @@ class Eigo:
             with torch.no_grad():
                 best_pe, best_ppe, best_latents = tensors_from_vector(best_x, target_state, self.device)
                 best_image = self.generate_image_from_tensors_cmaes(best_pe, best_ppe, seed, latents=best_latents)
-                image_np = best_image.detach().clone().to(torch.float32).cpu().numpy()
-                image_np = (image_np * 255).astype(np.uint8)
-                pil_image = Image.fromarray(image_np)
-                pil_image.save(results_folder + "/best_%d.png" % generation)
+                self._save_jpeg(best_image, results_folder + "/best_%d.jpg" % generation)
 
             elapsed_time = time.time() - start_time
             generations_done = generation
@@ -1830,6 +2064,7 @@ class Eigo:
             estimated_time_remaining = average_time_per_generation * generations_left
             formatted_time_remaining = self.format_time(estimated_time_remaining)
             time_list.append(elapsed_time)
+            peak_vram_mb_list.append(self._peak_vram_mb())
 
             results = pd.DataFrame({
                 "generation": list(range(0, generation + 1)),
@@ -1852,7 +2087,11 @@ class Eigo:
                 "avg_pickscore_score": avg_pickscore_score_list,
                 "std_pickscore_score": std_pickscore_score_list,
                 "max_pickscore_score": max_pickscore_score_list,
-                "elapsed_time": time_list
+                "avg_jpeg_size_kb": avg_jpeg_size_kb_list,
+                "std_jpeg_size_kb": std_jpeg_size_kb_list,
+                "min_jpeg_size_kb": min_jpeg_size_kb_list,
+                "elapsed_time": time_list,
+                "peak_vram_mb": peak_vram_mb_list,
             })
 
             if category is not None:
@@ -1893,10 +2132,7 @@ class Eigo:
                 seed,
                 latents=best_overall_latents,
             )
-        best_image_np = best_image.detach().to(torch.float32).cpu().numpy()
-        best_image_np = (best_image_np * 255).astype(np.uint8)
-        pil_image = Image.fromarray(best_image_np)
-        pil_image.save(f"{results_folder}/best_all.png")
+        self._save_jpeg(best_image, f"{results_folder}/best_all.jpg")
 
         results = pd.DataFrame({
             "generation": list(range(0, generation + 1)),
@@ -1919,7 +2155,11 @@ class Eigo:
             "avg_pickscore_score": avg_pickscore_score_list,
             "std_pickscore_score": std_pickscore_score_list,
             "max_pickscore_score": max_pickscore_score_list,
-            "elapsed_time": time_list
+            "avg_jpeg_size_kb": avg_jpeg_size_kb_list,
+            "std_jpeg_size_kb": std_jpeg_size_kb_list,
+            "min_jpeg_size_kb": min_jpeg_size_kb_list,
+            "elapsed_time": time_list,
+            "peak_vram_mb": peak_vram_mb_list,
         })
         if category is not None:
             results["category"] = [category] + [''] * generation
@@ -1980,6 +2220,7 @@ class Eigo:
         os.makedirs(results_folder, exist_ok=True)
         self._save_run_config(results_folder, seed, selected_prompt, category=category, prompt_number=prompt_number)
 
+        self._reset_peak_vram()
         with torch.no_grad():
             if self.optimization_target == LATENT_NOISE:
                 target_state = self._build_optimization_target_state(selected_prompt, seed)
@@ -1995,6 +2236,10 @@ class Eigo:
         sample_paths = []
         sample_times = []
         time_list = [0.0]
+        batch_ranges = [(0, 1)]
+        batch_elapsed_times = [0.0]
+        batch_peak_vram_values = []
+        batch_seed_ranges = [(seed, seed)]
         start_time = time.time()
 
         fitness_history = []
@@ -2003,9 +2248,10 @@ class Eigo:
         image_reward_history = []
         hpsv2_history = []
         pickscore_history = []
+        jpeg_size_history = []
 
-        baseline_path = os.path.join(results_folder, "it_0.png")
-        initial_fitness, initial_aesthetic_score, initial_clip_score, initial_image_reward_score, initial_hpsv2_score, initial_pickscore_score, _ = self.evaluate(
+        baseline_path = os.path.join(results_folder, "it_0.jpg")
+        initial_fitness, initial_aesthetic_score, initial_clip_score, initial_image_reward_score, initial_hpsv2_score, initial_pickscore_score, initial_jpeg_size_kb, _ = self.evaluate(
             trainable_params_init,
             seed,
             target_state,
@@ -2018,6 +2264,9 @@ class Eigo:
         initial_image_reward_score = float(initial_image_reward_score)
         initial_hpsv2_score = float(initial_hpsv2_score)
         initial_pickscore_score = float(initial_pickscore_score)
+        initial_jpeg_size_kb = float(initial_jpeg_size_kb)
+        peak_vram_mb_list = [self._peak_vram_mb()]
+        batch_peak_vram_values.append(peak_vram_mb_list[0])
 
         best_fitness_overall = initial_positive_fitness
         best_sample_path = baseline_path
@@ -2028,6 +2277,7 @@ class Eigo:
         image_reward_history.append(initial_image_reward_score)
         hpsv2_history.append(initial_hpsv2_score)
         pickscore_history.append(initial_pickscore_score)
+        jpeg_size_history.append(initial_jpeg_size_kb)
 
         sample_rows.append({
             "sample": 0,
@@ -2042,109 +2292,180 @@ class Eigo:
             "image_reward_score": initial_image_reward_score,
             "hpsv2_score": initial_hpsv2_score,
             "pickscore_score": initial_pickscore_score,
+            "jpeg_size_kb": initial_jpeg_size_kb,
             "elapsed_time": 0.0,
+            "peak_vram_mb": peak_vram_mb_list[0],
         })
         if category is not None:
             sample_rows[-1]["category"] = category
 
-        def build_random_sampler_results(histories, elapsed_times, sampled_seeds):
-            row_count = len(histories["fitness"])
+        def build_random_sampler_results(histories):
+            def batch_values(metric):
+                return [
+                    np.asarray(histories[metric][start:end], dtype=float)
+                    for start, end in batch_ranges
+                ]
+
+            fitness_batches = batch_values("fitness")
+            aesthetic_batches = batch_values("aesthetic")
+            clip_batches = batch_values("clip")
+            image_reward_batches = batch_values("image_reward")
+            hpsv2_batches = batch_values("hpsv2")
+            pickscore_batches = batch_values("pickscore")
+            jpeg_size_batches = batch_values("jpeg_size")
+            best_fitness = np.maximum.accumulate([np.max(values) for values in fitness_batches])
+            best_aesthetic = np.maximum.accumulate([np.max(values) for values in aesthetic_batches])
+            best_clip = np.maximum.accumulate([np.max(values) for values in clip_batches])
+            best_image_reward = np.maximum.accumulate([np.max(values) for values in image_reward_batches])
+            best_hpsv2 = np.maximum.accumulate([np.max(values) for values in hpsv2_batches])
+            best_pickscore = np.maximum.accumulate([np.max(values) for values in pickscore_batches])
+            smallest_jpeg = np.minimum.accumulate([np.min(values) for values in jpeg_size_batches])
+            row_count = len(batch_ranges)
             return pd.DataFrame({
                 "generation": list(range(row_count)),
                 "prompt": [selected_prompt] + [''] * (row_count - 1),
-                "sampled_seed": sampled_seeds[:row_count],
+                "sampled_seed": [seed_range[0] for seed_range in batch_seed_ranges],
+                "last_sampled_seed": [seed_range[1] for seed_range in batch_seed_ranges],
+                "sample_start": [start for start, _ in batch_ranges],
+                "sample_end": [end - 1 for _, end in batch_ranges],
+                "population_size": [end - start for start, end in batch_ranges],
                 "sample_target": [self.optimization_target] * row_count,
-                "avg_fitness": [float(np.mean(histories["fitness"][:i])) for i in range(1, row_count + 1)],
-                "std_fitness": [float(np.std(histories["fitness"][:i])) for i in range(1, row_count + 1)],
-                "max_fitness": [float(np.max(histories["fitness"][:i])) for i in range(1, row_count + 1)],
-                "avg_aesthetic_score": [float(np.mean(histories["aesthetic"][:i])) for i in range(1, row_count + 1)],
-                "std_aesthetic_score": [float(np.std(histories["aesthetic"][:i])) for i in range(1, row_count + 1)],
-                "max_aesthetic_score": [float(np.max(histories["aesthetic"][:i])) for i in range(1, row_count + 1)],
-                "avg_clip_score": [float(np.mean(histories["clip"][:i])) for i in range(1, row_count + 1)],
-                "std_clip_score": [float(np.std(histories["clip"][:i])) for i in range(1, row_count + 1)],
-                "max_clip_score": [float(np.max(histories["clip"][:i])) for i in range(1, row_count + 1)],
-                "avg_image_reward_score": [float(np.mean(histories["image_reward"][:i])) for i in range(1, row_count + 1)],
-                "std_image_reward_score": [float(np.std(histories["image_reward"][:i])) for i in range(1, row_count + 1)],
-                "max_image_reward_score": [float(np.max(histories["image_reward"][:i])) for i in range(1, row_count + 1)],
-                "avg_hpsv2_score": [float(np.mean(histories["hpsv2"][:i])) for i in range(1, row_count + 1)],
-                "std_hpsv2_score": [float(np.std(histories["hpsv2"][:i])) for i in range(1, row_count + 1)],
-                "max_hpsv2_score": [float(np.max(histories["hpsv2"][:i])) for i in range(1, row_count + 1)],
-                "avg_pickscore_score": [float(np.mean(histories["pickscore"][:i])) for i in range(1, row_count + 1)],
-                "std_pickscore_score": [float(np.std(histories["pickscore"][:i])) for i in range(1, row_count + 1)],
-                "max_pickscore_score": [float(np.max(histories["pickscore"][:i])) for i in range(1, row_count + 1)],
-                "elapsed_time": elapsed_times[:row_count],
+                "avg_fitness": [float(np.mean(values)) for values in fitness_batches],
+                "std_fitness": [float(np.std(values)) for values in fitness_batches],
+                "max_fitness": best_fitness.astype(float),
+                "avg_aesthetic_score": [float(np.mean(values)) for values in aesthetic_batches],
+                "std_aesthetic_score": [float(np.std(values)) for values in aesthetic_batches],
+                "max_aesthetic_score": best_aesthetic.astype(float),
+                "avg_clip_score": [float(np.mean(values)) for values in clip_batches],
+                "std_clip_score": [float(np.std(values)) for values in clip_batches],
+                "max_clip_score": best_clip.astype(float),
+                "avg_image_reward_score": [float(np.mean(values)) for values in image_reward_batches],
+                "std_image_reward_score": [float(np.std(values)) for values in image_reward_batches],
+                "max_image_reward_score": best_image_reward.astype(float),
+                "avg_hpsv2_score": [float(np.mean(values)) for values in hpsv2_batches],
+                "std_hpsv2_score": [float(np.std(values)) for values in hpsv2_batches],
+                "max_hpsv2_score": best_hpsv2.astype(float),
+                "avg_pickscore_score": [float(np.mean(values)) for values in pickscore_batches],
+                "std_pickscore_score": [float(np.std(values)) for values in pickscore_batches],
+                "max_pickscore_score": best_pickscore.astype(float),
+                "avg_jpeg_size_kb": [float(np.mean(values)) for values in jpeg_size_batches],
+                "std_jpeg_size_kb": [float(np.std(values)) for values in jpeg_size_batches],
+                "min_jpeg_size_kb": smallest_jpeg.astype(float),
+                "elapsed_time": batch_elapsed_times,
+                "peak_vram_mb": batch_peak_vram_values,
             })
 
-        for sample_index, sample_seed in enumerate(sample_seeds, start=1):
+        for batch_start in range(0, len(sample_seeds), self.batch_size):
             elapsed_time = time.time() - start_time
             if self.parameters['time_limit_seconds'] is not None and elapsed_time >= self.parameters['time_limit_seconds']:
                 print(
                     "Time limit reached before starting sample "
-                    f"{sample_index}/{num_images} (elapsed: {self.format_time(elapsed_time)})."
+                    f"{batch_start + 1}/{num_images} (elapsed: {self.format_time(elapsed_time)})."
                 )
                 break
 
-            if random_sampler_uses_latents:
-                print(f"Random sample {sample_index}/{num_images} with latent seed {sample_seed}")
-                rng = np.random.default_rng(sample_seed)
-                sampled_vector = rng.normal(
-                    0.0,
-                    1.0,
-                    size=trainable_params_init.shape,
-                ).astype(np.float32)
-                evaluation_seed = seed
-                sample_path = os.path.join(results_folder, f"sample_{sample_index}_latent_seed_{sample_seed}.png")
-            else:
-                print(f"Random sample {sample_index}/{num_images} with generation seed {sample_seed}")
-                sampled_vector = trainable_params_init
-                evaluation_seed = sample_seed
-                sample_path = os.path.join(results_folder, f"sample_{sample_index}_seed_{sample_seed}.png")
+            batch_sample_seeds = sample_seeds[batch_start:batch_start + self.batch_size]
+            batch_vectors = []
+            batch_evaluation_seeds = []
+            batch_sample_paths = []
+            batch_sample_indices = []
+            for offset, sample_seed in enumerate(batch_sample_seeds):
+                sample_index = batch_start + offset + 1
+                if random_sampler_uses_latents:
+                    print(f"Random sample {sample_index}/{num_images} with latent seed {sample_seed}")
+                    rng = np.random.default_rng(sample_seed)
+                    sampled_vector = rng.normal(
+                        0.0,
+                        1.0,
+                        size=trainable_params_init.shape,
+                    ).astype(np.float32)
+                    evaluation_seed = seed
+                    sample_path = os.path.join(results_folder, f"sample_{sample_index}_latent_seed_{sample_seed}.jpg")
+                else:
+                    print(f"Random sample {sample_index}/{num_images} with generation seed {sample_seed}")
+                    sampled_vector = trainable_params_init
+                    evaluation_seed = sample_seed
+                    sample_path = os.path.join(results_folder, f"sample_{sample_index}_seed_{sample_seed}.jpg")
 
-            fitness, aesthetic_score, clip_score, image_reward_score, hpsv2_score, pickscore_score, _ = self.evaluate(
-                sampled_vector,
-                evaluation_seed,
+                batch_vectors.append(sampled_vector)
+                batch_evaluation_seeds.append(evaluation_seed)
+                batch_sample_paths.append(sample_path)
+                batch_sample_indices.append(sample_index)
+
+            self._reset_peak_vram()
+            batch_results = self.evaluate_batch(
+                batch_vectors,
+                batch_evaluation_seeds,
                 target_state,
                 selected_prompt,
-                sample_path,
+                batch_sample_paths,
             )
-            positive_fitness = float(-fitness)
-            aesthetic_score = float(aesthetic_score)
-            clip_score = float(clip_score)
-            image_reward_score = float(image_reward_score)
-            hpsv2_score = float(hpsv2_score)
-            pickscore_score = float(pickscore_score)
+            batch_peak_vram_mb = self._peak_vram_mb()
+            history_start = len(fitness_history)
+            batch_generation = len(batch_ranges)
 
-            if positive_fitness > best_fitness_overall:
-                best_fitness_overall = positive_fitness
-                best_sample_path = sample_path
-                shutil.copyfile(sample_path, os.path.join(results_folder, f"best_{sample_index}.png"))
+            for (
+                sample_index,
+                sample_seed,
+                evaluation_seed,
+                sample_path,
+                (fitness, aesthetic_score, clip_score, image_reward_score, hpsv2_score, pickscore_score, jpeg_size_kb, _),
+            ) in zip(batch_sample_indices, batch_sample_seeds, batch_evaluation_seeds, batch_sample_paths, batch_results):
+                positive_fitness = float(-fitness)
+                aesthetic_score = float(aesthetic_score)
+                clip_score = float(clip_score)
+                image_reward_score = float(image_reward_score)
+                hpsv2_score = float(hpsv2_score)
+                pickscore_score = float(pickscore_score)
+                jpeg_size_kb = float(jpeg_size_kb)
 
-            fitness_history.append(positive_fitness)
-            aesthetic_history.append(aesthetic_score)
-            clip_history.append(clip_score)
-            image_reward_history.append(image_reward_score)
-            hpsv2_history.append(hpsv2_score)
-            pickscore_history.append(pickscore_score)
-            elapsed_time = time.time() - start_time
-            time_list.append(elapsed_time)
-            sample_times.append(elapsed_time)
+                if positive_fitness > best_fitness_overall:
+                    best_fitness_overall = positive_fitness
+                    best_sample_path = sample_path
+                    shutil.copyfile(sample_path, os.path.join(results_folder, f"best_{sample_index}.jpg"))
 
-            sample_rows.append({
-                "sample": sample_index,
-                "generation": sample_index,
-                "seed": sample_seed,
-                "generation_seed": evaluation_seed,
-                "sample_target": self.optimization_target,
-                "prompt": "",
-                "fitness": positive_fitness,
-                "aesthetic_score": aesthetic_score,
-                "clip_score": clip_score,
-                "image_reward_score": image_reward_score,
-                "hpsv2_score": hpsv2_score,
-                "pickscore_score": pickscore_score,
-                "elapsed_time": elapsed_time,
-            })
-            sample_paths.append(sample_path)
+                fitness_history.append(positive_fitness)
+                aesthetic_history.append(aesthetic_score)
+                clip_history.append(clip_score)
+                image_reward_history.append(image_reward_score)
+                hpsv2_history.append(hpsv2_score)
+                pickscore_history.append(pickscore_score)
+                jpeg_size_history.append(jpeg_size_kb)
+                elapsed_time = time.time() - start_time
+                time_list.append(elapsed_time)
+                sample_times.append(elapsed_time)
+                peak_vram_mb_list.append(batch_peak_vram_mb)
+
+                sample_rows.append({
+                    "sample": sample_index,
+                    "generation": batch_generation,
+                    "seed": sample_seed,
+                    "generation_seed": evaluation_seed,
+                    "sample_target": self.optimization_target,
+                    "prompt": "",
+                    "fitness": positive_fitness,
+                    "aesthetic_score": aesthetic_score,
+                    "clip_score": clip_score,
+                    "image_reward_score": image_reward_score,
+                    "hpsv2_score": hpsv2_score,
+                    "pickscore_score": pickscore_score,
+                    "jpeg_size_kb": jpeg_size_kb,
+                    "elapsed_time": elapsed_time,
+                    "peak_vram_mb": batch_peak_vram_mb,
+                })
+                sample_paths.append(sample_path)
+
+                print(
+                    f"Sample {sample_index}/{num_images}: Fitness: {positive_fitness}, "
+                    f"Aesthetic score: {aesthetic_score}, CLIP score: {clip_score}, "
+                    f"ImageReward score: {image_reward_score}, HPSv2 score: {hpsv2_score}, "
+                    f"PickScore: {pickscore_score}, Best fitness: {best_fitness_overall}"
+                )
+
+            batch_ranges.append((history_start, len(fitness_history)))
+            batch_elapsed_times.append(time_list[-1])
+            batch_peak_vram_values.append(batch_peak_vram_mb)
+            batch_seed_ranges.append((batch_sample_seeds[0], batch_sample_seeds[-1]))
 
             results = build_random_sampler_results({
                 "fitness": fitness_history,
@@ -2153,24 +2474,23 @@ class Eigo:
                 "image_reward": image_reward_history,
                 "hpsv2": hpsv2_history,
                 "pickscore": pickscore_history,
-            }, time_list, [seed] + sample_seeds[:sample_index])
+                "jpeg_size": jpeg_size_history,
+            })
 
             if category is not None:
                 results["category"] = [category] + [''] * (len(results) - 1)
-                sample_rows[-1]["category"] = ""
+                for row in sample_rows[1:]:
+                    row["category"] = ""
 
             results.to_csv(f"{results_folder}/fitness_results.csv", index=False, na_rep='nan')
             pd.DataFrame(sample_rows).to_csv(f"{results_folder}/sample_results.csv", index=False, na_rep='nan')
             self._save_population_plot_results(results, results_folder)
 
-            print(
-                f"Sample {sample_index}/{num_images}: Fitness: {positive_fitness}, "
-                f"Aesthetic score: {aesthetic_score}, CLIP score: {clip_score}, "
-                f"ImageReward score: {image_reward_score}, HPSv2 score: {hpsv2_score}, "
-                f"PickScore: {pickscore_score}, Best fitness: {best_fitness_overall}"
-            )
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
-        shutil.copyfile(best_sample_path, f"{results_folder}/best_all.png")
+        shutil.copyfile(best_sample_path, f"{results_folder}/best_all.jpg")
 
         canonical_sample_rows = []
         canonical_fitness_history = []
@@ -2179,6 +2499,7 @@ class Eigo:
         canonical_image_reward_history = []
         canonical_hpsv2_history = []
         canonical_pickscore_history = []
+        canonical_jpeg_size_history = []
 
         canonical_entries = [(0, seed, baseline_path, 0.0)] + [
             (idx, sample_seed, sample_path, elapsed_time)
@@ -2191,6 +2512,11 @@ class Eigo:
         best_canonical_fitness = -np.inf
         best_canonical_path = baseline_path
         for idx, sample_seed, sample_path, elapsed_time in canonical_entries:
+            batch_generation = next(
+                generation_index
+                for generation_index, (start, end) in enumerate(batch_ranges)
+                if start <= idx < end
+            )
             (
                 canonical_fitness,
                 canonical_aesthetic_score,
@@ -2198,6 +2524,7 @@ class Eigo:
                 canonical_image_reward_score,
                 canonical_hpsv2_score,
                 canonical_pickscore_score,
+                canonical_jpeg_size_kb,
                 _,
             ) = self._evaluate_canonical_image_path_scores(sample_path, selected_prompt)
 
@@ -2211,10 +2538,11 @@ class Eigo:
             canonical_image_reward_history.append(float(canonical_image_reward_score))
             canonical_hpsv2_history.append(float(canonical_hpsv2_score))
             canonical_pickscore_history.append(float(canonical_pickscore_score))
+            canonical_jpeg_size_history.append(float(canonical_jpeg_size_kb))
 
             canonical_sample_rows.append({
                 "sample": idx,
-                "generation": idx,
+                "generation": batch_generation,
                 "seed": sample_seed,
                 "generation_seed": seed if random_sampler_uses_latents else sample_seed,
                 "sample_target": self.optimization_target,
@@ -2225,10 +2553,12 @@ class Eigo:
                 "image_reward_score": float(canonical_image_reward_score),
                 "hpsv2_score": float(canonical_hpsv2_score),
                 "pickscore_score": float(canonical_pickscore_score),
+                "jpeg_size_kb": float(canonical_jpeg_size_kb),
                 "elapsed_time": elapsed_time,
+                "peak_vram_mb": peak_vram_mb_list[idx],
             })
 
-        shutil.copyfile(best_canonical_path, f"{results_folder}/best_all.png")
+        shutil.copyfile(best_canonical_path, f"{results_folder}/best_all.jpg")
 
         results = build_random_sampler_results({
             "fitness": canonical_fitness_history,
@@ -2237,10 +2567,11 @@ class Eigo:
             "image_reward": canonical_image_reward_history,
             "hpsv2": canonical_hpsv2_history,
             "pickscore": canonical_pickscore_history,
-        }, time_list, [seed] + sample_seeds[:len(sample_paths)])
+            "jpeg_size": canonical_jpeg_size_history,
+        })
 
         if category is not None:
-            results["category"] = [category] + [''] * (len(canonical_sample_rows) - 1)
+            results["category"] = [category] + [''] * (len(results) - 1)
             if canonical_sample_rows:
                 canonical_sample_rows[0]["category"] = category
 
@@ -2261,7 +2592,7 @@ class Eigo:
             plt.grid()
             plt.legend(loc="upper left", bbox_to_anchor=(1, 1))  # Move legend outside the plot
             plt.tight_layout()  # Adjust layout
-            plt.savefig(results_folder + "/aesthetic_evolution.png")
+            plt.savefig(results_folder + "/aesthetic_evolution.jpg")
             plt.close()
 
             plt.figure(figsize=(10, 6))  # Increase figure size
@@ -2272,7 +2603,7 @@ class Eigo:
             plt.grid()
             plt.legend(loc="upper left", bbox_to_anchor=(1, 1))  # Move legend outside the plot
             plt.tight_layout()  # Adjust layout
-            plt.savefig(results_folder + "/clip_evolution.png")
+            plt.savefig(results_folder + "/clip_evolution.jpg")
             plt.close()
 
             plt.figure(figsize=(10, 6))
@@ -2283,7 +2614,7 @@ class Eigo:
             plt.grid()
             plt.legend(loc="upper left", bbox_to_anchor=(1, 1))
             plt.tight_layout()
-            plt.savefig(results_folder + "/image_reward_evolution.png")
+            plt.savefig(results_folder + "/image_reward_evolution.jpg")
             plt.close()
 
             plt.figure(figsize=(10, 6))
@@ -2294,7 +2625,7 @@ class Eigo:
             plt.grid()
             plt.legend(loc="upper left", bbox_to_anchor=(1, 1))
             plt.tight_layout()
-            plt.savefig(results_folder + "/hpsv2_evolution.png")
+            plt.savefig(results_folder + "/hpsv2_evolution.jpg")
             plt.close()
 
             plt.figure(figsize=(10, 6))
@@ -2305,7 +2636,18 @@ class Eigo:
             plt.grid()
             plt.legend(loc="upper left", bbox_to_anchor=(1, 1))
             plt.tight_layout()
-            plt.savefig(results_folder + "/pickscore_evolution.png")
+            plt.savefig(results_folder + "/pickscore_evolution.jpg")
+            plt.close()
+
+            plt.figure(figsize=(10, 6))
+            plt.plot(results['iteration'], results['jpeg_size_kb'], label="JPEG Size")
+            plt.xlabel('Iteration')
+            plt.ylabel('JPEG Size (KB)')
+            plt.title('JPEG Size Evolution')
+            plt.grid()
+            plt.legend(loc="upper left", bbox_to_anchor=(1, 1))
+            plt.tight_layout()
+            plt.savefig(results_folder + "/jpeg_size_evolution.jpg")
             plt.close()
 
             # Plot all losses in one plot
@@ -2317,7 +2659,7 @@ class Eigo:
             plt.grid()
             plt.legend(loc="upper left", bbox_to_anchor=(1, 1))  # Move legend outside the plot
             plt.tight_layout()  # Adjust layout
-            plt.savefig(results_folder + "/loss_evolution.png")
+            plt.savefig(results_folder + "/loss_evolution.jpg")
             plt.close()
 
         def plot_mean_std(x_axis, m_vec, std_vec, description, title=None, y_label=None, x_label=None):
@@ -2368,6 +2710,7 @@ class Eigo:
         os.makedirs(results_folder, exist_ok=True)
         self._save_run_config(results_folder, seed, selected_prompt, category=category, prompt_number=prompt_number)
 
+        self._reset_peak_vram()
         # Text features don't depend on your params; compute w/o grad
         with torch.no_grad():
             if self.clip_model is not None:
@@ -2423,9 +2766,7 @@ class Eigo:
                     seed,
                     latents=initial_latents,
                 )
-            image_np = self._tensor_to_uint8_image(initial_image)
-            pil_image = Image.fromarray(image_np)
-            pil_image.save(f"{results_folder}/it_0.png")
+            initial_jpeg_size_kb = self._save_jpeg(initial_image, f"{results_folder}/it_0.jpg")
 
         aesthetic_score = self.aesthetic_evaluation(initial_image)
 
@@ -2444,6 +2785,7 @@ class Eigo:
             "image_reward_score": image_reward_score,
             "hpsv2_score": hpsv2_score,
             "pickscore_score": pickscore_score,
+            "jpeg_size_kb": initial_jpeg_size_kb,
         })
         initial_combined_loss = 1 - initial_combined_score
         if not torch.isfinite(initial_combined_loss):
@@ -2454,6 +2796,7 @@ class Eigo:
         combined_score_list = [initial_combined_score.item()]
         combined_loss_list = [initial_combined_loss.item()]
         time_list = [0]
+        peak_vram_mb_list = [self._peak_vram_mb()]
         best_score = initial_combined_score.item()
         best_target_tensors = clone_best_adam_tensors(
             trainable_params,
@@ -2478,6 +2821,7 @@ class Eigo:
         image_reward_score_list = [image_reward_score.item()]
         hpsv2_score_list = [hpsv2_score.item()]
         pickscore_score_list = [pickscore_score.item()]
+        jpeg_size_kb_list = [initial_jpeg_size_kb]
 
         runtime_results = pd.DataFrame({
             "iteration": [0],
@@ -2489,7 +2833,9 @@ class Eigo:
             "image_reward_score": image_reward_score_list,
             "hpsv2_score": hpsv2_score_list,
             "pickscore_score": pickscore_score_list,
-            "elapsed_time": time_list
+            "jpeg_size_kb": jpeg_size_kb_list,
+            "elapsed_time": time_list,
+            "peak_vram_mb": peak_vram_mb_list,
         })
         if category is not None:
             runtime_results["category"] = [category]
@@ -2503,6 +2849,7 @@ class Eigo:
                 )
                 break
             print(f"Iteration {iteration}/{num_iterations}")
+            self._reset_peak_vram()
 
             optimizer.zero_grad(set_to_none=True)
 
@@ -2527,12 +2874,14 @@ class Eigo:
             )
             hpsv2_score = self.evaluate_hpsv2_adam(image, hpsv2_text_tokens)
             pickscore_score = self.evaluate_pickscore_adam(image, pickscore_text_inputs)
+            jpeg_size_kb = self._jpeg_size_kb(image)
             combined_score, _ = self._combine_metric_components({
                 "aesthetic_score": aesthetic_score,
                 "clip_score": clip_score,
                 "image_reward_score": image_reward_score,
                 "hpsv2_score": hpsv2_score,
                 "pickscore_score": pickscore_score,
+                "jpeg_size_kb": jpeg_size_kb,
             })
             combined_loss = 1 - combined_score
             if not torch.isfinite(combined_loss):
@@ -2555,6 +2904,7 @@ class Eigo:
             image_reward_score_list.append(image_reward_score.item())
             hpsv2_score_list.append(hpsv2_score.item())
             pickscore_score_list.append(pickscore_score.item())
+            jpeg_size_kb_list.append(jpeg_size_kb)
 
             if combined_score.item() > best_score:
                 best_score = combined_score.item()
@@ -2567,9 +2917,7 @@ class Eigo:
             combined_score_list.append(combined_score.item())
             combined_loss_list.append(combined_loss.item())
 
-            image_np = self._tensor_to_uint8_image(image)
-            pil_image = Image.fromarray(image_np)
-            pil_image.save(f"{results_folder}/it_{iteration}.png")
+            jpeg_size_kb_list[-1] = self._save_jpeg(image, f"{results_folder}/it_{iteration}.jpg")
 
             elapsed_time = time.time() - start_time
             iterations_done = iteration
@@ -2580,6 +2928,7 @@ class Eigo:
             formatted_time_remaining = self.format_time(estimated_time_remaining)
 
             time_list.append(elapsed_time)
+            peak_vram_mb_list.append(self._peak_vram_mb())
 
             # Save the differentiable in-optimization metrics separately from canonical scores.
             runtime_results = pd.DataFrame({
@@ -2592,7 +2941,9 @@ class Eigo:
                 "image_reward_score": image_reward_score_list,
                 "hpsv2_score": hpsv2_score_list,
                 "pickscore_score": pickscore_score_list,
-                "elapsed_time": time_list
+                "jpeg_size_kb": jpeg_size_kb_list,
+                "elapsed_time": time_list,
+                "peak_vram_mb": peak_vram_mb_list,
             })
 
             if category is not None:
@@ -2615,19 +2966,15 @@ class Eigo:
                     seed,
                     latents=best_target_tensors[2],
                 )
-        best_image_np = self._tensor_to_uint8_image(best_image)
-        pil_image = Image.fromarray(best_image_np)
-        pil_image.save(f"{results_folder}/best_all.png")
+        self._save_jpeg(best_image, f"{results_folder}/best_all.jpg")
 
         canonical_rows = []
         for row_idx in range(len(combined_score_list)):
-            image_path = f"{results_folder}/it_{row_idx}.png"
+            image_path = f"{results_folder}/it_{row_idx}.jpg"
             if not os.path.exists(image_path):
                 raise FileNotFoundError(
                     f"Cannot build canonical score_results.csv because {image_path} is missing."
                 )
-            pil_image = Image.open(image_path).convert("RGB")
-            image = self._uint8_image_to_tensor(pil_image)
             (
                 canonical_score,
                 canonical_aesthetic_score,
@@ -2635,8 +2982,9 @@ class Eigo:
                 canonical_image_reward_score,
                 canonical_hpsv2_score,
                 canonical_pickscore_score,
+                canonical_jpeg_size_kb,
                 _,
-            ) = self._evaluate_canonical_image_scores(image, selected_prompt)
+            ) = self._evaluate_canonical_image_path_scores(image_path, selected_prompt)
             canonical_rows.append({
                 "iteration": row_idx,
                 "prompt": selected_prompt if row_idx == 0 else "",
@@ -2647,7 +2995,9 @@ class Eigo:
                 "image_reward_score": canonical_image_reward_score,
                 "hpsv2_score": canonical_hpsv2_score,
                 "pickscore_score": canonical_pickscore_score,
+                "jpeg_size_kb": canonical_jpeg_size_kb,
                 "elapsed_time": time_list[row_idx] if row_idx < len(time_list) else np.nan,
+                "peak_vram_mb": peak_vram_mb_list[row_idx] if row_idx < len(peak_vram_mb_list) else np.nan,
             })
 
         results = pd.DataFrame(canonical_rows)

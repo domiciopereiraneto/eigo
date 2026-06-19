@@ -191,7 +191,7 @@ def _plot_block(block: Dict[str, Dict], labels: Dict[str, str], save_dir: Path, 
     ax.grid(alpha=0.3)
     ax.legend(**leg)
     fig.tight_layout()
-    out_aes = save_dir / f"aesthetic_evolution_a{a_int}_b{b_int}.png"
+    out_aes = save_dir / f"aesthetic_evolution_a{a_int}_b{b_int}.jpg"
     fig.savefig(out_aes, dpi=300, bbox_inches="tight")
     plt.close(fig)
     paths.append(out_aes)
@@ -207,7 +207,7 @@ def _plot_block(block: Dict[str, Dict], labels: Dict[str, str], save_dir: Path, 
     ax.grid(alpha=0.3)
     ax.legend(**leg)
     fig.tight_layout()
-    out_clip = save_dir / f"clip_evolution_a{a_int}_b{b_int}.png"
+    out_clip = save_dir / f"clip_evolution_a{a_int}_b{b_int}.jpg"
     fig.savefig(out_clip, dpi=300, bbox_inches="tight")
     plt.close(fig)
     paths.append(out_clip)
@@ -222,7 +222,7 @@ def _plot_block(block: Dict[str, Dict], labels: Dict[str, str], save_dir: Path, 
     ax.grid(alpha=0.3)
     ax.legend(**leg)
     fig.tight_layout()
-    out_time = save_dir / f"elapsed_time_a{a_int}_b{b_int}.png"
+    out_time = save_dir / f"elapsed_time_a{a_int}_b{b_int}.jpg"
     fig.savefig(out_time, dpi=300, bbox_inches="tight")
     plt.close(fig)
     paths.append(out_time)
@@ -238,7 +238,7 @@ def _plot_block(block: Dict[str, Dict], labels: Dict[str, str], save_dir: Path, 
     ax.grid(alpha=0.3)
     ax.legend(**leg)
     fig.tight_layout()
-    out_fit = save_dir / f"fitness_evolution_a{a_int}_b{b_int}.png"
+    out_fit = save_dir / f"fitness_evolution_a{a_int}_b{b_int}.jpg"
     fig.savefig(out_fit, dpi=300, bbox_inches="tight")
     plt.close(fig)
     paths.append(out_fit)

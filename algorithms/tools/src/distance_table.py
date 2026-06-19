@@ -89,8 +89,8 @@ def _compute_distances_for_run(run_dir, model, preprocess, device):
     cos_vals, ssim_vals = [], []
 
     for pdir in find_prompt_dirs(run_dir):
-        base = pdir / "it_0.png"
-        best = pdir / "best_all.png"
+        base = pdir / "it_0.jpg"
+        best = pdir / "best_all.jpg"
         if not base.exists() or not best.exists():
             continue
         # CLIP cosine similarity
@@ -144,7 +144,7 @@ def create_distance_table_and_plots(
     results_dirs : list of str
         Roots to search recursively for algorithm runs. Each run folder must include
         weights in its name: *_aXX_bYY* and prompt subfolders *results_*_<ID>/ with
-        it_0.png and best_all.png.
+        it_0.jpg and best_all.jpg.
     save_folder : str
         Output directory.
     algo_labels : list of (prefix, label)
@@ -322,7 +322,7 @@ def _grouped_boxplots(df: pd.DataFrame, out_dir: Path, value_col: str, title: st
     fig.tight_layout()
     # filename by metric
     metric = "cosine" if "cos" in value_col else "ssim"
-    out_path = out_dir / f"{metric}_boxplot_by_weight.png"
+    out_path = out_dir / f"{metric}_boxplot_by_weight.jpg"
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved: {out_path}")

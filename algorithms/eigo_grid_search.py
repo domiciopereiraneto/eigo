@@ -53,6 +53,7 @@ def extract_final_results(produced_folder, method):
         metric_keys = [
             "generation",
             "elapsed_time",
+            "peak_vram_mb",
             "avg_fitness",
             "max_fitness",
             "avg_aesthetic_score",
@@ -65,12 +66,15 @@ def extract_final_results(produced_folder, method):
             "max_hpsv2_score",
             "avg_pickscore_score",
             "max_pickscore_score",
+            "avg_jpeg_size_kb",
+            "min_jpeg_size_kb",
         ]
     elif method == "adam":
         csv_path = produced_path / "score_results.csv"
         metric_keys = [
             "iteration",
             "elapsed_time",
+            "peak_vram_mb",
             "combined_score",
             "combined_loss",
             "aesthetic_score",
@@ -78,6 +82,7 @@ def extract_final_results(produced_folder, method):
             "image_reward_score",
             "hpsv2_score",
             "pickscore_score",
+            "jpeg_size_kb",
         ]
     else:
         return None

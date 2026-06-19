@@ -48,6 +48,7 @@ METRICS: Tuple[MetricSpec, ...] = (
     MetricSpec("image_reward_score", "ImageReward score", "image_reward_score", "max_image_reward_score"),
     MetricSpec("hpsv2_score", "HPSv2 score", "hpsv2_score", "max_hpsv2_score"),
     MetricSpec("pickscore_score", "PickScore", "pickscore_score", "max_pickscore_score"),
+    MetricSpec("jpeg_size_kb", "JPEG size (KB)", "jpeg_size_kb", "min_jpeg_size_kb"),
 )
 
 OBJECTIVE_KEY = "objective"
@@ -59,6 +60,7 @@ WEIGHT_KEYS = {
     "irw": "image_reward_score",
     "hpsw": "hpsv2_score",
     "psw": "pickscore_score",
+    "jpgw": "jpeg_size_kb",
 }
 
 DEFAULT_LABELS = {
@@ -141,6 +143,11 @@ def pct_diff(value: float, baseline: float) -> float:
     if not np.isfinite(value) or not np.isfinite(baseline) or baseline == 0:
         return np.nan
     return 100.0 * (value - baseline) / abs(baseline)
+
+
+def metric_pct_diff(value: float, baseline: float, metric: MetricSpec) -> float:
+    difference = pct_diff(value, baseline)
+    return -difference if metric.key == "jpeg_size_kb" else difference
 
 
 def summarise(values: Iterable[float]) -> Dict[str, float]:
@@ -335,10 +342,19 @@ def find_existing_image(prompt_dir: Path, prefixes: Sequence[str], index: int) -
     if index < 0:
         return None
     for prefix in prefixes:
-        candidate = prompt_dir / f"{prefix}_{index}.png"
+        for extension in (".jpg", ".jpeg", ".png"):
+            candidate = prompt_dir / f"{prefix}_{index}{extension}"
+            if candidate.exists():
+                return candidate
+    return None
+
+
+def named_image_path(prompt_dir: Path, stem: str) -> Path:
+    for extension in (".jpg", ".jpeg", ".png"):
+        candidate = prompt_dir / f"{stem}{extension}"
         if candidate.exists():
             return candidate
-    return None
+    return prompt_dir / f"{stem}.jpg"
 
 
 def resolve_best_image_path(
@@ -349,12 +365,12 @@ def resolve_best_image_path(
     sliced: bool,
     slice_end_index: Optional[int] = None,
 ) -> Path:
-    full_best = prompt_dir / "best_all.png"
+    full_best = named_image_path(prompt_dir, "best_all")
     if not sliced:
-        return full_best if full_best.exists() else prompt_dir / "it_0.png"
+        return full_best if full_best.exists() else named_image_path(prompt_dir, "it_0")
 
     if slice_end_index == 0:
-        return prompt_dir / "it_0.png"
+        return named_image_path(prompt_dir, "it_0")
 
     if csv_kind == "score":
         best_step = best_row_step_index(df, step_name, csv_kind)
@@ -370,7 +386,7 @@ def resolve_best_image_path(
             if image is not None:
                 return image
 
-    return full_best if full_best.exists() else prompt_dir / "it_0.png"
+    return full_best if full_best.exists() else named_image_path(prompt_dir, "it_0")
 
 
 def load_prompt_run(
@@ -605,7 +621,8 @@ def apply_random_sampler_baseline_hotfix(runs: Sequence[ExperimentRun], metrics:
                 if not np.isfinite(value):
                     continue
                 base_name = metric.key
-                for prefix in ("avg", "max"):
+                prefixes = ("avg", "min") if metric.key == "jpeg_size_kb" else ("avg", "max")
+                for prefix in prefixes:
                     col = f"{prefix}_{base_name}"
                     if col in prompt_run.df.columns:
                         prompt_run.df.at[baseline_idx, col] = value
@@ -698,7 +715,7 @@ def write_summary_tables(runs: Sequence[ExperimentRun], out_dir: Path, metrics: 
             row[f"{metric.key}_mean"] = fs["mean"]
             row[f"{metric.key}_std"] = fs["std"]
             row[f"{metric.key}_max"] = fs["max"]
-            row[f"{metric.key}_diff_to_baseline_pct"] = pct_diff(fs["mean"], bs["mean"])
+            row[f"{metric.key}_diff_to_baseline_pct"] = metric_pct_diff(fs["mean"], bs["mean"], metric)
         obj = summarise([final_objective(p) for p in run.prompt_runs])
         obj_base = summarise([baseline_objective(p) for p in run.prompt_runs])
         elapsed = summarise([elapsed_final(p) for p in run.prompt_runs])
@@ -990,7 +1007,7 @@ def create_evolution_plots(runs: Sequence[ExperimentRun], out_dir: Path, metrics
                 "Optimization progress (%)",
                 label,
                 f"{label} evolution ({w_label})",
-                plot_dir / f"{metric_key}_evolution_{safe_w}.png",
+                plot_dir / f"{metric_key}_evolution_{safe_w}.jpg",
             )
         for w_label, methods in sorted(by_weight_time.items(), key=lambda item: weights_sort_key(item[0])):
             safe_w = re.sub(r"[^a-zA-Z0-9]+", "_", w_label).strip("_") or "unweighted"
@@ -999,7 +1016,7 @@ def create_evolution_plots(runs: Sequence[ExperimentRun], out_dir: Path, metrics
                 "Elapsed time (s)",
                 label,
                 f"{label} evolution by elapsed time ({w_label})",
-                plot_dir / f"{metric_key}_evolution_by_time_{safe_w}.png",
+                plot_dir / f"{metric_key}_evolution_by_time_{safe_w}.jpg",
             )
     print(f"Saved evolution plots under: {plot_dir}")
 
@@ -1145,7 +1162,7 @@ def create_image_grids(runs: Sequence[ExperimentRun], out_dir: Path, metrics: Se
                 if prompt_run is None:
                     entries.append(None)
                     continue
-                base = prompt_run.prompt_dir / "it_0.png"
+                base = named_image_path(prompt_run.prompt_dir, "it_0")
                 best = prompt_run.best_image_path
                 entries.append(prompt_run if base.exists() and best.exists() else None)
             if any(entries):
@@ -1163,7 +1180,7 @@ def create_image_grids(runs: Sequence[ExperimentRun], out_dir: Path, metrics: Se
         for row_idx, (prompt_key, entries) in enumerate(rows):
             present = [entry for entry in entries if entry is not None]
             baseline_source = present[0]
-            baseline_img = baseline_source.prompt_dir / "it_0.png"
+            baseline_img = named_image_path(baseline_source.prompt_dir, "it_0")
             imgs = [baseline_img] + [
                 entry.best_image_path if entry is not None else None for entry in entries
             ]
@@ -1221,13 +1238,13 @@ def create_image_grids(runs: Sequence[ExperimentRun], out_dir: Path, metrics: Se
             canvas.paste(row_img, (0, y))
             y += row_img.height + row_gap
         safe_w = re.sub(r"[^a-zA-Z0-9]+", "_", w_label).strip("_") or "unweighted"
-        out_path = out_grid / f"generated_image_comparison_grid_{safe_w}.png"
+        out_path = out_grid / f"generated_image_comparison_grid_{safe_w}.jpg"
         canvas.save(out_path)
         saved += 1
         print(f"Saved: {out_path}")
 
     if saved == 0:
-        print("Warning: no image grids were created; missing it_0.png / sliced-best image pairs.")
+        print("Warning: no image grids were created; missing it_0.jpg / sliced-best image pairs.")
 
 
 def create_prompt_category_tables(runs: Sequence[ExperimentRun], out_dir: Path, metrics: Sequence[MetricSpec]) -> None:
@@ -1255,7 +1272,7 @@ def create_prompt_category_tables(runs: Sequence[ExperimentRun], out_dir: Path, 
                 base = baseline_value(prompt_run, metric)
                 row[metric.key] = final
                 row[f"baseline_{metric.key}"] = base
-                row[f"{metric.key}_diff_to_baseline_pct"] = pct_diff(final, base)
+                row[f"{metric.key}_diff_to_baseline_pct"] = metric_pct_diff(final, base, metric)
             rows.append(row)
 
     if not rows:
@@ -1324,7 +1341,7 @@ def plot_category_bars(per_category: pd.DataFrame, out_dir: Path, metrics: Seque
             ax.grid(True, axis="y", linestyle="--", linewidth=0.5)
             ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), borderaxespad=0.0)
             fig.tight_layout()
-            out_path = plot_dir / f"per_category_{col}_{safe_w}.png"
+            out_path = plot_dir / f"per_category_{col}_{safe_w}.jpg"
             fig.savefig(out_path, dpi=160, bbox_inches="tight")
             plt.close(fig)
 
@@ -1406,7 +1423,7 @@ def create_distance_tables(runs: Sequence[ExperimentRun], out_dir: Path, config:
         precomp = run.path / "aggregate_prompt_similarity_values.csv"
         precomp_df = pd.read_csv(precomp) if precomp.exists() and not slicing_active else None
         for idx, prompt_run in enumerate(run.prompt_runs):
-            base = prompt_run.prompt_dir / "it_0.png"
+            base = named_image_path(prompt_run.prompt_dir, "it_0")
             best = prompt_run.best_image_path
             cosine = np.nan
             ssim_value = np.nan
@@ -1498,7 +1515,7 @@ def plot_distance_boxplots(values: pd.DataFrame, out_dir: Path) -> None:
         ax.grid(True, axis="y", linestyle="--", linewidth=0.5)
         ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), borderaxespad=0.0)
         fig.tight_layout()
-        out_path = out_dir / f"{metric}_boxplot_by_weight.png"
+        out_path = out_dir / f"{metric}_boxplot_by_weight.jpg"
         fig.savefig(out_path, dpi=160, bbox_inches="tight")
         plt.close(fig)
 

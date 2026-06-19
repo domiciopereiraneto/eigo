@@ -282,7 +282,7 @@ def _plot_per_category_vertical(df, out_dir):
             ax.grid(True, axis="y", linestyle="--", linewidth=0.5)
             ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), borderaxespad=0.0)
             fig.tight_layout()
-            outp = out_dir / f"per_category_{col}_a{a_val:.1f}_b{b_val:.1f}.png"
+            outp = out_dir / f"per_category_{col}_a{a_val:.1f}_b{b_val:.1f}.jpg"
             fig.savefig(outp, dpi=150, bbox_inches="tight")
             plt.close(fig)
             paths.append(outp)

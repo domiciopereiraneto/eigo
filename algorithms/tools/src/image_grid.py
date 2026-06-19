@@ -99,8 +99,8 @@ def create_image_grid(source_dirs: List[str],
                       header_bg: Tuple[int,int,int] = (255,255,255)):
     """
     Compose one grid per weight combination.
-    - First column is baseline it_0.png from the first method folder in that weight group.
-    - Remaining columns use best_all.png from each method folder in that weight group.
+    - First column is baseline it_0.jpg from the first method folder in that weight group.
+    - Remaining columns use best_all.jpg from each method folder in that weight group.
     - Titles show Aes/CLIP/Fitness. First row also shows method names.
     """
     if not source_dirs:
@@ -153,8 +153,8 @@ def create_image_grid(source_dirs: List[str],
             if not all(os.path.isdir(p) for p in folder_paths):
                 continue
 
-            it0_path = os.path.join(folder_paths[0], "it_0.png")
-            best_paths = [os.path.join(p, "best_all.png") for p in folder_paths]
+            it0_path = os.path.join(folder_paths[0], "it_0.jpg")
+            best_paths = [os.path.join(p, "best_all.jpg") for p in folder_paths]
             if not os.path.isfile(it0_path) or not all(os.path.isfile(p) for p in best_paths):
                 continue
 
@@ -260,8 +260,8 @@ def create_image_grid(source_dirs: List[str],
             canvas.paste(r_im, (0, y))
             y += r_im.height + row_gap
 
-        out_path = os.path.join(save_path, f"generated_image_comparison_grid_a{a_int}_b{b_int}.png")
-        canvas.save(out_path, format="PNG")
+        out_path = os.path.join(save_path, f"generated_image_comparison_grid_a{a_int}_b{b_int}.jpg")
+        canvas.save(out_path, format="JPEG", quality=95)
         print(f"Grid saved to {out_path}")
         out_paths.append(out_path)
 

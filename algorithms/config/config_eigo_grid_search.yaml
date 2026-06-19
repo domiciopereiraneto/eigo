@@ -21,6 +21,7 @@ seed: 42
 cuda: 2
 predictor: 2
 num_inference_steps: 1
+batch_size: 1
 guidance_scale: 0
 lcm_origin_steps: 50
 height: 512
@@ -30,12 +31,16 @@ clip_score_weight: 0.5
 image_reward_score_weight: 0.0
 hpsv2_score_weight: 0.0
 pickscore_score_weight: 0.0
+jpeg_size_weight: 0.0
 max_aesthetic_score: 10
 max_clip_score: 0.5
 max_image_reward_score: 1.0
 max_hpsv2_score: 1.0
 max_pickscore_score: 1.0
+max_jpeg_size_kb: 1024.0
+jpeg_quality: 95
 image_reward_model: "ImageReward-v1.0"  # Set to null to disable ImageReward calculation
+clip_model_name: "ViT-L/14"  # OpenAI CLIP model used for CLIP score and LAION aesthetic predictors
 hpsv2_version: "v2.1"  # Set to null to disable HPSv2 calculation
 pickscore_model: "yuvalkirstain/PickScore_v1"  # Set to null to disable PickScore calculation
 pickscore_processor: "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"  # Set to null to disable PickScore calculation
@@ -101,3 +106,4 @@ grid:
 
   random_sampler:
     num_images_to_generate: [20, 50]
+    batch_size: [1]
