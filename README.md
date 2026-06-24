@@ -16,17 +16,11 @@ The repository currently exposes:
 
 ### Prerequisites
 
-Install [Conda](https://docs.conda.io/) and clone the repository with submodules:
+Install [Conda](https://docs.conda.io/) and clone the repository:
 
 ```bash
-git clone --recursive <repository-url>
+git clone <repository-url>
 cd eigo
-```
-
-If the repository was already cloned without submodules:
-
-```bash
-git submodule update --init --recursive
 ```
 
 Create and activate the Conda environment:

@@ -34,7 +34,7 @@ import yaml
 
 # Get the parent directory
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-# Add the parent directory to sys.path to obtain access to the submodules
+# Add the project root so local project modules can be imported.
 sys.path.insert(0, parent_dir)
 
 # External imports - grouped by functionality

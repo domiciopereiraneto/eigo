@@ -55,6 +55,11 @@ from src.optimization_targets import (
     resolve_optimization_target,
     tensors_from_vector,
 )
+from src.aesthetic_evaluation import (
+    LAIONAesthetic,
+    LAIONV2Aesthetic,
+    SimulacraAesthetic,
+)
 
 class Eigo:
     _MODEL_CACHE = {}
@@ -277,18 +282,15 @@ class Eigo:
             if config_parameters["predictor"] == 0:
                 model_name = "SAM"
                 if self._should_evaluate_metric("aesthetic_score"):
-                    from aesthetic_evaluation.src import simulacra_rank_image
-                    aesthetic_model = simulacra_rank_image.SimulacraAesthetic(self.device)
+                    aesthetic_model = SimulacraAesthetic(self.device)
             elif config_parameters["predictor"] == 1:
                 model_name = "LAIONV1"
                 if self._should_evaluate_metric("aesthetic_score"):
-                    from aesthetic_evaluation.src import laion_rank_image
-                    aesthetic_model = laion_rank_image.LAIONAesthetic(self.device, clip_model=self.clip_model_name)
+                    aesthetic_model = LAIONAesthetic(self.device, clip_model=self.clip_model_name)
             elif config_parameters["predictor"] == 2:
                 model_name = "LAIONV2"
                 if self._should_evaluate_metric("aesthetic_score"):
-                    from aesthetic_evaluation.src import laion_v2_rank_image
-                    aesthetic_model = laion_v2_rank_image.LAIONV2Aesthetic(self.device, clip_model=self.clip_model_name)
+                    aesthetic_model = LAIONV2Aesthetic(self.device, clip_model=self.clip_model_name)
             else:
                 raise ValueError("Invalid predictor option.")
 
@@ -499,7 +501,6 @@ class Eigo:
         candidate_paths = [
             site_packages / "open_clip" / "bpe_simple_vocab_16e6.txt.gz",
             site_packages / "clip" / "bpe_simple_vocab_16e6.txt.gz",
-            Path(__file__).resolve().parent / "aesthetic_evaluation" / "CLIP" / "clip" / "bpe_simple_vocab_16e6.txt.gz",
         ]
         source_file = next((path for path in candidate_paths if path.exists()), None)
         if source_file is None:
