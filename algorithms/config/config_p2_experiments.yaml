@@ -2,7 +2,7 @@
 "optimization_method": "random_sampler" #"cmaes" for CMA-ES variants, "ga" for the genetic algorithm, "adam" for AdamW, "random_sampler" for random seed sampling
 
 # Prompt dataset parameters (used by p2_experiments.py)
-seed_path: "algorithms/config/seeds_1.txt"  # Path to a file with seeds; if null, uses the 'seed' below
+seed_path: null  # Path to a file with seeds; if null, uses the 'seed' below
 seed: 42  # Default seed value for reproducibility
 prompt_dataset: "drawbench"  # Prompt source: "parti" or "drawbench"
 prompt_dataset_path: null  # Optional HF dataset override; defaults to nateraw/parti-prompts or sayakpaul/drawbench
@@ -12,13 +12,14 @@ prompt_column: null  # Optional prompt column override
 prompt_category_column: null  # Optional category column override
 prompt_per_categorie: 3  # Number of prompts sampled per category from the dataset
 prompt_sample_seed: 42  # Seed for prompt sampling from the dataset
-single_prompt_per_seed: true  # If true, ignore per-category sampling and pick one prompt from the full dataset using each run seed
+use_entire_dataset: false  # If true, use every prompt for each seed; overrides prompt_per_categorie and single_prompt_per_seed
+single_prompt_per_seed: false  # If true, ignore per-category sampling and pick one prompt from the full dataset using each run seed
 
 # General generation/scoring parameters
 cuda: 0  # GPU device ID to use (e.g., 0 for first GPU); falls back to CPU if unavailable
 predictor: 2  # 0: SAM, 1: LAION V1, 2: LAION V2
 num_inference_steps: 50  # Diffusion inference steps during image generation; LCM usually works well with 1-8
-batch_size: 15  # Number of candidates/images to generate and score at once for CMA-ES/GA/random_sampler
+batch_size: 16  # Number of candidates/images to generate and score at once for CMA-ES/GA/random_sampler
 guidance_scale: 7.5 # Classifier-free guidance scale (0 means disabled)
 lcm_origin_steps: 50  # Original diffusion steps for LCM backends; ignored by other backends
 height: 512  # Generated image height (pixels)
@@ -37,8 +38,8 @@ max_pickscore_score: 1.0  # Approximate PickScore normalization constant
 max_jpeg_size_kb: 1024.0  # JPEG size normalization constant in kilobytes
 jpeg_quality: 95  # JPEG encoding quality used for saved images and size evaluation
 image_reward_model: "ImageReward-v1.0"  # ImageReward checkpoint name; set to null to disable ImageReward calculation
-clip_model_name: "ViT-L/14"  # OpenAI CLIP model used for CLIP score and LAION aesthetic predictors
-hpsv2_version: "v2.0"  # HPSv2 checkpoint version; set to null to disable HPSv2 calculation
+clip_model_name: "ViT-B/32"  # OpenAI CLIP model used for CLIP score and LAION aesthetic predictors
+hpsv2_version: "v2.1"  # HPSv2 checkpoint version; set to null to disable HPSv2 calculation
 pickscore_model: "yuvalkirstain/PickScore_v1"  # PickScore checkpoint name; set to null to disable PickScore calculation
 pickscore_processor: "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"  # Processor backbone for PickScore; set to null to disable PickScore calculation
 evaluate_zero_weight_metrics: false  # Keep zero-weight scorer models/graphs out of Adam VRAM

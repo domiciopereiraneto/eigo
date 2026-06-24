@@ -4,8 +4,24 @@
 runs:
   - aesthetic_score_weight: 0.0
     clip_score_weight: 1.0
-    results_folder: "results_random_sampler_sdxl_clip"
+    image_reward_score_weight: 0.0
+    hpsv2_score_weight: 0.0
+    pickscore_score_weight: 0.0
+    jpeg_size_weight: 0.0
+    results_folder: "results_randomsampler_sd15_clip"
 
-  - aesthetic_score_weight: 0.5
-    clip_score_weight: 0.5
-    results_folder: "results_random_sampler_sdxl_balanced"
+  - aesthetic_score_weight: 0.0
+    clip_score_weight: 0.0
+    image_reward_score_weight: 1.0
+    hpsv2_score_weight: 0.0
+    pickscore_score_weight: 0.0
+    jpeg_size_weight: 0.0
+    results_folder: "results_randomsampler_sd15_imagereward"
+
+  - aesthetic_score_weight: 0.0
+    clip_score_weight: 0.0
+    image_reward_score_weight: 0.0
+    hpsv2_score_weight: 1.0
+    pickscore_score_weight: 0.0
+    jpeg_size_weight: 0.0
+    results_folder: "results_randomsampler_sd15_hpsv2"

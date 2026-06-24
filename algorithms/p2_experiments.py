@@ -172,9 +172,17 @@ category_prompts, all_prompts_with_category = _load_prompt_dataset(config)
 N_PER_CATEGORY = config['prompt_per_categorie']  # Number of prompts to sample per category
 SUBSET_SEED = config['prompt_sample_seed']
 SINGLE_PROMPT_PER_SEED = config.get("single_prompt_per_seed", False)
+USE_ENTIRE_DATASET = config.get("use_entire_dataset", False)
 
 
 def build_selected_prompts(seed):
+    if USE_ENTIRE_DATASET:
+        print(
+            f"Selected all {len(all_prompts_with_category)} prompts from "
+            f"{len(category_prompts)} categories for seed {seed}."
+        )
+        return list(all_prompts_with_category)
+
     if SINGLE_PROMPT_PER_SEED:
         rng = random.Random(seed)
         selected_prompt = rng.choice(all_prompts_with_category)
