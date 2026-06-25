@@ -27,6 +27,7 @@ from eigo_grid_search import (  # noqa: E402
     load_yaml,
     save_run_parameters,
 )
+from src.optimization_targets import resolve_optimization_target  # noqa: E402
 
 
 DEFAULT_CONFIG = "algorithms/config/config_eigo_optuna_search.yaml"
@@ -251,6 +252,7 @@ def validate_prompt_source_config(config):
 def validate_optuna_config(config):
     optuna_config = get_optuna_config(config)
     validate_prompt_source_config(config)
+    resolve_optimization_target(config)
     if "results_folder" not in config:
         raise ValueError("Missing required key 'results_folder' in config.")
 
@@ -422,7 +424,7 @@ def save_optuna_trial_parameters(results_folder, run_id, method, overrides, run_
                 "overrides": overrides,
                 "effective_parameters": {
                     key: run_config.get(key)
-                    for key in sorted(overrides.keys())
+                    for key in sorted(set(overrides.keys()) | {"optimization_target"})
                 },
             },
             f,
@@ -442,6 +444,7 @@ def run_optuna_search(config, dry_run=False):
     n_trials = int(optuna_config.get("n_trials", 20))
     direction = optuna_config.get("direction", "maximize")
     metric_name = optuna_config.get("metric", "auto")
+    default_optimization_target = resolve_optimization_target(config)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     trial_rows = []
 
@@ -450,6 +453,7 @@ def run_optuna_search(config, dry_run=False):
     print(f"Optuna trials: {n_trials}")
     print(f"Objective direction: {direction}")
     print(f"Objective metric: {metric_name}")
+    print(f"Default optimization target: {default_optimization_target}")
 
     if dry_run:
         for method in enabled_methods:
@@ -494,11 +498,13 @@ def run_optuna_search(config, dry_run=False):
                 f"{method}_{timestamp}"
             )
             run_config = create_run_config(config, method, overrides, run_id, prompt)
+            resolved_optimization_target = resolve_optimization_target(run_config)
 
             print("-" * 80)
             print(f"Trial {trial.number}, prompt {prompt_idx}/{len(prompt_list)}")
             print(f"Prompt: {prompt}")
             print(f"Method: {method}")
+            print(f"Optimization target: {resolved_optimization_target}")
             print(f"Overrides: {json.dumps(overrides, ensure_ascii=True)}")
             print(f"Results folder: {run_config['results_folder']}")
 
@@ -533,6 +539,7 @@ def run_optuna_search(config, dry_run=False):
                     "produced_folder": produced_folder,
                     "metric": resolved_metric,
                     "value": value,
+                    "optimization_target": resolved_optimization_target,
                     "final_results": final_results,
                 }
             )
@@ -588,6 +595,7 @@ def save_summary(config, study, trial_rows):
         "selected_prompts": config.get("_resolved_optuna_prompts") or get_optuna_prompt_list(config),
         "prompt_source": get_optuna_prompt_source(config),
         "enabled_methods": get_enabled_methods(config),
+        "default_optimization_target": resolve_optimization_target(config),
         "n_trials": int(optuna_config.get("n_trials", 20)),
         "direction": optuna_config.get("direction", "maximize"),
         "metric": optuna_config.get("metric", "auto"),

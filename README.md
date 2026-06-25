@@ -234,7 +234,7 @@ python algorithms/eigo_optuna_search.py \
   --dry-run
 ```
 
-The Optuna config supports `optuna.n_trials`, `optuna.direction`, `optuna.metric`, `optuna.sampler`, and method-specific `optuna.search_space` entries. Lists are sampled as categorical choices, while dictionaries can define `float`, `int`, or `categorical` distributions. Each trial evaluates all selected prompts and optimizes the mean final objective value.
+The Optuna config supports the same base EIGO keys, including fixed `optimization_target`, plus `optuna.n_trials`, `optuna.direction`, `optuna.metric`, `optuna.sampler`, and method-specific `optuna.search_space` entries. Put `optimization_target` in a method search space to sample between `prompt_embeddings` and `latent_noise`. Lists are sampled as categorical choices, while dictionaries can define `float`, `int`, or `categorical` distributions. Each trial evaluates all selected prompts and optimizes the mean final objective value.
 
 ## Processing Results
 

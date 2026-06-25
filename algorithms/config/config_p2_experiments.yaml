@@ -12,11 +12,11 @@ prompt_column: null  # Optional prompt column override
 prompt_category_column: null  # Optional category column override
 prompt_per_categorie: 3  # Number of prompts sampled per category from the dataset
 prompt_sample_seed: 42  # Seed for prompt sampling from the dataset
-use_entire_dataset: false  # If true, use every prompt for each seed; overrides prompt_per_categorie and single_prompt_per_seed
+use_entire_dataset: true  # If true, use every prompt for each seed; overrides prompt_per_categorie and single_prompt_per_seed
 single_prompt_per_seed: false  # If true, ignore per-category sampling and pick one prompt from the full dataset using each run seed
 
 # General generation/scoring parameters
-cuda: 0  # GPU device ID to use (e.g., 0 for first GPU); falls back to CPU if unavailable
+cuda: 2  # GPU device ID to use (e.g., 0 for first GPU); falls back to CPU if unavailable
 predictor: 2  # 0: SAM, 1: LAION V1, 2: LAION V2
 num_inference_steps: 50  # Diffusion inference steps during image generation; LCM usually works well with 1-8
 batch_size: 16  # Number of candidates/images to generate and score at once for CMA-ES/GA/random_sampler
@@ -26,8 +26,8 @@ height: 512  # Generated image height (pixels)
 width: 512  # Generated image width (pixels)
 aesthetic_score_weight: 0.0  # Weight for aesthetic score in combined fitness
 clip_score_weight: 0.0  # Weight for CLIP score in combined fitness
-image_reward_score_weight: 1.0  # Weight for ImageReward score in combined fitness
-hpsv2_score_weight: 0.0  # Weight for HPSv2 score in combined fitness
+image_reward_score_weight: 0.0  # Weight for ImageReward score in combined fitness
+hpsv2_score_weight: 1.0  # Weight for HPSv2 score in combined fitness
 pickscore_score_weight: 0.0  # Weight for PickScore score in combined fitness
 jpeg_size_weight: 0.0  # Weight for JPEG size penalty in combined fitness (smaller is better)
 max_aesthetic_score: 10  # Maximum aesthetic score (normalization)
@@ -43,13 +43,13 @@ hpsv2_version: "v2.1"  # HPSv2 checkpoint version; set to null to disable HPSv2 
 pickscore_model: "yuvalkirstain/PickScore_v1"  # PickScore checkpoint name; set to null to disable PickScore calculation
 pickscore_processor: "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"  # Processor backbone for PickScore; set to null to disable PickScore calculation
 evaluate_zero_weight_metrics: false  # Keep zero-weight scorer models/graphs out of Adam VRAM
-optimization_target: "latent_noise"  # "prompt_embeddings" or "latent_noise" for CMA-ES/GA/Adam/random_sampler
-results_folder: "results_randomsampler_sd15_imagereward"  # Output directory for runs and artifacts
+optimization_target: "prompt_embeddings"  # "prompt_embeddings" or "latent_noise" for CMA-ES/GA/Adam/random_sampler
+results_folder: "results_randomsampler_sd15_embeddings_hpsv2"  # Output directory for runs and artifacts
 
 # Diffusion model parameters
 model_id: "stable-diffusion-v1-5/stable-diffusion-v1-5" # Model ID (e.g., "black-forest-labs/FLUX.1-schnell", "PixArt-alpha/PixArt-XL-2-1024-MS", "Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers", "Efficient-Large-Model/Sana_1600M_1024px_diffusers", "stabilityai/sdxl-turbo", "SimianLuo/LCM_Dreamshaper_v7")
 model_backend: "auto"  # "auto", "sdxl", "flux", "pixart", "lcm", "sana", or "sana_sprint"
-torch_dtype: "float16"  # "auto", "float32", "float16", or "bfloat16"
+torch_dtype: "float32"  # "auto", "float32", "float16", or "bfloat16"
 max_sequence_length: 256  # FLUX/Sana text encoder token limit (ignored for SDXL)
 use_safetensors: true  # Prefer safetensors weights when available
 

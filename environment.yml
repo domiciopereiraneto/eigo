@@ -12,6 +12,7 @@ dependencies:
   - scikit-learn=1.7.1
   - scikit-image=0.25.2
   - openpyxl=3.1.5
+  - setuptools<81
   - pip
   - pip:
       - diffusers==0.35.1
