@@ -13,10 +13,11 @@ prompt_category_column: null  # Optional category column override
 prompt_per_categorie: 3  # Number of prompts sampled per category from the dataset
 prompt_sample_seed: 42  # Seed for prompt sampling from the dataset
 use_entire_dataset: true  # If true, use every prompt for each seed; overrides prompt_per_categorie and single_prompt_per_seed
+prompt_index_range: [0,50]  # Optional when use_entire_dataset is true: zero-based [start, end) slice, e.g. [0, 50]
 single_prompt_per_seed: false  # If true, ignore per-category sampling and pick one prompt from the full dataset using each run seed
 
 # General generation/scoring parameters
-cuda: 2  # GPU device ID to use (e.g., 0 for first GPU); falls back to CPU if unavailable
+cuda: 1  # GPU device ID to use (e.g., 0 for first GPU); falls back to CPU if unavailable
 predictor: 2  # 0: SAM, 1: LAION V1, 2: LAION V2
 num_inference_steps: 50  # Diffusion inference steps during image generation; LCM usually works well with 1-8
 batch_size: 16  # Number of candidates/images to generate and score at once for CMA-ES/GA/random_sampler

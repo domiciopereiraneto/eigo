@@ -173,15 +173,56 @@ N_PER_CATEGORY = config['prompt_per_categorie']  # Number of prompts to sample p
 SUBSET_SEED = config['prompt_sample_seed']
 SINGLE_PROMPT_PER_SEED = config.get("single_prompt_per_seed", False)
 USE_ENTIRE_DATASET = config.get("use_entire_dataset", False)
+PROMPT_INDEX_RANGE = config.get("prompt_index_range", None)
+
+
+def _parse_prompt_index_range(prompt_index_range, prompt_count):
+    if prompt_index_range is None:
+        return None
+    if not isinstance(prompt_index_range, (list, tuple)) or len(prompt_index_range) != 2:
+        raise ValueError("prompt_index_range must be null or a two-item list: [start, end].")
+
+    start, end = prompt_index_range
+    if not isinstance(start, int) or not isinstance(end, int):
+        raise ValueError("prompt_index_range start and end must be integers.")
+    if start < 0 or end < 0:
+        raise ValueError("prompt_index_range start and end must be non-negative.")
+    if start >= end:
+        raise ValueError("prompt_index_range start must be smaller than end.")
+    if end > prompt_count:
+        raise ValueError(
+            f"prompt_index_range end ({end}) exceeds the available prompt count ({prompt_count})."
+        )
+    return start, end
 
 
 def build_selected_prompts(seed):
     if USE_ENTIRE_DATASET:
-        print(
-            f"Selected all {len(all_prompts_with_category)} prompts from "
-            f"{len(category_prompts)} categories for seed {seed}."
+        prompt_index_range = _parse_prompt_index_range(
+            PROMPT_INDEX_RANGE, len(all_prompts_with_category)
         )
-        return list(all_prompts_with_category)
+        if prompt_index_range is None:
+            selected_prompts_with_category = list(all_prompts_with_category)
+            start = 0
+        else:
+            start, end = prompt_index_range
+            selected_prompts_with_category = list(all_prompts_with_category[start:end])
+
+        print(
+            f"Selected {len(selected_prompts_with_category)} of {len(all_prompts_with_category)} prompts "
+            f"from {len(category_prompts)} categories for seed {seed}."
+        )
+        if prompt_index_range is not None:
+            print(
+                f"Using prompt_index_range [{start}, {end}) with original prompt numbers "
+                f"{start + 1}-{end}."
+            )
+        return [
+            (prompt, category, prompt_index + 1)
+            for prompt_index, (prompt, category) in enumerate(
+                selected_prompts_with_category, start=start
+            )
+        ]
 
     if SINGLE_PROMPT_PER_SEED:
         rng = random.Random(seed)
@@ -190,7 +231,8 @@ def build_selected_prompts(seed):
             f"Selected 1 prompt for seed {seed} from {len(all_prompts_with_category)} total prompts "
             f"across {len(category_prompts)} categories."
         )
-        return [selected_prompt]
+        prompt, category = selected_prompt
+        return [(prompt, category, 1)]
 
     rng = random.Random(SUBSET_SEED)
     selected_prompts_with_category = []
@@ -205,7 +247,10 @@ def build_selected_prompts(seed):
     print(
         f"Selected {len(selected_prompts_with_category)} prompts from {len(category_prompts)} categories."
     )
-    return selected_prompts_with_category
+    return [
+        (prompt, category, prompt_index)
+        for prompt_index, (prompt, category) in enumerate(selected_prompts_with_category, start=1)
+    ]
 
 
 
@@ -854,8 +899,7 @@ if __name__ == "__main__":
     seed_number = 1
     for seed in seed_list:
         selected_prompts_with_category = build_selected_prompts(seed)
-        prompt_number = 1
-        for prompt, category in selected_prompts_with_category:
+        for prompt, category, prompt_number in selected_prompts_with_category:
             print(f"Running seed {seed}, prompt: {prompt} (Category: {category})")
             if config['optimization_method'] == "cmaes":
                 eigo_engine.run_cmaes_optimization(seed=seed, seed_number=seed_number, prompt=prompt, category=category, prompt_number=prompt_number)
@@ -868,7 +912,6 @@ if __name__ == "__main__":
             else:
                 raise ValueError(f"Unknown optimization method: {config['optimization_method']}")
             print(f"Run with seed {seed} and prompt '{prompt}' finished!")
-            prompt_number += 1
         seed_number += 1
 
     aggregate_results()
