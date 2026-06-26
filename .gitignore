@@ -2,3 +2,5 @@ results*
 *__pycache__*
 .codex
 aux_*
+.vscode
+.agents
