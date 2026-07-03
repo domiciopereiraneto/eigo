@@ -3,20 +3,22 @@
 
 runs:
   - aesthetic_score_weight: 0.0
-    clip_score_weight: 1.0
-    image_reward_score_weight: 0.0
-    hpsv2_score_weight: 0.0
-    pickscore_score_weight: 0.0
-    jpeg_size_weight: 0.0
-    results_folder: "results_randomsampler_sd15_clip"
-
-  - aesthetic_score_weight: 0.0
     clip_score_weight: 0.0
     image_reward_score_weight: 1.0
     hpsv2_score_weight: 0.0
     pickscore_score_weight: 0.0
     jpeg_size_weight: 0.0
-    results_folder: "results_randomsampler_sd15_imagereward"
+    sigma: 0.10747553270513047
+    results_folder: "results_sepcmaes_sd15_imagereward"
+
+  - aesthetic_score_weight: 0.0
+    clip_score_weight: 1.0
+    image_reward_score_weight: 0.0
+    hpsv2_score_weight: 0.0
+    pickscore_score_weight: 0.0
+    jpeg_size_weight: 0.0
+    sigma: 0.08440560105362123
+    results_folder: "results_sepcmaes_sd15_clip"
 
   - aesthetic_score_weight: 0.0
     clip_score_weight: 0.0
@@ -24,4 +26,5 @@ runs:
     hpsv2_score_weight: 1.0
     pickscore_score_weight: 0.0
     jpeg_size_weight: 0.0
-    results_folder: "results_randomsampler_sd15_hpsv2"
+    sigma: 0.1608406003147091
+    results_folder: "results_sepcmaes_sd15_hpsv2"

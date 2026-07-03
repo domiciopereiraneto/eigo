@@ -2812,6 +2812,11 @@ class Eigo:
             weight_decay=adam_weight_decay,
             eps=adam_eps,
         )
+        use_fp16_grad_scaling = (
+            self.model_dtype == torch.float16
+            and str(self._pipeline_input_device()).startswith("cuda")
+        )
+        grad_scaler = torch.amp.GradScaler("cuda", enabled=use_fp16_grad_scaling)
 
         start_time = time.time()
         elapsed_time = 0.0
@@ -2893,11 +2898,13 @@ class Eigo:
                 break
 
             # Calculate gradients
-            combined_loss.backward()
+            grad_scaler.scale(combined_loss).backward()
             if adam_max_grad_norm is not None:
+                grad_scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=adam_max_grad_norm)
             # Update parameters
-            optimizer.step()
+            grad_scaler.step(optimizer)
+            grad_scaler.update()
 
             # Append metrics to their respective lists
             aesthetic_score_list.append(aesthetic_score.item())

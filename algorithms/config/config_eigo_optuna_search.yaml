@@ -4,16 +4,16 @@
 
 # Select which optimizers Optuna can sample.
 # If more than one is enabled, Optuna samples the optimizer as a categorical parameter.
-test_adam: false
+test_adam: true
 test_ga: false
-test_cmaes: true
+test_cmaes: false
 
 # General parameters (copied from config_eigo.yaml)
 seed: 42
 cuda: 0
 predictor: 2
 num_inference_steps: 50
-batch_size: 16
+batch_size: 1
 guidance_scale: 7.5
 lcm_origin_steps: 50
 height: 512
@@ -40,17 +40,17 @@ evaluate_zero_weight_metrics: false  # Keep zero-weight scorer models/graphs out
 optimization_target: "prompt_embeddings"  # "prompt_embeddings" or "latent_noise" for CMA-ES/GA/Adam/random_sampler
 model_id: "stable-diffusion-v1-5/stable-diffusion-v1-5" # Model ID (e.g., "black-forest-labs/FLUX.1-schnell", "PixArt-alpha/PixArt-XL-2-1024-MS", "Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers", "Efficient-Large-Model/Sana_1600M_1024px_diffusers", "stabilityai/sdxl-turbo", "SimianLuo/LCM_Dreamshaper_v7")
 model_backend: "auto" # "auto", "sdxl", "flux", "pixart", "lcm", "sana", or "sana_sprint"
-torch_dtype: "float32"
+torch_dtype: "float16"
 max_sequence_length: 256  # FLUX/Sana text encoder token limit
 use_safetensors: true
 use_multi_gpu: false
 pipeline_device_map: "balanced"
 max_memory: null
-enable_gradient_checkpointing: false
+enable_gradient_checkpointing: true
 enable_attention_slicing: false
 enable_vae_slicing: false
 enable_vae_tiling: false
-results_folder: "results_optuna_sd15_sepcmaes_imagereward"
+results_folder: "results_optuna_sd15_adam_imagereward"
 
 # CMA-ES defaults (used if not overridden by optuna.search_space.cmaes)
 num_generations: 15
@@ -60,7 +60,7 @@ sigma: 0.5
 save_gens: false
 
 # Adam defaults (used if not overridden by optuna.search_space.adam)
-num_iterations: 600
+num_iterations: 50
 adam_lr: 5e-3
 adam_weight_decay: 0
 adam_eps: 1e-8
@@ -115,14 +115,12 @@ optuna:
     adam:
       adam_lr:
         type: "float"
-        low: 1e-4
-        high: 1e-2
+        low: 3e-4
+        high: 5e-3
         log: true
       adam_weight_decay:
-        type: "float"
-        low: 1e-6
-        high: 3e-3
-        log: true
+        type: "categorical"
+        choices: [0.0, 1e-6, 1e-4, 1e-3, 1e-2]
       adam_beta1:
         type: "float"
         low: 0.7
@@ -130,11 +128,11 @@ optuna:
       adam_beta2:
         type: "float"
         low: 0.9
-        high: 0.995
+        high: 0.999
       adam_eps:
         type: "float"
-        low: 1e-10
-        high: 1e-7
+        low: 1e-8
+        high: 1e-5
         log: true
 
     ga:

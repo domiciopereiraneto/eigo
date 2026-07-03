@@ -9,6 +9,7 @@ The repository currently exposes:
 - `algorithms/eigo_single_prompt.py`: run one prompt with Adam, GA, or CMA-ES
 - `algorithms/p2_experiments.py`: run batches over sampled Parti Prompts or DrawBench categories
 - `algorithms/p2_schedule.py`: launch multiple `p2_experiments.py` runs from scheduled config overrides
+- `algorithms/optuna_schedule.py`: launch multiple Optuna searches from scheduled config overrides
 - `algorithms/eigo_grid_search.py`: run parameter sweeps for one prompt
 - `algorithms/tools/process_results.py`: generate summary tables, plots, and image grids from completed runs
 
@@ -235,6 +236,16 @@ python algorithms/eigo_optuna_search.py \
 ```
 
 The Optuna config supports the same base EIGO keys, including fixed `optimization_target`, plus `optuna.n_trials`, `optuna.direction`, `optuna.metric`, `optuna.sampler`, and method-specific `optuna.search_space` entries. Put `optimization_target` in a method search space to sample between `prompt_embeddings` and `latent_noise`. Lists are sampled as categorical choices, while dictionaries can define `float`, `int`, or `categorical` distributions. Each trial evaluates all selected prompts and optimizes the mean final objective value.
+
+To run several Optuna searches sequentially, recursively replacing base config values for each run:
+
+```bash
+python algorithms/optuna_schedule.py \
+  --base-config algorithms/config/config_eigo_optuna_search.yaml \
+  --schedule algorithms/config/optuna_schedule.yaml
+```
+
+Nested overrides are supported, including `optuna.study_name`, `optuna.storage`, and method-specific `optuna.search_space` values. Use distinct study names, storage URLs, and results folders for independent searches.
 
 ## Processing Results
 

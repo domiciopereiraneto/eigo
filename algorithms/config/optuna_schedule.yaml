@@ -1,0 +1,37 @@
+# Each run is recursively merged onto config_eigo_optuna_search.yaml before
+# launching eigo_optuna_search.py. Give every run distinct result and study paths.
+
+runs:
+  - aesthetic_score_weight: 0.0
+    clip_score_weight: 0.0
+    image_reward_score_weight: 1.0
+    hpsv2_score_weight: 0.0
+    pickscore_score_weight: 0.0
+    jpeg_size_weight: 0.0
+    results_folder: "results_optuna_sd15_adam_imagereward"
+    optuna:
+      study_name: "eigo_optuna_search_sd15_adam_imagereward"
+      storage: "sqlite:///results_optuna_sd15_adam_imagereward/optuna.db"
+
+  - aesthetic_score_weight: 0.0
+    clip_score_weight: 1.0
+    image_reward_score_weight: 0.0
+    hpsv2_score_weight: 0.0
+    pickscore_score_weight: 0.0
+    jpeg_size_weight: 0.0
+    results_folder: "results_optuna_sd15_adam_clip"
+    optuna:
+      study_name: "eigo_optuna_search_sd15_adam_clip"
+      storage: "sqlite:///results_optuna_sd15_adam_clip/optuna.db"
+
+  - aesthetic_score_weight: 0.0
+    clip_score_weight: 0.0
+    image_reward_score_weight: 0.0
+    hpsv2_score_weight: 1.0
+    pickscore_score_weight: 0.0
+    jpeg_size_weight: 0.0
+    results_folder: "results_optuna_sd15_adam_hpsv2"
+    optuna:
+      study_name: "eigo_optuna_search_sd15_adam_hpsv2"
+      storage: "sqlite:///results_optuna_sd15_adam_hpsv2/optuna.db"
+
