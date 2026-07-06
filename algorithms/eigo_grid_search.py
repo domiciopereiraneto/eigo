@@ -48,7 +48,7 @@ def _coerce_scalar(value):
 
 def extract_final_results(produced_folder, method):
     produced_path = Path(produced_folder)
-    if method in {"cmaes", "ga", "random_sampler"}:
+    if method in {"cmaes", "snes", "ga", "zero_order", "random_sampler"}:
         csv_path = produced_path / "fitness_results.csv"
         metric_keys = [
             "generation",
@@ -173,11 +173,12 @@ def build_run_queue(config):
     test_adam = bool(config.get("test_adam", True))
     test_ga = bool(config.get("test_ga", False))
     test_cmaes = bool(config.get("test_cmaes", True))
+    test_snes = bool(config.get("test_snes", False))
     test_random_sampler = bool(config.get("test_random_sampler", False))
 
-    if not test_adam and not test_ga and not test_cmaes and not test_random_sampler:
+    if not test_adam and not test_ga and not test_cmaes and not test_snes and not test_random_sampler:
         raise ValueError(
-            "At least one of 'test_adam', 'test_ga', 'test_cmaes', "
+            "At least one of 'test_adam', 'test_ga', 'test_cmaes', 'test_snes', "
             "or 'test_random_sampler' must be true."
         )
 
@@ -185,7 +186,7 @@ def build_run_queue(config):
     if grid_config is None:
         grid_config = {}
     if not isinstance(grid_config, dict):
-        raise ValueError("'grid' must be a dictionary with optional 'adam', 'ga', 'cmaes', and 'random_sampler' sections.")
+        raise ValueError("'grid' must be a dictionary with optional 'adam', 'ga', 'cmaes', 'snes', and 'random_sampler' sections.")
 
     run_queue = []
 
@@ -206,6 +207,11 @@ def build_run_queue(config):
         cmaes_combos = expand_grid(cmaes_grid)
         for combo in cmaes_combos:
             run_queue.append(("cmaes", combo))
+
+    if test_snes:
+        snes_grid = normalize_grid(grid_config.get("snes", {}))
+        for combo in expand_grid(snes_grid):
+            run_queue.append(("snes", combo))
 
     if test_random_sampler:
         random_sampler_grid = normalize_grid(grid_config.get("random_sampler", {}))
@@ -313,8 +319,12 @@ def run_grid_search(config, dry_run=False):
                     produced_folder = eigo_engine.run_ga_optimization()
                 elif method == "cmaes":
                     produced_folder = eigo_engine.run_cmaes_optimization()
+                elif method == "snes":
+                    produced_folder = eigo_engine.run_snes_optimization()
                 elif method == "random_sampler":
                     produced_folder = eigo_engine.run_random_sampler_optimization()
+                elif method == "zero_order":
+                    produced_folder = eigo_engine.run_zero_order_optimization()
                 else:
                     raise ValueError(f"Unsupported method: {method}")
 
@@ -350,6 +360,7 @@ def save_summary(config, summary_rows):
         "test_adam": bool(config.get("test_adam", True)),
         "test_ga": bool(config.get("test_ga", False)),
         "test_cmaes": bool(config.get("test_cmaes", True)),
+        "test_snes": bool(config.get("test_snes", False)),
         "test_random_sampler": bool(config.get("test_random_sampler", False)),
         "total_runs": len(summary_rows),
         "runs": summary_rows,

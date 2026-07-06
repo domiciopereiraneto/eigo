@@ -1,5 +1,5 @@
 # Primary configuration parameters
-"optimization_method": "adam" #"cmaes" for CMA-ES variants, "ga" for the genetic algorithm, "adam" for AdamW, "random_sampler" for random seed sampling
+"optimization_method": "zero_order" # "cmaes", "snes", "ga", "adam", "zero_order", or "random_sampler"
 
 # Prompt dataset parameters (used by p2_experiments.py)
 seed_path: null  # Path to a file with seeds; if null, uses the 'seed' below
@@ -20,7 +20,7 @@ single_prompt_per_seed: false  # If true, ignore per-category sampling and pick 
 cuda: 0  # GPU device ID to use (e.g., 0 for first GPU); falls back to CPU if unavailable
 predictor: 2  # 0: SAM, 1: LAION V1, 2: LAION V2
 num_inference_steps: 50  # Diffusion inference steps during image generation; LCM usually works well with 1-8
-batch_size: 8  # Number of candidates/images to generate and score at once for CMA-ES/GA/random_sampler
+batch_size: 8  # Number of candidates/images to generate and score at once for CMA-ES/GA/zero_order/random_sampler
 guidance_scale: 7.5 # Classifier-free guidance scale (0 means disabled)
 lcm_origin_steps: 50  # Original diffusion steps for LCM backends; ignored by other backends
 height: 512  # Generated image height (pixels)
@@ -44,8 +44,8 @@ hpsv2_version: "v2.1"  # HPSv2 checkpoint version; set to null to disable HPSv2 
 pickscore_model: "yuvalkirstain/PickScore_v1"  # PickScore checkpoint name; set to null to disable PickScore calculation
 pickscore_processor: "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"  # Processor backbone for PickScore; set to null to disable PickScore calculation
 evaluate_zero_weight_metrics: false  # Keep zero-weight scorer models/graphs out of Adam VRAM
-optimization_target: "prompt_embeddings"  # "prompt_embeddings" or "latent_noise" for CMA-ES/GA/Adam/random_sampler
-results_folder: "results_adam_embeddings_imagereward"  # Output directory for runs and artifacts
+optimization_target: "prompt_embeddings"  # "prompt_embeddings" or "latent_noise" for all optimization methods
+results_folder: "results_zeroorder_embeddings_imagereward"  # Output directory for runs and artifacts
 
 # Diffusion model parameters
 model_id: "stable-diffusion-v1-5/stable-diffusion-v1-5" # Model ID (e.g., "black-forest-labs/FLUX.1-schnell", "PixArt-alpha/PixArt-XL-2-1024-MS", "Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers", "Efficient-Large-Model/Sana_1600M_1024px_diffusers", "stabilityai/sdxl-turbo", "SimianLuo/LCM_Dreamshaper_v7")
@@ -70,8 +70,20 @@ cmaes_variant: "sep"  # "cmaes" (standard), "sep", or "vd"
 sigma: 0.1  # Initial CMA-ES standard deviation
 save_gens: true # Save individuals of each generation to the results folder
 
+# SNES specific parameters (optional; fall back to the common values above)
+snes_num_generations: 15
+snes_pop_size: 16
+snes_sigma: 0.1
+snes_eta_mu: 1.0
+snes_eta_sigma: null  # null uses the dimension-dependent SNES default
+
+# Zero-order specific parameters
+zero_order_num_generations: 15  # Number of pivot-update steps
+zero_order_pop_size: 16  # Gaussian candidates generated around each pivot
+zero_order_sigma: 0.1  # Standard deviation of candidate perturbations
+
 # AdamW specific parameters (if selected)
-"num_iterations": 240  # Number of iterations for the Adam optimization process
+"num_iterations": 50  # Number of iterations for the Adam optimization process
 "adam_lr": 1e-3  # Learning rate for the Adam optimizer
 "adam_weight_decay": 1e-2  # Weight decay for the Adam optimizer
 "adam_eps": 1e-5  # Epsilon value for numerical stability in the Adam

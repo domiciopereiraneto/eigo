@@ -1,7 +1,8 @@
 """
 This script contains the Eigo class, an optimization engine for diffusion-based image
 generation guided by aesthetic, prompt-alignment, and ImageReward scores. The engine
-supports CMA-ES (standard, sep-CMA-ES and VD-CMA), GA, Adam, and random sampling.
+supports CMA-ES (standard, sep-CMA-ES and VD-CMA), SNES, GA, Adam, zero-order
+search, and random sampling.
 """
 
 import sys
@@ -41,6 +42,7 @@ import argparse
 import re
 import ast
 import inspect
+from types import SimpleNamespace
 from io import BytesIO
 from contextlib import nullcontext
 from pathlib import Path
@@ -60,6 +62,77 @@ from src.aesthetic_evaluation import (
     LAIONV2Aesthetic,
     SimulacraAesthetic,
 )
+
+
+class SeparableNaturalEvolutionStrategy:
+    """Minimal SNES optimizer with an ask/tell interface compatible with pycma."""
+
+    def __init__(self, mean, sigma, pop_size, max_generations, seed=None,
+                 eta_mu=1.0, eta_sigma=None):
+        self.mean = np.asarray(mean, dtype=np.float64).copy()
+        if self.mean.ndim != 1:
+            raise ValueError("SNES requires a one-dimensional initial vector.")
+        if sigma <= 0:
+            raise ValueError("SNES requires sigma > 0.")
+        if pop_size < 2:
+            raise ValueError("SNES requires pop_size >= 2.")
+        self.sigma = np.full(self.mean.shape, float(sigma), dtype=np.float64)
+        self.pop_size = int(pop_size)
+        self.max_generations = int(max_generations)
+        if self.max_generations <= 0:
+            raise ValueError("SNES requires max_generations > 0.")
+        self.eta_mu = float(eta_mu)
+        self.eta_sigma = (
+            (3.0 + np.log(self.mean.size)) / (5.0 * np.sqrt(self.mean.size))
+            if eta_sigma is None else float(eta_sigma)
+        )
+        if self.eta_mu <= 0 or self.eta_sigma <= 0:
+            raise ValueError("SNES learning rates must be greater than zero.")
+        self.rng = np.random.default_rng(seed)
+        self.generation = 0
+        self._noise = None
+        self.result = SimpleNamespace(xbest=self.mean.copy(), fbest=np.inf)
+
+    def ask(self):
+        half = self.pop_size // 2
+        noise = self.rng.standard_normal((half, self.mean.size))
+        noise = np.concatenate((noise, -noise), axis=0)
+        if self.pop_size % 2:
+            noise = np.concatenate(
+                (noise, self.rng.standard_normal((1, self.mean.size))), axis=0
+            )
+        self._noise = noise
+        return [candidate for candidate in self.mean + self.sigma * noise]
+
+    def tell(self, solutions, fitnesses):
+        if self._noise is None or len(fitnesses) != self.pop_size:
+            raise ValueError("SNES tell() must follow ask() with one fitness per candidate.")
+        fitnesses = np.asarray(fitnesses, dtype=np.float64)
+        best_idx = int(np.argmin(fitnesses))
+        if fitnesses[best_idx] < self.result.fbest:
+            self.result = SimpleNamespace(
+                xbest=np.asarray(solutions[best_idx], dtype=np.float64).copy(),
+                fbest=float(fitnesses[best_idx]),
+            )
+
+        # Fitness utilities: best minimization rank receives the largest weight.
+        order = np.argsort(fitnesses, kind="stable")
+        ranks = np.empty(self.pop_size, dtype=int)
+        ranks[order] = np.arange(self.pop_size)
+        utilities = np.maximum(0.0, np.log(self.pop_size / 2.0 + 1.0) - np.log(ranks + 1.0))
+        utilities /= utilities.sum()
+        utilities -= 1.0 / self.pop_size
+
+        grad_mean = utilities @ self._noise
+        grad_sigma = utilities @ (self._noise ** 2 - 1.0)
+        self.mean += self.eta_mu * self.sigma * grad_mean
+        exponent = np.clip(0.5 * self.eta_sigma * grad_sigma, -20.0, 20.0)
+        self.sigma = np.clip(self.sigma * np.exp(exponent), 1e-12, 1e6)
+        self.generation += 1
+        self._noise = None
+
+    def stop(self):
+        return self.generation >= self.max_generations
 
 class Eigo:
     _MODEL_CACHE = {}
@@ -210,6 +283,10 @@ class Eigo:
             method_save_name = "ga"
         elif config_parameters["optimization_method"] == "random_sampler":
             method_save_name = "randomsampler"
+        elif config_parameters["optimization_method"] == "zero_order":
+            method_save_name = "zeroorder"
+        elif config_parameters["optimization_method"] == "snes":
+            method_save_name = "snes"
         else:
             raise ValueError(f"Unknown optimization method: {config_parameters['optimization_method']}")
 
@@ -1564,7 +1641,7 @@ class Eigo:
         with torch.no_grad():
             target_state = self._build_optimization_target_state(selected_prompt, seed)
 
-        # Set CMA-ES options
+        # Set population optimizer options
         es_options = {
             'seed': seed,
             'popsize': self.parameters["pop_size"],
@@ -1574,7 +1651,9 @@ class Eigo:
             'verbose': -9,  # Suppress console output
         }
 
-        if self.parameters["cmaes_variant"] == "cmaes":
+        if self.parameters["optimization_method"] == "snes":
+            print("Using Separable Natural Evolution Strategy (SNES)")
+        elif self.parameters["cmaes_variant"] == "cmaes":
             print("Using standard CMA-ES")
         elif self.parameters["cmaes_variant"] == "sep":
             print("Using sep-CMA-ES")
@@ -1587,7 +1666,21 @@ class Eigo:
 
         trainable_params_init = target_state["initial_vector"]
 
-        es = cma.CMAEvolutionStrategy(trainable_params_init, self.parameters["sigma"], es_options)
+        if self.parameters["optimization_method"] == "snes":
+            es = SeparableNaturalEvolutionStrategy(
+                trainable_params_init,
+                float(self.parameters.get("snes_sigma", self.parameters["sigma"])),
+                int(self.parameters.get("snes_pop_size", self.parameters["pop_size"])),
+                int(self.parameters.get("snes_num_generations", self.parameters["num_generations"])),
+                seed=seed,
+                eta_mu=float(self.parameters.get("snes_eta_mu", 1.0)),
+                eta_sigma=self.parameters.get("snes_eta_sigma"),
+            )
+            # Keep reporting and time-limit accounting aligned with SNES overrides.
+            self.parameters["pop_size"] = es.pop_size
+            self.parameters["num_generations"] = es.max_generations
+        else:
+            es = cma.CMAEvolutionStrategy(trainable_params_init, self.parameters["sigma"], es_options)
 
         with torch.no_grad():
             initial_image = self.generate_image_from_tensors_cmaes(
@@ -1854,6 +1947,142 @@ class Eigo:
         results.to_csv(f"{results_folder}/fitness_results.csv", index=False, na_rep='nan')
         self._save_population_plot_results(results, results_folder)
 
+        return results_folder
+
+    def run_snes_optimization(self, seed=None, seed_number=None, prompt=None, category=None, prompt_number=None):
+        """Optimize with a diagonal Gaussian using SNES natural-gradient updates."""
+        return self.run_cmaes_optimization(seed, seed_number, prompt, category, prompt_number)
+
+    def run_zero_order_optimization(self, seed=None, seed_number=None, prompt=None, category=None, prompt_number=None):
+        """Optimize the selected target by retaining the best Gaussian perturbation."""
+        seed = int(self.parameters["seed"] if seed is None else seed)
+        selected_prompt = self.parameters["selected_prompt"] if prompt is None else prompt
+        pop_size = int(self.parameters.get("zero_order_pop_size", self.parameters["pop_size"]))
+        num_generations = int(self.parameters.get("zero_order_num_generations", self.parameters["num_generations"]))
+        sigma = float(self.parameters.get("zero_order_sigma", self.parameters["sigma"]))
+        if pop_size <= 0:
+            raise ValueError("pop_size must be a positive integer.")
+        if num_generations < 0:
+            raise ValueError("num_generations must be non-negative.")
+        if sigma < 0:
+            raise ValueError("sigma must be non-negative.")
+
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+        random.seed(seed)
+        print(f"Selected prompt: {selected_prompt}")
+
+        results_folder = f"{self.OUTPUT_FOLDER}/results_{self.model_name}_{seed}"
+        if prompt_number is not None:
+            results_folder += f"_{prompt_number}"
+        os.makedirs(results_folder, exist_ok=True)
+        self._save_run_config(results_folder, seed, selected_prompt, category=category, prompt_number=prompt_number)
+
+        self._reset_peak_vram()
+        with torch.no_grad():
+            target_state = self._build_optimization_target_state(selected_prompt, seed)
+        pivot = torch.as_tensor(target_state["initial_vector"], dtype=torch.float32)
+        initial = self.evaluate(pivot.numpy(), seed, target_state, selected_prompt)
+        initial_score = -initial[0]
+        pe, ppe, latents = tensors_from_vector(pivot.numpy(), target_state, self.device)
+        with torch.no_grad():
+            initial_image = self.generate_image_from_tensors_cmaes(pe, ppe, seed, latents=latents)
+        self._save_jpeg(initial_image, os.path.join(results_folder, "it_0.jpg"))
+
+        rows = [{
+            "generation": 0, "prompt": selected_prompt,
+            "avg_fitness": initial_score, "std_fitness": 0.0, "max_fitness": initial_score,
+            "avg_aesthetic_score": initial[1], "std_aesthetic_score": 0.0, "max_aesthetic_score": initial[1],
+            "avg_clip_score": initial[2], "std_clip_score": 0.0, "max_clip_score": initial[2],
+            "avg_image_reward_score": initial[3], "std_image_reward_score": 0.0, "max_image_reward_score": initial[3],
+            "avg_hpsv2_score": initial[4], "std_hpsv2_score": 0.0, "max_hpsv2_score": initial[4],
+            "avg_pickscore_score": initial[5], "std_pickscore_score": 0.0, "max_pickscore_score": initial[5],
+            "avg_jpeg_size_kb": initial[6], "std_jpeg_size_kb": 0.0, "min_jpeg_size_kb": initial[6],
+            "elapsed_time": 0.0, "peak_vram_mb": self._peak_vram_mb(),
+        }]
+        start_time = time.time()
+
+        for generation in range(1, num_generations + 1):
+            elapsed = time.time() - start_time
+            limit = self.parameters.get("time_limit_seconds")
+            if limit is not None and elapsed >= limit:
+                print(f"Time limit reached before generation {generation}/{num_generations}.")
+                break
+            print(f"Generation {generation}/{num_generations}")
+            self._reset_peak_vram()
+
+            candidates = [pivot + sigma * torch.randn_like(pivot) for _ in range(pop_size)]
+            save_paths = [None] * pop_size
+            if self.parameters.get("save_gens", False):
+                generation_folder = os.path.join(results_folder, f"gen_{generation}")
+                os.makedirs(generation_folder, exist_ok=True)
+                save_paths = [os.path.join(generation_folder, f"id_{i}.jpg") for i in range(1, pop_size + 1)]
+            evaluated = self.evaluate_batch(
+                [candidate.numpy() for candidate in candidates], [seed] * pop_size,
+                target_state, selected_prompt, save_paths,
+            )
+            rewards = torch.tensor([-result[0] for result in evaluated])
+            best_idx = int(rewards.argmax().item())
+            pivot = candidates[best_idx]
+
+            pe, ppe, latents = tensors_from_vector(pivot.numpy(), target_state, self.device)
+            with torch.no_grad():
+                best_image = self.generate_image_from_tensors_cmaes(pe, ppe, seed, latents=latents)
+            self._save_jpeg(best_image, os.path.join(results_folder, f"best_{generation}.jpg"))
+
+            metric_specs = {
+                "fitness": ([-r[0] for r in evaluated], "max"),
+                "aesthetic_score": ([r[1] for r in evaluated], "max"),
+                "clip_score": ([r[2] for r in evaluated], "max"),
+                "image_reward_score": ([r[3] for r in evaluated], "max"),
+                "hpsv2_score": ([r[4] for r in evaluated], "max"),
+                "pickscore_score": ([r[5] for r in evaluated], "max"),
+                "jpeg_size_kb": ([r[6] for r in evaluated], "min"),
+            }
+            row = {"generation": generation, "prompt": "", "elapsed_time": time.time() - start_time,
+                   "peak_vram_mb": self._peak_vram_mb()}
+            for name, (values, reducer) in metric_specs.items():
+                values = np.asarray(values, dtype=float)
+                row[f"avg_{name}"] = float(values.mean())
+                row[f"std_{name}"] = float(values.std())
+                row[f"{reducer}_{name}"] = float(values.max() if reducer == "max" else values.min())
+            rows.append(row)
+
+            elapsed_time = row["elapsed_time"]
+            average_time_per_generation = elapsed_time / generation
+            estimated_time_remaining = average_time_per_generation * (num_generations - generation)
+            formatted_time_remaining = self.format_time(estimated_time_remaining)
+
+            results = pd.DataFrame(rows)
+            if category is not None:
+                results["category"] = [category] + [""] * (len(results) - 1)
+            results.to_csv(os.path.join(results_folder, "fitness_results.csv"), index=False, na_rep="nan")
+            self._save_population_plot_results(results, results_folder)
+
+            print(
+                f"Generation {generation}/{num_generations}: "
+                f"Max fitness: {row['max_fitness']}, Avg fitness: {row['avg_fitness']}, "
+                f"Max aesthetic score: {row['max_aesthetic_score']}, "
+                f"Avg aesthetic score: {row['avg_aesthetic_score']}, "
+                f"Max clip score: {row['max_clip_score']}, Avg clip score: {row['avg_clip_score']}, "
+                f"Max ImageReward score: {row['max_image_reward_score']}, "
+                f"Avg ImageReward score: {row['avg_image_reward_score']}, "
+                f"Max HPSv2 score: {row['max_hpsv2_score']}, "
+                f"Avg HPSv2 score: {row['avg_hpsv2_score']}, "
+                f"Max PickScore: {row['max_pickscore_score']}, "
+                f"Avg PickScore: {row['avg_pickscore_score']}, "
+                f"Estimated time remaining: {formatted_time_remaining}"
+            )
+
+        pe, ppe, latents = tensors_from_vector(pivot.numpy(), target_state, self.device)
+        with torch.no_grad():
+            best_image = self.generate_image_from_tensors_cmaes(pe, ppe, seed, latents=latents)
+        self._save_jpeg(best_image, os.path.join(results_folder, "best_all.jpg"))
+        results = pd.DataFrame(rows)
+        if category is not None:
+            results["category"] = [category] + [""] * (len(results) - 1)
+        results.to_csv(os.path.join(results_folder, "fitness_results.csv"), index=False, na_rep="nan")
+        self._save_population_plot_results(results, results_folder)
         return results_folder
 
     def run_ga_optimization(self, seed = None, seed_number = None, prompt = None, category = None, prompt_number = None):

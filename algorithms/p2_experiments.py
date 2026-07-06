@@ -1,7 +1,7 @@
 """
 Population-based optimization of text embeddings for image generation using the configured diffusion backend.
 
-This script employs an optimizer or sampler (CMA-ES, GA, Adam, or random sampling) to modify or sample text-to-image generations while maximizing aesthetic and CLIP scores. It supports configuration through a YAML file and provides functionality for prompt sampling, image generation, and evaluation.
+This script employs an optimizer or sampler (CMA-ES, SNES, GA, Adam, or random sampling) to modify or sample text-to-image generations while maximizing aesthetic and CLIP scores. It supports configuration through a YAML file and provides functionality for prompt sampling, image generation, and evaluation.
 
 Main Features:
 - Loads configuration parameters from a YAML file.
@@ -909,6 +909,10 @@ if __name__ == "__main__":
                 eigo_engine.run_adam_optimization(seed=seed, seed_number=seed_number, prompt=prompt, category=category, prompt_number=prompt_number)
             elif config['optimization_method'] == "random_sampler":
                 eigo_engine.run_random_sampler_optimization(seed=seed, seed_number=seed_number, prompt=prompt, category=category, prompt_number=prompt_number)
+            elif config['optimization_method'] == "zero_order":
+                eigo_engine.run_zero_order_optimization(seed=seed, seed_number=seed_number, prompt=prompt, category=category, prompt_number=prompt_number)
+            elif config['optimization_method'] == "snes":
+                eigo_engine.run_snes_optimization(seed=seed, seed_number=seed_number, prompt=prompt, category=category, prompt_number=prompt_number)
             else:
                 raise ValueError(f"Unknown optimization method: {config['optimization_method']}")
             print(f"Run with seed {seed} and prompt '{prompt}' finished!")

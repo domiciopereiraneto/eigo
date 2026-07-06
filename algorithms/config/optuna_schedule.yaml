@@ -8,10 +8,10 @@ runs:
     hpsv2_score_weight: 0.0
     pickscore_score_weight: 0.0
     jpeg_size_weight: 0.0
-    results_folder: "results_optuna_sd15_adam_imagereward"
+    results_folder: "results_optuna_sd15_snes_imagereward"
     optuna:
-      study_name: "eigo_optuna_search_sd15_adam_imagereward"
-      storage: "sqlite:///results_optuna_sd15_adam_imagereward/optuna.db"
+      study_name: "eigo_optuna_search_sd15_snes_imagereward"
+      storage: "sqlite:///results_optuna_sd15_snes_imagereward/optuna.db"
 
   - aesthetic_score_weight: 0.0
     clip_score_weight: 1.0
@@ -19,10 +19,10 @@ runs:
     hpsv2_score_weight: 0.0
     pickscore_score_weight: 0.0
     jpeg_size_weight: 0.0
-    results_folder: "results_optuna_sd15_adam_clip"
+    results_folder: "results_optuna_sd15_snes_clip"
     optuna:
-      study_name: "eigo_optuna_search_sd15_adam_clip"
-      storage: "sqlite:///results_optuna_sd15_adam_clip/optuna.db"
+      study_name: "eigo_optuna_search_sd15_snes_clip"
+      storage: "sqlite:///results_optuna_sd15_snes_clip/optuna.db"
 
   - aesthetic_score_weight: 0.0
     clip_score_weight: 0.0
@@ -30,8 +30,8 @@ runs:
     hpsv2_score_weight: 1.0
     pickscore_score_weight: 0.0
     jpeg_size_weight: 0.0
-    results_folder: "results_optuna_sd15_adam_hpsv2"
+    results_folder: "results_optuna_sd15_snes_hpsv2"
     optuna:
-      study_name: "eigo_optuna_search_sd15_adam_hpsv2"
-      storage: "sqlite:///results_optuna_sd15_adam_hpsv2/optuna.db"
+      study_name: "eigo_optuna_search_sd15_snes_hpsv2"
+      storage: "sqlite:///results_optuna_sd15_snes_hpsv2/optuna.db"
 

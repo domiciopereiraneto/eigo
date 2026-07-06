@@ -68,6 +68,7 @@ DEFAULT_LABELS = {
     "cmaes": "CMA-ES",
     "sepcmaes": "sep-CMA-ES",
     "vdcmae": "VD-CMA",
+    "snes": "SNES",
     "ga": "GA",
     "randomsampler": "Random sampler",
 }

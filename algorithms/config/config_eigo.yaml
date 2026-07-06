@@ -1,13 +1,13 @@
 # Primary configuration parameters
 "selected_prompt": "an astrounat riding a horse in mars" # Text prompt to guide image generation
-"optimization_method": "adam" #"cmaes" for CMA-ES variants, "ga" for the genetic algorithm, "adam" for Adam, "random_sampler" for random seed sampling
+"optimization_method": "adam" # "snes", "zero_order", "cmaes", "ga", "adam", or "random_sampler"
 
 # General parameters
 "seed": 42  # Default seed value for reproducibility
 "cuda": 1  # GPU device ID to use (e.g. 0 for the first GPU). If no GPU is available falls back to CPU.
 "predictor": 2  # Predictor type= 0 for SAM 1 for LAION V1 2 for LAION V2
 "num_inference_steps": 2  # Number of inference steps for the diffusion model during image generation; LCM usually works well with 1-8
-"batch_size": 1  # Number of candidates/images to generate and score at once for CMA-ES/GA/random_sampler
+"batch_size": 1  # Number of candidates/images to generate and score at once for CMA-ES/GA/zero_order/random_sampler
 "guidance_scale": 4.5  # Guidance scale for classifier-free guidance (set to 0 for no guidance)
 "lcm_origin_steps": 50  # Original diffusion steps for LCM backends; ignored by other backends
 "height": 512  # Height of the generated image in pixels
@@ -31,7 +31,7 @@
 "pickscore_model": "yuvalkirstain/PickScore_v1"  # PickScore checkpoint name; set to null to disable PickScore calculation
 "pickscore_processor": "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"  # Processor backbone for PickScore; set to null to disable PickScore calculation
 "evaluate_zero_weight_metrics": false  # If false, zero-weight metrics are not loaded/evaluated; recommended for Adam VRAM
-"optimization_target": "prompt_embeddings"  # "prompt_embeddings" or "latent_noise" for CMA-ES/GA/Adam/random_sampler
+"optimization_target": "prompt_embeddings"  # "prompt_embeddings" or "latent_noise" for all optimization methods
 "model_id": "Efficient-Large-Model/Sana_Sprint_0.6B_1024px_diffusers" # Model ID (e.g., "runwayml/stable-diffusion-v1-5", "stabilityai/stable-diffusion-2-1-base", "black-forest-labs/FLUX.1-schnell", "PixArt-alpha/PixArt-XL-2-1024-MS", "Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers", "Efficient-Large-Model/Sana_1600M_1024px_diffusers", "stabilityai/sdxl-turbo", "SimianLuo/LCM_Dreamshaper_v7")
 "model_backend": "auto"  # Diffusion backend: "auto", "sd", "sdxl", "flux", "pixart", "lcm", "sana", or "sana_sprint"
 "torch_dtype": "bfloat16"  # "auto", "float32", "float16", or "bfloat16" (FLUX on GPU usually benefits from bfloat16)
@@ -46,12 +46,19 @@
 "enable_vae_tiling": false  # Enable VAE tiling for high-resolution/low-VRAM decoding
 "results_folder": "results_sana_sprint_test_adam"  # Folder to save results including
 
-# CMA-ES specific parameters (if selected)
+# CMA-ES, SNES, and zero-order parameters (if selected)
 "num_generations": 100  # Number of generations for the CMA-ES optimization process
-"pop_size": 20  # Population size for CMA-ES optimization
+"pop_size": 20  # Population size for CMA-ES/GA/zero-order optimization
 "cmaes_variant": "sep"  # Variant of CMA-ES to use: "cmaes" (standard) "sep" (sep-CMA-ES) or "vd" (VD-CMA)
-"sigma": 0.5  # Initial standard deviation for CMA-ES optimization
+"sigma": 0.5  # Search-noise standard deviation for CMA-ES/zero-order optimization
 save_gens: false # Save individuals of each generation to the results folder
+
+# Optional SNES overrides (defaults to num_generations, pop_size, and sigma above)
+"snes_num_generations": 100
+"snes_pop_size": 20
+"snes_sigma": 0.5
+"snes_eta_mu": 1.0  # Mean natural-gradient learning rate
+"snes_eta_sigma": null  # null uses the dimension-dependent SNES default
 
 # Adam specific parameters (if selected)
 "num_iterations": 1000  # Number of iterations for the Adam optimization process

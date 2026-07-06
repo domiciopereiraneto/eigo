@@ -33,6 +33,10 @@ elif experimental_setup_parameters["optimization_method"] == "adam":
     results_folder = eigo_engine.run_adam_optimization()
 elif experimental_setup_parameters["optimization_method"] == "random_sampler":
     results_folder = eigo_engine.run_random_sampler_optimization()
+elif experimental_setup_parameters["optimization_method"] == "zero_order":
+    results_folder = eigo_engine.run_zero_order_optimization()
+elif experimental_setup_parameters["optimization_method"] == "snes":
+    results_folder = eigo_engine.run_snes_optimization()
 else:
     raise ValueError(f"Unknown optimization method: {experimental_setup_parameters['optimization_method']}")
 
