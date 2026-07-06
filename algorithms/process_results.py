@@ -69,6 +69,7 @@ DEFAULT_LABELS = {
     "sepcmaes": "sep-CMA-ES",
     "vdcmae": "VD-CMA",
     "snes": "SNES",
+    "cosyne": "CoSyNE",
     "ga": "GA",
     "randomsampler": "Random sampler",
 }
@@ -200,7 +201,10 @@ def parse_seed(name: str, weights: Dict[str, int]) -> Optional[int]:
 
 def parse_method(name: str) -> str:
     lowered = name.lower()
-    for key in ("randomsampler", "sepcmaes", "vdcmae", "cmaes", "adam", "ga"):
+    for key in (
+        "randomsampler", "sepcmaes", "vdcmae", "zeroorder", "cmaes",
+        "cosyne", "snes", "adam", "ga",
+    ):
         if lowered.startswith(key) or f"_{key}_" in lowered:
             return key
     return lowered.split("_", 1)[0] if lowered else "unknown"

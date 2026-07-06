@@ -1,5 +1,5 @@
 # Primary configuration parameters
-"optimization_method": "zero_order" # "cmaes", "snes", "ga", "adam", "zero_order", or "random_sampler"
+"optimization_method": "zero_order" # "cmaes", "snes", "cosyne", "ga", "adam", "zero_order", or "random_sampler"
 
 # Prompt dataset parameters (used by p2_experiments.py)
 seed_path: null  # Path to a file with seeds; if null, uses the 'seed' below
@@ -76,6 +76,15 @@ snes_pop_size: 16
 snes_sigma: 0.1
 snes_eta_mu: 1.0
 snes_eta_sigma: null  # null uses the dimension-dependent SNES default
+
+# CoSyNE specific parameters
+cosyne_num_generations: 15
+cosyne_pop_size: 16
+cosyne_init_range: 0.1
+cosyne_mutation_probability: 0.3
+cosyne_mutation_scale: 0.3
+cosyne_parent_count: 4
+cosyne_offspring_count: 4
 
 # Zero-order specific parameters
 zero_order_num_generations: 15  # Number of pivot-update steps

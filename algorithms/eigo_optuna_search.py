@@ -31,12 +31,13 @@ from src.optimization_targets import resolve_optimization_target  # noqa: E402
 
 
 DEFAULT_CONFIG = "algorithms/config/config_eigo_optuna_search.yaml"
-SUPPORTED_METHODS = ("adam", "ga", "cmaes", "snes", "random_sampler", "zero_order")
+SUPPORTED_METHODS = ("adam", "ga", "cmaes", "snes", "cosyne", "random_sampler", "zero_order")
 AUTO_METRICS = {
     "adam": "combined_score",
     "ga": "max_fitness",
     "cmaes": "max_fitness",
     "snes": "max_fitness",
+    "cosyne": "max_fitness",
     "random_sampler": "max_fitness",
     "zero_order": "max_fitness",
 }
@@ -63,13 +64,15 @@ def get_enabled_methods(config):
         methods.append("cmaes")
     if bool(config.get("test_snes", False)):
         methods.append("snes")
+    if bool(config.get("test_cosyne", False)):
+        methods.append("cosyne")
     if bool(config.get("test_random_sampler", False)):
         methods.append("random_sampler")
     if bool(config.get("test_zero_order", False)):
         methods.append("zero_order")
     if not methods:
         raise ValueError(
-            "At least one of 'test_adam', 'test_ga', 'test_cmaes', 'test_snes', "
+            "At least one of 'test_adam', 'test_ga', 'test_cmaes', 'test_snes', 'test_cosyne', "
             "'test_random_sampler', or 'test_zero_order' must be true."
         )
     return methods
@@ -414,6 +417,8 @@ def run_eigo_method(run_config, method):
         return eigo_engine.run_cmaes_optimization()
     if method == "snes":
         return eigo_engine.run_snes_optimization()
+    if method == "cosyne":
+        return eigo_engine.run_cosyne_optimization()
     if method == "random_sampler":
         return eigo_engine.run_random_sampler_optimization()
     if method == "zero_order":

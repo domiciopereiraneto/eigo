@@ -913,6 +913,8 @@ if __name__ == "__main__":
                 eigo_engine.run_zero_order_optimization(seed=seed, seed_number=seed_number, prompt=prompt, category=category, prompt_number=prompt_number)
             elif config['optimization_method'] == "snes":
                 eigo_engine.run_snes_optimization(seed=seed, seed_number=seed_number, prompt=prompt, category=category, prompt_number=prompt_number)
+            elif config['optimization_method'] == "cosyne":
+                eigo_engine.run_cosyne_optimization(seed=seed, seed_number=seed_number, prompt=prompt, category=category, prompt_number=prompt_number)
             else:
                 raise ValueError(f"Unknown optimization method: {config['optimization_method']}")
             print(f"Run with seed {seed} and prompt '{prompt}' finished!")

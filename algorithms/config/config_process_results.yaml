@@ -53,6 +53,7 @@ method_labels:
   sepcmaes: sep-CMA-ES
   vdcmae: VD-CMA
   snes: SNES
+  cosyne: CoSyNE
   ga: GA
   randomsampler: Random sampler
 

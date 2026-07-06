@@ -6,7 +6,7 @@ The repository currently exposes:
 
 - `eigo.py`: the main backend engine (`Eigo`) used by all experiment scripts
 - `src/optimization_targets.py`: shared prompt-embedding and latent-noise optimization target helpers
-- `algorithms/eigo_single_prompt.py`: run one prompt with Adam, GA, CMA-ES, or SNES
+- `algorithms/eigo_single_prompt.py`: run one prompt with Adam, GA, CMA-ES, SNES, or CoSyNE
 - `algorithms/p2_experiments.py`: run batches over sampled Parti Prompts or DrawBench categories
 - `algorithms/p2_schedule.py`: launch multiple `p2_experiments.py` runs from scheduled config overrides
 - `algorithms/optuna_schedule.py`: launch multiple Optuna searches from scheduled config overrides
@@ -59,7 +59,7 @@ algorithms/
 - loading the selected diffusion pipeline
 - encoding prompt embeddings
 - preparing the selected optimization target (`prompt_embeddings` or `latent_noise`)
-- running Adam, GA, CMA-ES, or SNES optimization
+- running Adam, GA, CMA-ES, SNES, or CoSyNE optimization
 - scoring generated images with CLIP, an aesthetic predictor, ImageReward, and HPSv2
 - saving images, metrics, and run configuration
 
@@ -148,6 +148,7 @@ Algorithm-specific fields:
 - GA: `num_generations`, `pop_size`, `ga_mutation_std`, `ga_elite_count`, `ga_crossover_rate`, `ga_mutation_rate`, `save_gens`
 - CMA-ES: `num_generations`, `pop_size`, `sigma`, `cmaes_variant`, `save_gens`
 - SNES: `snes_num_generations`, `snes_pop_size`, `snes_sigma`, `snes_eta_mu`, `snes_eta_sigma`, `save_gens`
+- CoSyNE: `cosyne_num_generations`, `cosyne_pop_size`, `cosyne_init_range`, `cosyne_mutation_probability`, `cosyne_mutation_scale`, `cosyne_parent_count`, `cosyne_offspring_count`, `save_gens`
 
 Set `optimization_target: "prompt_embeddings"` to optimize text conditioning, or `optimization_target: "latent_noise"` to optimize/sample the initial diffusion latent noise vector. With `random_sampler`, `prompt_embeddings` samples generation seeds and `latent_noise` samples random latent noise vectors.
 

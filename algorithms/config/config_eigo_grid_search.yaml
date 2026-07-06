@@ -15,6 +15,7 @@ test_adam: true
 test_ga: false
 test_cmaes: false
 test_snes: false
+test_cosyne: false
 test_random_sampler: false
 
 # General parameters (copied from config_eigo.yaml)
@@ -108,6 +109,12 @@ grid:
   snes:
     snes_pop_size: [20, 50]
     snes_sigma: [0.05, 0.1, 0.2, 0.5]
+
+  cosyne:
+    cosyne_pop_size: [16, 32]
+    cosyne_init_range: [0.05, 0.1, 0.25, 0.5]
+    cosyne_mutation_probability: [0.1, 0.3, 0.5]
+    cosyne_mutation_scale: [0.05, 0.1, 0.3]
 
   random_sampler:
     num_images_to_generate: [20, 50]

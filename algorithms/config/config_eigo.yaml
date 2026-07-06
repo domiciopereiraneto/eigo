@@ -1,6 +1,6 @@
 # Primary configuration parameters
 "selected_prompt": "an astrounat riding a horse in mars" # Text prompt to guide image generation
-"optimization_method": "adam" # "snes", "zero_order", "cmaes", "ga", "adam", or "random_sampler"
+"optimization_method": "adam" # "snes", "cosyne", "zero_order", "cmaes", "ga", "adam", or "random_sampler"
 
 # General parameters
 "seed": 42  # Default seed value for reproducibility
@@ -59,6 +59,15 @@ save_gens: false # Save individuals of each generation to the results folder
 "snes_sigma": 0.5
 "snes_eta_mu": 1.0  # Mean natural-gradient learning rate
 "snes_eta_sigma": null  # null uses the dimension-dependent SNES default
+
+# CoSyNE parameters
+"cosyne_num_generations": 100
+"cosyne_pop_size": 20
+"cosyne_init_range": 0.5  # Uniform initial perturbation around the target vector
+"cosyne_mutation_probability": 0.3
+"cosyne_mutation_scale": 0.3  # Scale of Cauchy mutation noise
+"cosyne_parent_count": 5
+"cosyne_offspring_count": 5
 
 # Adam specific parameters (if selected)
 "num_iterations": 1000  # Number of iterations for the Adam optimization process

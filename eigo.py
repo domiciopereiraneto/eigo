@@ -1,7 +1,7 @@
 """
 This script contains the Eigo class, an optimization engine for diffusion-based image
 generation guided by aesthetic, prompt-alignment, and ImageReward scores. The engine
-supports CMA-ES (standard, sep-CMA-ES and VD-CMA), SNES, GA, Adam, zero-order
+supports CMA-ES (standard, sep-CMA-ES and VD-CMA), SNES, CoSyNE, GA, Adam, zero-order
 search, and random sampling.
 """
 
@@ -130,6 +130,100 @@ class SeparableNaturalEvolutionStrategy:
         self.sigma = np.clip(self.sigma * np.exp(exponent), 1e-12, 1e6)
         self.generation += 1
         self._noise = None
+
+    def stop(self):
+        return self.generation >= self.max_generations
+
+
+class CooperativeSynapseNeuroevolution:
+    """CoSyNE adapted from synaptic weights to arbitrary real-valued vectors."""
+
+    def __init__(self, initial_vector, init_range, pop_size, max_generations,
+                 mutation_probability=0.3, mutation_scale=0.3,
+                 parent_count=4, offspring_count=4, seed=None):
+        initial_vector = np.asarray(initial_vector)
+        if initial_vector.ndim != 1:
+            raise ValueError("CoSyNE requires a one-dimensional initial vector.")
+        if init_range <= 0:
+            raise ValueError("CoSyNE requires cosyne_init_range > 0.")
+        if pop_size < 4:
+            raise ValueError("CoSyNE requires cosyne_pop_size >= 4.")
+        if max_generations <= 0:
+            raise ValueError("CoSyNE requires cosyne_num_generations > 0.")
+        if not 0 <= mutation_probability <= 1:
+            raise ValueError("CoSyNE requires 0 <= cosyne_mutation_probability <= 1.")
+        if mutation_scale <= 0:
+            raise ValueError("CoSyNE requires cosyne_mutation_scale > 0.")
+        if not 2 <= parent_count <= pop_size:
+            raise ValueError("CoSyNE requires 2 <= cosyne_parent_count <= cosyne_pop_size.")
+        if not 1 <= offspring_count < pop_size:
+            raise ValueError("CoSyNE requires 1 <= cosyne_offspring_count < cosyne_pop_size.")
+
+        self.pop_size = int(pop_size)
+        self.max_generations = int(max_generations)
+        self.mutation_probability = float(mutation_probability)
+        self.mutation_scale = float(mutation_scale)
+        self.parent_count = int(parent_count)
+        self.offspring_count = int(offspring_count)
+        self.rng = np.random.default_rng(seed)
+        self.population = initial_vector + self.rng.uniform(
+            -float(init_range), float(init_range),
+            size=(self.pop_size, initial_vector.size),
+        )
+        # Always evaluate the unmodified starting point in the first generation.
+        self.population[0] = initial_vector
+        self.generation = 0
+        self._asked = False
+        self.result = SimpleNamespace(xbest=initial_vector.copy(), fbest=np.inf)
+
+    def ask(self):
+        self._asked = True
+        return [candidate for candidate in self.population]
+
+    def tell(self, solutions, fitnesses):
+        if not self._asked or len(fitnesses) != self.pop_size:
+            raise ValueError("CoSyNE tell() must follow ask() with one fitness per candidate.")
+        fitnesses = np.asarray(fitnesses, dtype=np.float64)
+        order = np.argsort(fitnesses, kind="stable")
+        best_idx = int(order[0])
+        if fitnesses[best_idx] < self.result.fbest:
+            self.result = SimpleNamespace(
+                xbest=np.asarray(solutions[best_idx]).copy(),
+                fbest=float(fitnesses[best_idx]),
+            )
+
+        ranked = self.population[order]
+        parents = ranked[:self.parent_count]
+        offspring = np.empty((self.offspring_count, ranked.shape[1]), dtype=ranked.dtype)
+        for child_idx in range(self.offspring_count):
+            parent_ids = self.rng.integers(0, self.parent_count, size=2)
+            parent_a, parent_b = parents[parent_ids[0]], parents[parent_ids[1]]
+            crossover_mask = self.rng.random(ranked.shape[1]) < 0.5
+            child = np.where(crossover_mask, parent_a, parent_b).copy()
+            mutation_mask = self.rng.random(ranked.shape[1]) < self.mutation_probability
+            if np.any(mutation_mask):
+                cauchy_noise = self.rng.standard_cauchy(int(mutation_mask.sum()))
+                # Guard against extremely rare floating-point overflow in Cauchy tails.
+                cauchy_noise = np.clip(cauchy_noise, -1e6, 1e6)
+                child[mutation_mask] += self.mutation_scale * cauchy_noise
+            offspring[child_idx] = child
+
+        survivor_count = self.pop_size - self.offspring_count
+        next_population = np.empty_like(ranked)
+        next_population[:survivor_count] = ranked[:survivor_count]
+        next_population[survivor_count:] = offspring
+
+        # Each coordinate is a CoSyNE subpopulation. Permute retained values
+        # independently; newly inserted offspring remain aligned for one generation.
+        for coordinate in range(next_population.shape[1]):
+            permutation = self.rng.permutation(survivor_count)
+            next_population[:survivor_count, coordinate] = next_population[
+                permutation, coordinate
+            ]
+
+        self.population = next_population
+        self.generation += 1
+        self._asked = False
 
     def stop(self):
         return self.generation >= self.max_generations
@@ -287,6 +381,8 @@ class Eigo:
             method_save_name = "zeroorder"
         elif config_parameters["optimization_method"] == "snes":
             method_save_name = "snes"
+        elif config_parameters["optimization_method"] == "cosyne":
+            method_save_name = "cosyne"
         else:
             raise ValueError(f"Unknown optimization method: {config_parameters['optimization_method']}")
 
@@ -1653,6 +1749,8 @@ class Eigo:
 
         if self.parameters["optimization_method"] == "snes":
             print("Using Separable Natural Evolution Strategy (SNES)")
+        elif self.parameters["optimization_method"] == "cosyne":
+            print("Using Cooperative Synapse Neuroevolution (CoSyNE)")
         elif self.parameters["cmaes_variant"] == "cmaes":
             print("Using standard CMA-ES")
         elif self.parameters["cmaes_variant"] == "sep":
@@ -1677,6 +1775,20 @@ class Eigo:
                 eta_sigma=self.parameters.get("snes_eta_sigma"),
             )
             # Keep reporting and time-limit accounting aligned with SNES overrides.
+            self.parameters["pop_size"] = es.pop_size
+            self.parameters["num_generations"] = es.max_generations
+        elif self.parameters["optimization_method"] == "cosyne":
+            es = CooperativeSynapseNeuroevolution(
+                trainable_params_init,
+                float(self.parameters.get("cosyne_init_range", self.parameters["sigma"])),
+                int(self.parameters.get("cosyne_pop_size", self.parameters["pop_size"])),
+                int(self.parameters.get("cosyne_num_generations", self.parameters["num_generations"])),
+                mutation_probability=float(self.parameters.get("cosyne_mutation_probability", 0.3)),
+                mutation_scale=float(self.parameters.get("cosyne_mutation_scale", 0.3)),
+                parent_count=int(self.parameters.get("cosyne_parent_count", 4)),
+                offspring_count=int(self.parameters.get("cosyne_offspring_count", 4)),
+                seed=seed,
+            )
             self.parameters["pop_size"] = es.pop_size
             self.parameters["num_generations"] = es.max_generations
         else:
@@ -1951,6 +2063,10 @@ class Eigo:
 
     def run_snes_optimization(self, seed=None, seed_number=None, prompt=None, category=None, prompt_number=None):
         """Optimize with a diagonal Gaussian using SNES natural-gradient updates."""
+        return self.run_cmaes_optimization(seed, seed_number, prompt, category, prompt_number)
+
+    def run_cosyne_optimization(self, seed=None, seed_number=None, prompt=None, category=None, prompt_number=None):
+        """Optimize vector coordinates as cooperatively coevolved subpopulations."""
         return self.run_cmaes_optimization(seed, seed_number, prompt, category, prompt_number)
 
     def run_zero_order_optimization(self, seed=None, seed_number=None, prompt=None, category=None, prompt_number=None):

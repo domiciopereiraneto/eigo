@@ -10,6 +10,7 @@ test_cmaes: false
 test_random_sampler: false
 test_zero_order: false
 test_snes: true
+test_cosyne: false
 
 # General parameters (copied from config_eigo.yaml)
 seed: 42
@@ -68,6 +69,15 @@ snes_pop_size: 16
 snes_sigma: 0.5
 snes_eta_mu: 1.0
 snes_eta_sigma: null  # null uses the dimension-dependent SNES default
+
+# CoSyNE defaults (used if not overridden by optuna.search_space.cosyne)
+cosyne_num_generations: 15
+cosyne_pop_size: 16
+cosyne_init_range: 0.1
+cosyne_mutation_probability: 0.3
+cosyne_mutation_scale: 0.3
+cosyne_parent_count: 4
+cosyne_offspring_count: 4
 
 # Zero-order defaults (used if not overridden by optuna.search_space.zero_order)
 zero_order_num_generations: 15
@@ -211,6 +221,38 @@ optuna:
         low: 0.001
         high: 0.1
         log: true
+
+    cosyne:
+      # Keep generations fixed when comparing trials so every trial has the same
+      # number of update steps. Enable population search only if unequal total
+      # image-evaluation budgets are acceptable.
+      # cosyne_pop_size:
+      #   type: "categorical"
+      #   choices: [8, 16, 32, 64]
+      cosyne_init_range:
+        type: "float"
+        low: 0.01
+        high: 1.0
+        log: true
+      cosyne_mutation_probability:
+        type: "float"
+        low: 0.05
+        high: 0.6
+      cosyne_mutation_scale:
+        type: "float"
+        low: 0.01
+        high: 1.0
+        log: true
+      cosyne_parent_count:
+        type: "int"
+        low: 2
+        high: 8
+        step: 2
+      cosyne_offspring_count:
+        type: "int"
+        low: 2
+        high: 8
+        step: 2
 
     zero_order:
       # zero_order_num_generations:
