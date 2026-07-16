@@ -277,6 +277,7 @@ class Eigo:
         self._active_prompt_attention_mask = None
         self._active_negative_prompt_embeds = None
         self._active_negative_prompt_attention_mask = None
+        self._warned_clip_truncation_prompts = set()
         self.aesthetic_score_weight = float(
             config_parameters.get("aesthetic_score_weight", config_parameters.get("alpha", 0.0))
         )
@@ -838,6 +839,27 @@ class Eigo:
 
         raise RuntimeError("Unexpected encode_prompt output length.")
 
+    def _tokenize_clip_text(self, prompt):
+        if self.clip_model is None:
+            return None
+
+        context_length = int(getattr(self.clip_model, "context_length", 77))
+        try:
+            return clip.tokenize([prompt], context_length=context_length).to(self.device)
+        except RuntimeError as exc:
+            if "is too long for context length" not in str(exc):
+                raise
+            if prompt not in self._warned_clip_truncation_prompts:
+                print(
+                    f"Warning: truncating CLIP scoring prompt to {context_length} tokens."
+                )
+                self._warned_clip_truncation_prompts.add(prompt)
+            return clip.tokenize(
+                [prompt],
+                context_length=context_length,
+                truncate=True,
+            ).to(self.device)
+
     def _lcm_origin_steps_call_key(self):
         try:
             call_parameters = inspect.signature(self.pipe.__class__.__call__).parameters
@@ -1162,7 +1184,7 @@ class Eigo:
         image_input = self.clip_preprocess(image).unsqueeze(0).to(self.device)
 
         # Tokenize the prompt
-        text_input = clip.tokenize([prompt]).to(self.device)
+        text_input = self._tokenize_clip_text(prompt)
 
         # Compute the CLIP embeddings
         image_features = self.clip_model.encode_image(image_input)
@@ -3060,7 +3082,7 @@ class Eigo:
         # Text features don't depend on your params; compute w/o grad
         with torch.no_grad():
             if self.clip_model is not None:
-                text_tokens = clip.tokenize([selected_prompt]).to(self.device)
+                text_tokens = self._tokenize_clip_text(selected_prompt)
                 text_features = self.clip_model.encode_text(text_tokens).float()
                 text_features = F.normalize(text_features, dim=-1, eps=1e-6)
             else:
