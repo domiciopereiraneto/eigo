@@ -2680,15 +2680,7 @@ class Eigo:
                 target_state = self._build_optimization_target_state(selected_prompt, seed)
             else:
                 prompt_embeds, pooled_prompt_embeds = self._encode_prompt_embeddings(selected_prompt)
-                # Random prompt-embedding samples must all be decoded from the
-                # same latent noise so that only the sampled target changes.
-                fixed_latents = self._prepare_initial_latents(seed)
-                target_state = build_target_state(
-                    PROMPT_EMBEDDINGS,
-                    prompt_embeds,
-                    pooled_prompt_embeds,
-                    latents=fixed_latents,
-                )
+                target_state = build_target_state(PROMPT_EMBEDDINGS, prompt_embeds, pooled_prompt_embeds)
 
         trainable_params_init = target_state["initial_vector"]
         sample_seeds = self._generate_sample_seeds(seed, num_images, excluded_seeds={seed})
@@ -2844,18 +2836,10 @@ class Eigo:
                     evaluation_seed = seed
                     sample_path = os.path.join(results_folder, f"sample_{sample_index}_latent_seed_{sample_seed}.jpg")
                 else:
-                    print(f"Random sample {sample_index}/{num_images} with prompt embedding seed {sample_seed}")
-                    rng = np.random.default_rng(sample_seed)
-                    sampled_vector = rng.normal(
-                        0.0,
-                        1.0,
-                        size=trainable_params_init.shape,
-                    ).astype(np.float32)
-                    evaluation_seed = seed
-                    sample_path = os.path.join(
-                        results_folder,
-                        f"sample_{sample_index}_prompt_embedding_seed_{sample_seed}.jpg",
-                    )
+                    print(f"Random sample {sample_index}/{num_images} with generation seed {sample_seed}")
+                    sampled_vector = trainable_params_init
+                    evaluation_seed = sample_seed
+                    sample_path = os.path.join(results_folder, f"sample_{sample_index}_seed_{sample_seed}.jpg")
 
                 batch_vectors.append(sampled_vector)
                 batch_evaluation_seeds.append(evaluation_seed)
@@ -3014,7 +2998,7 @@ class Eigo:
                 "sample": idx,
                 "generation": batch_generation,
                 "seed": sample_seed,
-                "generation_seed": seed,
+                "generation_seed": seed if random_sampler_uses_latents else sample_seed,
                 "sample_target": self.optimization_target,
                 "prompt": selected_prompt if idx == 0 else "",
                 "fitness": float(canonical_fitness),

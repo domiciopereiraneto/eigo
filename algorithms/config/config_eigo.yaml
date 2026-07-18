@@ -89,7 +89,7 @@ save_gens: true # Save individuals of each generation to the results folder
 "ga_mutation_rate": 0.1  # Per-dimension probability of applying mutation noise
 
 # Random sampler specific parameters (if selected)
-"num_images_to_generate": 20  # Number of random vectors/images to evaluate for the selected optimization target
+"num_images_to_generate": 20  # Number of random seeds/images to evaluate; latent_noise samples random latent vectors
 
 # Time limit specification
 time_limit_seconds: null # Time limit in seconds, if null then it follows the number of generations/iterations
