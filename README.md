@@ -150,7 +150,7 @@ Algorithm-specific fields:
 - SNES: `snes_num_generations`, `snes_pop_size`, `snes_sigma`, `snes_eta_mu`, `snes_eta_sigma`, `save_gens`
 - CoSyNE: `cosyne_num_generations`, `cosyne_pop_size`, `cosyne_init_range`, `cosyne_mutation_probability`, `cosyne_mutation_scale`, `cosyne_parent_count`, `cosyne_offspring_count`, `save_gens`
 
-Set `optimization_target: "prompt_embeddings"` to optimize text conditioning, or `optimization_target: "latent_noise"` to optimize/sample the initial diffusion latent noise vector. With `random_sampler`, `prompt_embeddings` samples generation seeds and `latent_noise` samples random latent noise vectors.
+Set `optimization_target: "prompt_embeddings"` to optimize text conditioning, or `optimization_target: "latent_noise"` to optimize/sample the initial diffusion latent noise vector. With `random_sampler`, `prompt_embeddings` fixes the initial latent noise and samples random prompt-embedding vectors, while `latent_noise` fixes the prompt embeddings and samples random latent-noise vectors.
 
 ### Prompt Dataset Batch Experiments
 
