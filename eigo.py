@@ -2223,6 +2223,50 @@ class Eigo:
         self._save_population_plot_results(results, results_folder)
         return results_folder
 
+    @staticmethod
+    def _normalize_ga_operator(name, aliases, valid_names, parameter_name):
+        normalized = str(name).lower().replace("-", "_").replace(" ", "_")
+        normalized = aliases.get(normalized, normalized)
+        if normalized not in valid_names:
+            valid = ", ".join(sorted(valid_names))
+            raise ValueError(f"Invalid {parameter_name} '{name}'. Expected one of: {valid}.")
+        return normalized
+
+    @staticmethod
+    def _ga_crossover(parent_a, parent_b, rng, operator, crossover_rate, crossover_alpha, blend_alpha):
+        if operator == "uniform":
+            crossover_mask = rng.random(parent_a.shape[0]) < crossover_rate
+            return np.where(crossover_mask, parent_a, parent_b)
+        if operator == "arithmetic":
+            return crossover_alpha * parent_a + (1.0 - crossover_alpha) * parent_b
+        if operator == "blend":
+            low = np.minimum(parent_a, parent_b)
+            high = np.maximum(parent_a, parent_b)
+            span = high - low
+            return rng.uniform(low - blend_alpha * span, high + blend_alpha * span)
+        raise ValueError(f"Unsupported GA crossover operator: {operator}")
+
+    @staticmethod
+    def _ga_mutate(child, rng, operator, mutation_rate, mutation_std):
+        if operator == "none" or mutation_rate == 0:
+            return child
+
+        mutation_mask = rng.random(child.shape[0]) < mutation_rate
+        if not np.any(mutation_mask):
+            return child
+
+        child = child.copy()
+        mutation_count = int(np.sum(mutation_mask))
+        if operator == "gaussian":
+            child[mutation_mask] += rng.normal(0.0, mutation_std, size=mutation_count)
+        elif operator == "cauchy":
+            cauchy_noise = rng.standard_cauchy(mutation_count)
+            cauchy_noise = np.clip(cauchy_noise, -1e6, 1e6)
+            child[mutation_mask] += mutation_std * cauchy_noise
+        else:
+            raise ValueError(f"Unsupported GA mutation operator: {operator}")
+        return child
+
     def run_ga_optimization(self, seed = None, seed_number = None, prompt = None, category = None, prompt_number = None):
         if seed is None:
             seed = self.parameters["seed"]
@@ -2238,6 +2282,34 @@ class Eigo:
         elite_count = int(self.parameters.get("ga_elite_count", 1))
         crossover_rate = float(self.parameters.get("ga_crossover_rate", 0.5))
         mutation_rate = float(self.parameters.get("ga_mutation_rate", 0.1))
+        crossover_operator = self._normalize_ga_operator(
+            self.parameters.get("ga_crossover_operator", "uniform"),
+            aliases={
+                "discrete": "uniform",
+                "binomial": "uniform",
+                "intermediate": "arithmetic",
+                "whole_arithmetic": "arithmetic",
+                "blx": "blend",
+                "blx_alpha": "blend",
+            },
+            valid_names={"uniform", "arithmetic", "blend"},
+            parameter_name="ga_crossover_operator",
+        )
+        mutation_operator = self._normalize_ga_operator(
+            self.parameters.get("ga_mutation_operator", "gaussian"),
+            aliases={
+                "normal": "gaussian",
+                "gauss": "gaussian",
+                "heavy_tail": "cauchy",
+                "heavy_tailed": "cauchy",
+                "off": "none",
+                "disabled": "none",
+            },
+            valid_names={"gaussian", "cauchy", "none"},
+            parameter_name="ga_mutation_operator",
+        )
+        crossover_alpha = float(self.parameters.get("ga_crossover_alpha", 0.5))
+        blend_alpha = float(self.parameters.get("ga_blend_alpha", 0.5))
 
         if pop_size < 2:
             raise ValueError("GA requires pop_size >= 2.")
@@ -2249,6 +2321,10 @@ class Eigo:
             raise ValueError("GA requires 0 <= ga_crossover_rate <= 1.")
         if not 0 <= mutation_rate <= 1:
             raise ValueError("GA requires 0 <= ga_mutation_rate <= 1.")
+        if not 0 <= crossover_alpha <= 1:
+            raise ValueError("GA requires 0 <= ga_crossover_alpha <= 1.")
+        if blend_alpha < 0:
+            raise ValueError("GA requires ga_blend_alpha >= 0.")
 
         torch.manual_seed(seed)
         np.random.seed(seed)
@@ -2477,12 +2553,22 @@ class Eigo:
                 parent_indices = rng.integers(0, elite_count, size=2)
                 parent_a = elites[parent_indices[0]]
                 parent_b = elites[parent_indices[1]]
-                crossover_mask = rng.random(parent_a.shape[0]) < crossover_rate
-                child = np.where(crossover_mask, parent_a, parent_b)
-                mutation_mask = rng.random(child.shape[0]) < mutation_rate
-                if np.any(mutation_mask):
-                    child = child.copy()
-                    child[mutation_mask] += rng.normal(0.0, mutation_std, size=int(np.sum(mutation_mask)))
+                child = self._ga_crossover(
+                    parent_a,
+                    parent_b,
+                    rng,
+                    crossover_operator,
+                    crossover_rate,
+                    crossover_alpha,
+                    blend_alpha,
+                )
+                child = self._ga_mutate(
+                    child,
+                    rng,
+                    mutation_operator,
+                    mutation_rate,
+                    mutation_std,
+                )
                 next_population.append(child)
 
             population = np.array(next_population[:pop_size], dtype=np.float32)

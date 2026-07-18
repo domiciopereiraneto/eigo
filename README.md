@@ -145,12 +145,14 @@ By default, metrics with weight `0.0` are not loaded or evaluated. This keeps un
 Algorithm-specific fields:
 
 - Adam: `num_iterations`, `adam_lr`, `adam_weight_decay`, `adam_eps`, `adam_beta1`, `adam_beta2`, `adam_max_grad_norm`
-- GA: `num_generations`, `pop_size`, `ga_mutation_std`, `ga_elite_count`, `ga_crossover_rate`, `ga_mutation_rate`, `save_gens`
+- GA: `num_generations`, `pop_size`, `ga_mutation_std`, `ga_elite_count`, `ga_crossover_operator`, `ga_crossover_rate`, `ga_crossover_alpha`, `ga_blend_alpha`, `ga_mutation_operator`, `ga_mutation_rate`, `save_gens`
 - CMA-ES: `num_generations`, `pop_size`, `sigma`, `cmaes_variant`, `save_gens`
 - SNES: `snes_num_generations`, `snes_pop_size`, `snes_sigma`, `snes_eta_mu`, `snes_eta_sigma`, `save_gens`
 - CoSyNE: `cosyne_num_generations`, `cosyne_pop_size`, `cosyne_init_range`, `cosyne_mutation_probability`, `cosyne_mutation_scale`, `cosyne_parent_count`, `cosyne_offspring_count`, `save_gens`
 
 Set `optimization_target: "prompt_embeddings"` to optimize text conditioning, or `optimization_target: "latent_noise"` to optimize/sample the initial diffusion latent noise vector. With `random_sampler`, `prompt_embeddings` fixes the initial latent noise and samples random prompt-embedding vectors, while `latent_noise` fixes the prompt embeddings and samples random latent-noise vectors.
+
+For GA on continuous variables such as prompt embeddings or latent noise, use real-coded operators. Supported crossover operators are `uniform` for coordinate-wise parent mixing, `arithmetic` for convex interpolation, and `blend` for BLX-alpha style extrapolating interpolation. Supported mutation operators are `gaussian` for local perturbations, `cauchy` for occasional heavy-tailed jumps, and `none` for crossover-only ablations.
 
 ### Prompt Dataset Batch Experiments
 
@@ -238,6 +240,8 @@ python algorithms/eigo_optuna_search.py \
 ```
 
 The Optuna config supports the same base EIGO keys, including fixed `optimization_target`, plus `optuna.n_trials`, `optuna.direction`, `optuna.metric`, `optuna.sampler`, and method-specific `optuna.search_space` entries. Put `optimization_target` in a method search space to sample between `prompt_embeddings` and `latent_noise`. Lists are sampled as categorical choices, while dictionaries can define `float`, `int`, or `categorical` distributions. Each trial evaluates all selected prompts and optimizes the mean final objective value.
+
+Search-space parameters can include `depends_on` to tune conditional parameters only when another sampled parameter has a matching `value` or one of several `values`. For example, `ga_crossover_alpha` can depend on `ga_crossover_operator: "arithmetic"`, while `ga_blend_alpha` can depend on `ga_crossover_operator: "blend"`.
 
 To run several Optuna searches sequentially, recursively replacing base config values for each run:
 

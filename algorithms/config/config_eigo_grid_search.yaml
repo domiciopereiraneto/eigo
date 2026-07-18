@@ -80,7 +80,11 @@ adam_max_grad_norm: null
 # GA defaults (used if not overridden by grid.ga)
 ga_mutation_std: 0.05
 ga_elite_count: 1
+ga_crossover_operator: "uniform"
 ga_crossover_rate: 0.8
+ga_crossover_alpha: 0.5
+ga_blend_alpha: 0.5
+ga_mutation_operator: "gaussian"
 ga_mutation_rate: 0.1
 
 # Random sampler defaults (used if not overridden by grid.random_sampler)

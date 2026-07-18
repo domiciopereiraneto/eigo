@@ -1,5 +1,5 @@
 # Primary configuration parameters
-"optimization_method": "snes" # "cmaes", "snes", "cosyne", "ga", "adam", "zero_order", or "random_sampler"
+"optimization_method": "adam" # "cmaes", "snes", "cosyne", "ga", "adam", "zero_order", or "random_sampler"
 
 # Prompt dataset parameters (used by p2_experiments.py)
 seed_path: null  # Path to a file with seeds; if null, uses the 'seed' below
@@ -17,18 +17,18 @@ prompt_index_range: [100,200]  # Optional when use_entire_dataset is true: zero-
 single_prompt_per_seed: false  # If true, ignore per-category sampling and pick one prompt from the full dataset using each run seed
 
 # General generation/scoring parameters
-cuda: 2  # GPU device ID to use (e.g., 0 for first GPU); falls back to CPU if unavailable
+cuda: 1  # GPU device ID to use (e.g., 0 for first GPU); falls back to CPU if unavailable
 predictor: 2  # 0: SAM, 1: LAION V1, 2: LAION V2
 num_inference_steps: 50  # Diffusion inference steps during image generation; LCM usually works well with 1-8
-batch_size: 8  # Number of candidates/images to generate and score at once for CMA-ES/GA/zero_order/random_sampler
+batch_size: 1  # Number of candidates/images to generate and score at once for CMA-ES/GA/zero_order/random_sampler
 guidance_scale: 7.5 # Classifier-free guidance scale (0 means disabled)
 lcm_origin_steps: 50  # Original diffusion steps for LCM backends; ignored by other backends
 height: 512  # Generated image height (pixels)
 width: 512  # Generated image width (pixels)
 aesthetic_score_weight: 0.0  # Weight for aesthetic score in combined fitness
-clip_score_weight: 0.0  # Weight for CLIP score in combined fitness
+clip_score_weight: 1.0  # Weight for CLIP score in combined fitness
 image_reward_score_weight: 0.0  # Weight for ImageReward score in combined fitness
-hpsv2_score_weight: 1.0  # Weight for HPSv2 score in combined fitness
+hpsv2_score_weight: 0.0  # Weight for HPSv2 score in combined fitness
 pickscore_score_weight: 0.0  # Weight for PickScore score in combined fitness
 jpeg_size_weight: 0.0  # Weight for JPEG size penalty in combined fitness (smaller is better)
 max_aesthetic_score: 10  # Maximum aesthetic score (normalization)
@@ -45,7 +45,7 @@ pickscore_model: "yuvalkirstain/PickScore_v1"  # PickScore checkpoint name; set 
 pickscore_processor: "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"  # Processor backbone for PickScore; set to null to disable PickScore calculation
 evaluate_zero_weight_metrics: false  # Keep zero-weight scorer models/graphs out of Adam VRAM
 optimization_target: "prompt_embeddings"  # "prompt_embeddings" or "latent_noise" for all optimization methods
-results_folder: "results_snes_sd15_hpsv2"  # Output directory for runs and artifacts
+results_folder: "results_adam_sd15_clip_2"  # Output directory for runs and artifacts
 
 # Diffusion model parameters
 model_id: "stable-diffusion-v1-5/stable-diffusion-v1-5" # Model ID (e.g., "black-forest-labs/FLUX.1-schnell", "PixArt-alpha/PixArt-XL-2-1024-MS", "Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers", "Efficient-Large-Model/Sana_1600M_1024px_diffusers", "stabilityai/sdxl-turbo", "SimianLuo/LCM_Dreamshaper_v7")
@@ -58,7 +58,7 @@ use_safetensors: true  # Prefer safetensors weights when available
 use_multi_gpu: false  # If true and multiple CUDA devices exist, shard pipeline across GPUs
 pipeline_device_map: "balanced"  # Device map strategy (e.g. "balanced", "auto")
 max_memory: null  # Optional memory map, e.g. {"cuda:0":"22GiB","cuda:1":"22GiB","cpu":"64GiB"}
-enable_gradient_checkpointing: false  # Lower memory use at the cost of speed
+enable_gradient_checkpointing: true  # Lower memory use at the cost of speed
 enable_attention_slicing: false  # Lower VRAM use (slower)
 enable_vae_slicing: false  # Lower VRAM use for VAE
 enable_vae_tiling: false  # Useful for high-res decode on limited VRAM
@@ -67,29 +67,29 @@ enable_vae_tiling: false  # Useful for high-res decode on limited VRAM
 num_generations: 15 # Number of CMA-ES generations
 pop_size: 16  # CMA-ES population size
 cmaes_variant: "sep"  # "cmaes" (standard), "sep", or "vd"
-sigma: 0.1608406003147091  # Initial CMA-ES standard deviation
+sigma: 0.1  # Initial CMA-ES standard deviation
 save_gens: true # Save individuals of each generation to the results folder
 
 # SNES specific parameters (optional; fall back to the common values above)
 snes_num_generations: 15
 snes_pop_size: 16
-snes_sigma: 0.11800215360818887
-snes_eta_mu: 1.0152213663395597
-snes_eta_sigma: 0.0034799379291679854  # null uses the dimension-dependent SNES default
+snes_sigma: 0.1
+snes_eta_mu: 1.0
+snes_eta_sigma: null  # null uses the dimension-dependent SNES default
 
 # CoSyNE specific parameters
 cosyne_num_generations: 15
 cosyne_pop_size: 16
-cosyne_init_range: 0.1
-cosyne_mutation_probability: 0.3
-cosyne_mutation_scale: 0.3
-cosyne_parent_count: 4
-cosyne_offspring_count: 4
+cosyne_init_range: 0.6257387602872511
+cosyne_mutation_probability: 0.0547024960214017
+cosyne_mutation_scale: 0.023825548804153742
+cosyne_parent_count: 8
+cosyne_offspring_count: 6
 
 # Zero-order specific parameters
 zero_order_num_generations: 15  # Number of pivot-update steps
 zero_order_pop_size: 16  # Gaussian candidates generated around each pivot
-zero_order_sigma: 0.08257783183760009  # Standard deviation of candidate perturbations
+zero_order_sigma: 0.1  # Standard deviation of candidate perturbations
 
 # AdamW specific parameters (if selected)
 "num_iterations": 240  # Number of iterations for the Adam optimization process
@@ -103,7 +103,11 @@ zero_order_sigma: 0.08257783183760009  # Standard deviation of candidate perturb
 # GA specific parameters
 ga_mutation_std: 0.6053448468001081  # Standard deviation of Gaussian mutation noise
 ga_elite_count: 1  # Number of top individuals copied unchanged to the next generation
+ga_crossover_operator: "uniform"  # "uniform", "arithmetic", or "blend" for continuous variables
 ga_crossover_rate: 0.5818212352431953  # Per-dimension probability of inheriting from parent A during crossover
+ga_crossover_alpha: 0.5  # Parent-A weight for arithmetic crossover
+ga_blend_alpha: 0.5  # BLX-alpha expansion around parent values for blend crossover
+ga_mutation_operator: "gaussian"  # "gaussian", "cauchy", or "none"
 ga_mutation_rate: 0.16678651087305188  # Per-dimension probability of applying mutation noise
 
 # Random sampler specific parameters

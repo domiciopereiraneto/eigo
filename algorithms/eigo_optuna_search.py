@@ -342,13 +342,51 @@ def suggest_parameter(trial, name, spec):
     raise ValueError(f"Unsupported Optuna parameter type for '{name}': {param_type}")
 
 
+def condition_matches(overrides, condition):
+    if condition is None:
+        return True
+    if not isinstance(condition, dict):
+        raise ValueError("'depends_on' must be a dictionary.")
+
+    parameter = condition.get("parameter")
+    if not parameter:
+        raise ValueError("'depends_on.parameter' must be set.")
+    if parameter not in overrides:
+        return False
+
+    actual = overrides[parameter]
+    if "values" in condition:
+        values = condition["values"]
+        if not isinstance(values, list):
+            raise ValueError("'depends_on.values' must be a list.")
+        return actual in [_coerce_scalar(value) for value in values]
+    if "value" in condition:
+        return actual == _coerce_scalar(condition["value"])
+
+    raise ValueError("'depends_on' must define either 'value' or 'values'.")
+
+
+def parameter_spec_without_condition(spec):
+    if not isinstance(spec, dict) or "depends_on" not in spec:
+        return spec
+    stripped = dict(spec)
+    stripped.pop("depends_on")
+    return stripped
+
+
 def suggest_overrides(trial, method, search_space):
     method_space = search_space.get(method, {}) or {}
     overrides = {}
     for key, spec in method_space.items():
+        if isinstance(spec, dict) and not condition_matches(overrides, spec.get("depends_on")):
+            continue
         # Prefix trial parameter names because the same backend key can have different
         # distributions per optimizer method.
-        overrides[key] = suggest_parameter(trial, f"{method}.{key}", spec)
+        overrides[key] = suggest_parameter(
+            trial,
+            f"{method}.{key}",
+            parameter_spec_without_condition(spec),
+        )
     return overrides
 
 

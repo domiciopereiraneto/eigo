@@ -81,7 +81,11 @@ save_gens: true # Save individuals of each generation to the results folder
 # GA specific parameters (if selected)
 "ga_mutation_std": 0.05  # Standard deviation of Gaussian mutation noise
 "ga_elite_count": 2  # Number of top individuals copied unchanged to the next generation
+"ga_crossover_operator": "uniform"  # "uniform", "arithmetic", or "blend" for continuous variables
 "ga_crossover_rate": 0.5  # Per-dimension probability of inheriting from parent A during crossover
+"ga_crossover_alpha": 0.5  # Parent-A weight for arithmetic crossover
+"ga_blend_alpha": 0.5  # BLX-alpha expansion around parent values for blend crossover
+"ga_mutation_operator": "gaussian"  # "gaussian", "cauchy", or "none"
 "ga_mutation_rate": 0.1  # Per-dimension probability of applying mutation noise
 
 # Random sampler specific parameters (if selected)

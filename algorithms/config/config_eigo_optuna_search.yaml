@@ -96,7 +96,11 @@ adam_max_grad_norm: null
 # GA defaults (used if not overridden by optuna.search_space.ga)
 ga_mutation_std: 0.05
 ga_elite_count: 1
+ga_crossover_operator: "uniform"
 ga_crossover_rate: 0.8
+ga_crossover_alpha: 0.5
+ga_blend_alpha: 0.5
+ga_mutation_operator: "gaussian"
 ga_mutation_rate: 0.1
 
 # Time limit in seconds (null -> use num_generations/num_iterations)
@@ -166,11 +170,17 @@ optuna:
       #   low: 10
       #   high: 50
       #   step: 10
+      ga_crossover_operator:
+        type: "categorical"
+        choices: ["uniform", "arithmetic", "blend"]
       ga_mutation_std:
         type: "float"
         low: 0.05
         high: 1.0
         log: true
+      ga_mutation_operator:
+        type: "categorical"
+        choices: ["gaussian", "cauchy"]
       ga_mutation_rate:
         type: "float"
         low: 0.05
@@ -179,6 +189,23 @@ optuna:
         type: "float"
         low: 0.5
         high: 0.95
+        depends_on:
+          parameter: "ga_crossover_operator"
+          values: ["uniform"]
+      ga_crossover_alpha:
+        type: "float"
+        low: 0.1
+        high: 0.9
+        depends_on:
+          parameter: "ga_crossover_operator"
+          values: ["arithmetic"]
+      ga_blend_alpha:
+        type: "float"
+        low: 0.0
+        high: 1.0
+        depends_on:
+          parameter: "ga_crossover_operator"
+          values: ["blend"]
       ga_elite_count:
         type: "int"
         low: 1
