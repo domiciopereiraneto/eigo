@@ -78,6 +78,9 @@ Backends are configured through YAML, mainly with:
 
 - `model_id`
 - `model_backend`
+- `base_model_id`
+- `unet_model_id`
+- `unet_subfolder`
 - `optimization_target`
 - `torch_dtype`
 - `max_sequence_length`
@@ -88,6 +91,13 @@ Backends are configured through YAML, mainly with:
 - `enable_attention_slicing`
 - `enable_vae_slicing`
 - `enable_vae_tiling`
+
+Stable Diffusion component repositories are supported by setting `base_model_id`
+and `unet_model_id`. The DPO SD1.5 model `mhdang/dpo-sd1.5-text2image-v1`
+is detected automatically: set `model_id: "mhdang/dpo-sd1.5-text2image-v1"`
+with `model_backend: "auto"` or `"sd"`, and EIGO loads
+`runwayml/stable-diffusion-v1-5` as the base pipeline before replacing its
+UNet from the DPO repository's `unet` subfolder.
 
 ## Usage
 

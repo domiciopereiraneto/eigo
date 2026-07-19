@@ -20,6 +20,7 @@ from diffusers import (
     PixArtAlphaPipeline,
     StableDiffusionPipeline,
     StableDiffusionXLPipeline,
+    UNet2DConditionModel,
 )
 try:
     from diffusers import SanaPipeline, SanaSprintPipeline
@@ -270,6 +271,9 @@ class Eigo:
         self.use_multi_gpu = bool(config_parameters.get("use_multi_gpu", False))
         self.pipeline_device_map = config_parameters.get("pipeline_device_map", "balanced")
         self.max_memory = self._resolve_max_memory(config_parameters.get("max_memory", None))
+        self.base_model_id = self._resolve_base_model_id(config_parameters)
+        self.unet_model_id = self._resolve_unet_model_id(config_parameters)
+        self.unet_subfolder = str(config_parameters.get("unet_subfolder", "unet"))
         self.enable_attention_slicing = bool(config_parameters.get("enable_attention_slicing", False))
         self.enable_vae_slicing = bool(config_parameters.get("enable_vae_slicing", False))
         self.enable_vae_tiling = bool(config_parameters.get("enable_vae_tiling", False))
@@ -411,6 +415,9 @@ class Eigo:
 
         cache_key = (
             config_parameters["model_id"],
+            self.base_model_id,
+            self.unet_model_id,
+            self.unet_subfolder,
             self.model_backend,
             str(self.model_dtype),
             self.device,
@@ -616,6 +623,7 @@ class Eigo:
             or "sd-v1" in model_id
             or "sd-v2" in model_id
             or "sd-turbo" in model_id
+            or "dpo-sd1.5" in model_id
         ):
             return "sd"
         return "flux" if "flux" in model_id else "sdxl"
@@ -640,6 +648,26 @@ class Eigo:
                 f"Invalid torch_dtype '{dtype_name}'. Expected one of: auto, float32, float16, bfloat16."
             )
         return dtype_map[dtype_name]
+
+    @staticmethod
+    def _is_dpo_sd15_model(model_id):
+        return str(model_id).lower().strip().rstrip("/") == "mhdang/dpo-sd1.5-text2image-v1"
+
+    def _resolve_base_model_id(self, config_parameters):
+        base_model_id = config_parameters.get("base_model_id", None)
+        if base_model_id is not None:
+            return str(base_model_id)
+        if self.model_backend == "sd" and self._is_dpo_sd15_model(config_parameters["model_id"]):
+            return "runwayml/stable-diffusion-v1-5"
+        return None
+
+    def _resolve_unet_model_id(self, config_parameters):
+        unet_model_id = config_parameters.get("unet_model_id", None)
+        if unet_model_id is not None:
+            return str(unet_model_id)
+        if self.model_backend == "sd" and self._is_dpo_sd15_model(config_parameters["model_id"]):
+            return str(config_parameters["model_id"])
+        return None
 
     @staticmethod
     def _freeze_module_params(module):
@@ -755,7 +783,17 @@ class Eigo:
                 raise ImportError("Sana Sprint backend requires a diffusers version that provides SanaSprintPipeline.")
             return SanaSprintPipeline.from_pretrained(model_id, **common_kwargs), is_sharded
         if self.model_backend == "sd":
-            return StableDiffusionPipeline.from_pretrained(model_id, **common_kwargs), is_sharded
+            pipeline_model_id = self.base_model_id or model_id
+            pipe = StableDiffusionPipeline.from_pretrained(pipeline_model_id, **common_kwargs)
+            if self.unet_model_id is not None:
+                unet_kwargs = dict(common_kwargs)
+                unet = UNet2DConditionModel.from_pretrained(
+                    self.unet_model_id,
+                    subfolder=self.unet_subfolder,
+                    **unet_kwargs,
+                )
+                pipe.unet = unet
+            return pipe, is_sharded
         if self.model_backend == "sdxl":
             return StableDiffusionXLPipeline.from_pretrained(model_id, **common_kwargs), is_sharded
         raise ValueError(f"Unsupported model backend: {self.model_backend}")
