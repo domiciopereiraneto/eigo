@@ -705,6 +705,32 @@ def _summary_rows(df, group_name):
     return row
 
 
+def _finite_numeric(values):
+    values = np.asarray(pd.to_numeric(values, errors="coerce"), dtype=float)
+    return values[np.isfinite(values)]
+
+
+def _stats_summary_row(metric, solution_type, values):
+    values = _finite_numeric(values)
+    return {
+        "metric": metric,
+        "solution_type": solution_type,
+        "count": int(values.size),
+        "min": float(np.min(values)) if values.size else np.nan,
+        "mean": float(np.mean(values)) if values.size else np.nan,
+        "median": float(np.median(values)) if values.size else np.nan,
+        "max": float(np.max(values)) if values.size else np.nan,
+        "std": float(np.std(values)) if values.size else np.nan,
+    }
+
+
+def _all_sample_metric_values(run, metric):
+    population_metrics = run["population_metrics"]
+    if population_metrics is not None:
+        return population_metrics[metric]
+    return run[metric]
+
+
 def _final_metrics_workbook_frames(runs, objective_name):
     metric_labels = {
         "aesthetic": "aesthetic",
@@ -716,6 +742,7 @@ def _final_metrics_workbook_frames(runs, objective_name):
         "objective": objective_name,
     }
     value_rows = []
+    all_sample_rows = []
     for run in runs:
         population_metrics = run["population_metrics"]
         for metric, label in metric_labels.items():
@@ -732,58 +759,42 @@ def _final_metrics_workbook_frames(runs, objective_name):
                 "population": population_value,
                 "best_solution": float(run[metric][-1]),
             })
+            sample_values = _all_sample_metric_values(run, metric)
+            for x_value, elapsed_time, sample_value in zip(run["x"], run["time"], sample_values):
+                all_sample_rows.append({
+                    "prompt": run["prompt"],
+                    "category": run["category"],
+                    "result_file": run["path"],
+                    "x_label": run["x_label"],
+                    "x": float(x_value),
+                    "elapsed_time_seconds": float(elapsed_time),
+                    "metric": label,
+                    "value": float(sample_value),
+                    "source": "generation_average" if population_metrics is not None else "sample",
+                })
 
     values_df = pd.DataFrame(value_rows)
+    all_samples_df = pd.DataFrame(all_sample_rows)
     summary_rows = []
     for metric in metric_labels.values():
         metric_rows = values_df[values_df["metric"] == metric]
         for solution_type in ("population", "best_solution"):
-            values = pd.to_numeric(metric_rows[solution_type], errors="coerce").to_numpy(dtype=float)
-            values = values[np.isfinite(values)]
-            summary_rows.append({
-                "metric": metric,
-                "solution_type": solution_type,
-                "count": int(values.size),
-                "min": float(np.min(values)) if values.size else np.nan,
-                "mean": float(np.mean(values)) if values.size else np.nan,
-                "median": float(np.median(values)) if values.size else np.nan,
-                "max": float(np.max(values)) if values.size else np.nan,
-                "std": float(np.std(values)) if values.size else np.nan,
-            })
+            summary_rows.append(_stats_summary_row(metric, solution_type, metric_rows[solution_type]))
+        all_sample_values = all_samples_df.loc[all_samples_df["metric"] == metric, "value"]
+        summary_rows.append(_stats_summary_row(metric, "all_samples", all_sample_values))
     elapsed_values = values_df.drop_duplicates(subset=["result_file"])["elapsed_time_seconds"]
-    elapsed_values = pd.to_numeric(elapsed_values, errors="coerce").to_numpy(dtype=float)
-    elapsed_values = elapsed_values[np.isfinite(elapsed_values)]
-    summary_rows.append({
-        "metric": "elapsed_time_seconds",
-        "solution_type": "run",
-        "count": int(elapsed_values.size),
-        "min": float(np.min(elapsed_values)) if elapsed_values.size else np.nan,
-        "mean": float(np.mean(elapsed_values)) if elapsed_values.size else np.nan,
-        "median": float(np.median(elapsed_values)) if elapsed_values.size else np.nan,
-        "max": float(np.max(elapsed_values)) if elapsed_values.size else np.nan,
-        "std": float(np.std(elapsed_values)) if elapsed_values.size else np.nan,
-    })
+    summary_rows.append(_stats_summary_row("elapsed_time_seconds", "run", elapsed_values))
     vram_values = values_df.drop_duplicates(subset=["result_file"])["peak_vram_mb"]
-    vram_values = pd.to_numeric(vram_values, errors="coerce").to_numpy(dtype=float)
-    vram_values = vram_values[np.isfinite(vram_values)]
-    summary_rows.append({
-        "metric": "peak_vram_mb",
-        "solution_type": "run",
-        "count": int(vram_values.size),
-        "min": float(np.min(vram_values)) if vram_values.size else np.nan,
-        "mean": float(np.mean(vram_values)) if vram_values.size else np.nan,
-        "median": float(np.median(vram_values)) if vram_values.size else np.nan,
-        "max": float(np.max(vram_values)) if vram_values.size else np.nan,
-        "std": float(np.std(vram_values)) if vram_values.size else np.nan,
-    })
-    return pd.DataFrame(summary_rows), values_df
+    summary_rows.append(_stats_summary_row("peak_vram_mb", "run", vram_values))
+    return pd.DataFrame(summary_rows), values_df, all_samples_df
 
 
 def _write_final_metrics_workbook(runs, objective_name, output_path):
-    summary_df, values_df = _final_metrics_workbook_frames(runs, objective_name)
+    summary_df, values_df, all_samples_df = _final_metrics_workbook_frames(runs, objective_name)
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         summary_df.to_excel(writer, sheet_name="summary", index=False)
         values_df.to_excel(writer, sheet_name="per_prompt_run", index=False)
+        all_samples_df.to_excel(writer, sheet_name="all_samples", index=False)
 
 
 def _aggregate_one_experiment(experiment_dir):
