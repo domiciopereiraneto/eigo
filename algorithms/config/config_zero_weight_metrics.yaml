@@ -1,0 +1,32 @@
+# Re-score existing p2 experiment outputs with evaluate_zero_weight_metrics=true.
+#
+# Each item can be an experiment folder containing results_* prompt folders, or a
+# parent folder that contains multiple such experiment folders.
+experiment_folders: ["results_old/results_randomsampler_sd15_imagereward"]
+
+# Base p2 config used when a prompt folder does not contain config.yaml.
+base_config: algorithms/config/config_p2_experiments.yaml
+
+# By default completed CSVs are written next to the originals as:
+# score_results_completed.csv / fitness_results_completed.csv.
+# Set overwrite: true to replace score_results.csv / fitness_results.csv instead.
+overwrite: false
+output_suffix: "_completed"
+backup_original: true
+
+# Completed experiment-level summary files.
+aggregate_csv_name: aggregate_final_metrics_completed.csv
+aggregate_excel_name: aggregate_final_metrics_completed.xlsx
+
+# Optional CUDA override. If null, uses the run config's cuda value.
+cuda: 0
+
+# Metrics to calculate. Use "all" or a list with any of:
+# aesthetic_score, clip_score, image_reward_score, hpsv2_score,
+# pickscore_score, jpeg_size_kb.
+# Short aliases like aesthetic, clip, image_reward, hpsv2, pickscore, and jpeg
+# are also accepted.
+metrics_to_calculate:
+  - clip_score
+  - image_reward_score
+  - hpsv2_score
