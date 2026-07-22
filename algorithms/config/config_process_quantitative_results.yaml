@@ -1,0 +1,26 @@
+# Quantitative result processing config.
+#
+# Run:
+#   python algorithms/process_quantitative_results.py --config algorithms/config/config_process_quantitative_results.yaml
+
+# Each item can be an experiment folder containing results_* prompt folders, or a
+# parent folder to search recursively for experiment folders.
+experiment_folders:
+- results_ga_sd15_imagereward
+- results_ga_sd15_clip
+- results_ga_sd15_hpsv2
+
+# Output workbook. CSV mirrors are written beside this file.
+output_excel: results_quantitative_ga/quantitative_results.xlsx
+
+# Which row to use from each prompt-level CSV before aggregating across prompts:
+#   last: final row in the CSV
+#   best: row with best combined_score/max_fitness
+#   first: initial row
+row_selector: best
+
+# canonical summarizes objective, aesthetic_score, clip_score, image_reward_score,
+# hpsv2_score, pickscore_score, jpeg_size_kb, elapsed_time, and peak_vram_mb when
+# those columns exist. Use auto to summarize every numeric CSV column except basic
+# metadata/step columns, or provide a list of metric names/columns.
+metrics: canonical

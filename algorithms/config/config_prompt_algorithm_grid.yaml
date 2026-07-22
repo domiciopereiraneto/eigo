@@ -1,0 +1,47 @@
+# Prompt x algorithm best-image grid config.
+#
+# Run:
+#   python algorithms/create_prompt_algorithm_grid.py --config algorithms/config/config_prompt_algorithm_grid.yaml
+
+# Each algorithm folder must resolve to exactly one run directory containing
+# results_* prompt folders. Labels become row headers.
+algorithms:
+  - label: AdamW
+    folder: results_v3/results_adam_sd15_imagereward
+  - label: Zero order
+    folder: results_v3/results_zeroorder_sd15_imagereward
+  - label: CoSyNE
+    folder: results_v3/results_cosyne_sd15_imagereward
+  - label: SNES
+    folder: results_v3/results_snes_sd15_imagereward
+  - label: sep-CMA-ES
+    folder: results_v3/results_sepcmaes_sd15_imagereward
+
+# Prompt folder suffixes to include, e.g. results_LAIONV2_42_1 uses prompt index 1.
+prompt_indices:
+  - 1
+  - 117
+  - 175
+  - 98
+  - 72
+
+# best_all.jpg is the project convention for the best image in a prompt run.
+# If it is missing, fallback_to_latest uses the latest best_N.jpg or it_N.jpg.
+best_image_name: best_all
+fallback_to_latest: true
+
+# Baseline is read from it_0.jpg in the first configured algorithm folder.
+include_baseline: true
+baseline_label: Baseline
+
+output: results_image_grids/prompt_x_algorithm_best_imagereward.jpg
+
+tile_size: 160x160
+algorithm_label_width: 90
+prompt_header_height: 86
+column_gap: 10
+row_gap: 3
+margin: 12
+prompt_font_size: 14
+algorithm_font_size: 16
+rotate_algorithm_labels: true

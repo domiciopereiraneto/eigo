@@ -1,0 +1,56 @@
+# Runchart plotting config.
+#
+# Run:
+#   python algorithms/process_runchart_results.py --config algorithms/config/config_process_runchart_results.yaml
+
+# Each item can be an experiment folder containing results_* prompt folders, or a
+# parent folder to search recursively for experiment folders.
+experiment_folders:
+  # - results_v3/results_adam_sd15_clip
+  # - results_v3/results_zeroorder_sd15_clip
+  # - results_v3/results_cosyne_sd15_clip
+  # - results_v3/results_snes_sd15_clip
+  # - results_v3/results_sepcmaes_sd15_clip
+  - results_v3/results_adam_sd15_imagereward
+  - results_v3/results_zeroorder_sd15_imagereward
+  - results_v3/results_cosyne_sd15_imagereward
+  - results_v3/results_snes_sd15_imagereward
+  - results_v3/results_sepcmaes_sd15_imagereward
+
+
+save_folder: results_runcharts_v3
+clean_output: false
+
+# Valid canonical metric names include:
+# objective, aesthetic_score, clip_score, image_reward_score, hpsv2_score,
+# pickscore_score, jpeg_size_kb, elapsed_time, peak_vram_mb.
+metrics:
+  #- clip_score
+  - image_reward_score
+  #- hpsv2_score
+
+# true plots the best-so-far value for each prompt run before aggregating.
+# For jpeg_size_kb and combined_loss, lower is treated as better.
+best_so_far: true
+
+# NFE axis scale for metric-vs-compute plots. NFE counts diffusion denoising
+# forward passes:
+#   Adam/score CSVs: (iteration + 1) * num_inference_steps
+#   population/fitness CSVs: (1 + generation * pop_size) * num_inference_steps
+# Use log to match common inference compute plots, or linear for an untransformed
+# NFE axis.
+nfe_xscale: linear
+
+# The plots use each experiment's native CSV points. No interpolation grid is
+# applied; each line has the original number of recorded NFE/time points for
+# that experiment.
+
+# Time axis limit:
+#   shortest: use the shortest valid elapsed-time coverage across experiments
+#   null: no truncation; plot through the longest available elapsed time
+#   number: use that many seconds
+time_limit: 500
+
+label_template: "{algorithm}"
+figure_width: 8.0
+figure_height: 6.0

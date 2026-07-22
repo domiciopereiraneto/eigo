@@ -1,0 +1,53 @@
+# Optimization-step image grid config.
+#
+# Run:
+#   python algorithms/create_optimization_step_grid.py --config algorithms/config/config_optimization_step_grid.yaml
+
+# Each item can be an experiment folder containing results_* prompt folders, or a
+# parent folder containing one or more such experiment folders.
+experiment_folders:
+  - results_v3/results_sepcmaes_sd15_clip
+  - results_v3/results_sepcmaes_sd15_hpsv2
+
+# Prompt folder suffixes to include, e.g. results_LAIONV2_42_2 uses prompt index 2.
+prompt_indices:
+  - 1
+  - 117
+  - 175
+  - 98
+  - 72
+
+# Adam uses it_N.jpg for these values. Population methods use gen_N/id_M.jpg,
+# or best_N.jpg when use_best is true.
+steps:
+  - 5
+  - 10
+  - 15
+
+# For population methods. Leave null to infer all population ids from the first
+# available selected generation. Ignored for Adam and when use_best is true.
+population_ids: null
+# population_ids:
+#   - 1
+#   - 2
+#   - 3
+#   - 4
+
+# false: population methods render generation x population columns.
+# true: population methods render one best_N.jpg column per selected generation.
+use_best: true
+include_baseline: true
+
+# If output is null, one image is written per resolved experiment folder under
+# output_folder. Set output only when experiment_folders resolves to one run.
+output_folder: results_image_grids
+output: null
+
+tile_size: 128x128
+prompt_width: 150
+column_gap: 3
+row_gap: 3
+margin: 10
+header_height: 42
+prompt_font_size: 14
+header_font_size: 14

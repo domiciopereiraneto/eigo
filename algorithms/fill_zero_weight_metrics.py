@@ -166,12 +166,19 @@ def backup_csv(csv_path: Path) -> None:
 
 
 class MetricBackfiller:
-    def __init__(self, base_config: dict, metrics_to_calculate: Sequence[str], cuda_override=None):
+    def __init__(
+        self,
+        base_config: dict,
+        metrics_to_calculate: Sequence[str],
+        cuda_override=None,
+        scorer_results_folder: Optional[Path] = None,
+    ):
         self.base_config = dict(base_config)
         self.metrics_to_calculate = tuple(metrics_to_calculate)
         self.metrics_set = set(self.metrics_to_calculate)
         self.recompute_objective = self.metrics_set == set(METRIC_NAMES)
         self.cuda_override = cuda_override
+        self.scorer_results_folder = Path(scorer_results_folder or "/tmp/eigo_zero_weight_backfill")
         self.engine = None
         self.engine_key = None
         self.score_cache: Dict[Tuple[str, str], dict] = {}
@@ -200,7 +207,10 @@ class MetricBackfiller:
             or first_non_empty(df, "prompt")
             or prompt_dir.name
         )
-        config.setdefault("results_folder", str(prompt_dir.parent))
+        # Eigo creates OUTPUT_FOLDER during construction. Backfilling only needs
+        # scorer models, so force that incidental folder into writable scratch
+        # instead of trusting old run configs such as results_folder: /workspace.
+        config["results_folder"] = str(self.scorer_results_folder)
         required_defaults = {
             "optimization_method": "random_sampler",
             "optimization_target": "prompt_embeddings",
@@ -566,6 +576,7 @@ def main() -> None:
     suffix = str(config.get("output_suffix", "_completed"))
     backup_original = bool(config.get("backup_original", True))
     cuda_override = config.get("cuda", None)
+    scorer_results_folder = config.get("scorer_results_folder", "/tmp/eigo_zero_weight_backfill")
     metrics_to_calculate = normalize_metrics(config.get("metrics_to_calculate", "all"))
     print(f"Metrics selected for backfill: {', '.join(metrics_to_calculate)}")
     if set(metrics_to_calculate) != set(METRIC_NAMES):
@@ -574,6 +585,7 @@ def main() -> None:
         base_config,
         metrics_to_calculate=metrics_to_calculate,
         cuda_override=cuda_override,
+        scorer_results_folder=Path(scorer_results_folder),
     )
 
     for experiment_dir in experiment_dirs:
