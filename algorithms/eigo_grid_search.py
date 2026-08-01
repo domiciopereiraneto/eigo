@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Run EIGO grid search for one or more prompts across Adam, GA, CMA-ES, and/or random-sampler parameter sets."""
+"""Run Cartesian hyperparameter sweeps for EIGO optimizers.
+
+The grid config defines one or more prompts, enabled optimizers, and per-method
+parameter lists. Every method-specific cartesian product is executed and recorded
+with its effective parameters and final metrics.
+"""
 
 import argparse
 import csv
@@ -13,7 +18,7 @@ from pathlib import Path
 
 import yaml
 
-# Add parent directory to Python path for module imports
+# Add the repository root so this script can import the Eigo backend.
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, parent_dir)
 

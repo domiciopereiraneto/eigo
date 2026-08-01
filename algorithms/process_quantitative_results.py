@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Compile quantitative summaries for EIGO experiment folders."""
+"""Compile quantitative tables from completed EIGO experiment folders.
+
+The script discovers prompt-level results, selects one row per prompt CSV, and
+aggregates metrics into long/wide CSV files plus an Excel workbook.
+"""
 
 from __future__ import annotations
 

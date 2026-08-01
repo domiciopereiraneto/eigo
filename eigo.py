@@ -257,6 +257,16 @@ class Eigo:
     def __init__(self, config_parameters):
         cls = type(self)
         self.parameters = config_parameters
+        if "aesthetic_predictor" not in config_parameters and "predictor" in config_parameters:
+            config_parameters["aesthetic_predictor"] = config_parameters["predictor"]
+        elif (
+            "aesthetic_predictor" in config_parameters
+            and "predictor" in config_parameters
+            and config_parameters["aesthetic_predictor"] != config_parameters["predictor"]
+        ):
+            raise ValueError("Use either aesthetic_predictor or predictor, not conflicting values.")
+        elif "aesthetic_predictor" not in config_parameters:
+            config_parameters["aesthetic_predictor"] = 2
         self.model_backend = self._resolve_model_backend(config_parameters)
         self.optimization_target = resolve_optimization_target(config_parameters)
         self.guidance_scale = float(config_parameters.get("guidance_scale", 0.0))
@@ -350,7 +360,7 @@ class Eigo:
         if self.clip_model_name is None and (
             self._should_evaluate_metric("clip_score")
             or (
-                config_parameters["predictor"] in (1, 2)
+                config_parameters["aesthetic_predictor"] in (1, 2)
                 and self._should_evaluate_metric("aesthetic_score")
             )
         ):
@@ -358,14 +368,14 @@ class Eigo:
                 "clip_model_name must be configured when CLIP score or LAION aesthetic score is evaluated."
             )
 
-        if config_parameters["predictor"] == 0:
+        if config_parameters["aesthetic_predictor"] == 0:
             predictor_name = 'simulacra'
-        elif config_parameters["predictor"] == 1:
+        elif config_parameters["aesthetic_predictor"] == 1:
             predictor_name = 'laionv1'
-        elif config_parameters["predictor"] == 2:
+        elif config_parameters["aesthetic_predictor"] == 2:
             predictor_name = 'laionv2'
         else:
-            raise ValueError("Invalid predictor option.")
+            raise ValueError("Invalid aesthetic_predictor option.")
 
         if config_parameters["optimization_method"] == "adam":
             method_save_name = "adam"
@@ -424,7 +434,7 @@ class Eigo:
             self.use_multi_gpu,
             str(self.pipeline_device_map),
             str(self.max_memory),
-            config_parameters["predictor"],
+            config_parameters["aesthetic_predictor"],
             self.use_image_reward,
             self.image_reward_model_name if self.use_image_reward else None,
             self.use_hpsv2,
@@ -460,20 +470,20 @@ class Eigo:
                 self._freeze_module_params(clip_model)
 
             aesthetic_model = None
-            if config_parameters["predictor"] == 0:
+            if config_parameters["aesthetic_predictor"] == 0:
                 model_name = "SAM"
                 if self._should_evaluate_metric("aesthetic_score"):
                     aesthetic_model = SimulacraAesthetic(self.device)
-            elif config_parameters["predictor"] == 1:
+            elif config_parameters["aesthetic_predictor"] == 1:
                 model_name = "LAIONV1"
                 if self._should_evaluate_metric("aesthetic_score"):
                     aesthetic_model = LAIONAesthetic(self.device, clip_model=self.clip_model_name)
-            elif config_parameters["predictor"] == 2:
+            elif config_parameters["aesthetic_predictor"] == 2:
                 model_name = "LAIONV2"
                 if self._should_evaluate_metric("aesthetic_score"):
                     aesthetic_model = LAIONV2Aesthetic(self.device, clip_model=self.clip_model_name)
             else:
-                raise ValueError("Invalid predictor option.")
+                raise ValueError("Invalid aesthetic_predictor option.")
 
             image_reward_model = None
             if self.use_image_reward:
@@ -1199,10 +1209,10 @@ class Eigo:
         # Convert to [N, C, H, W] and ensure it's in float32
         image_input = image.permute(2, 0, 1).to(torch.float32)  # [1, C, H, W]
 
-        if self.parameters["predictor"] == 0:
+        if self.parameters["aesthetic_predictor"] == 0:
             # Simulacra Aesthetic Model
             score = self.aesthetic_model.predict_from_tensor(image_input)
-        elif self.parameters["predictor"] == 1 or self.parameters["predictor"] == 2:
+        elif self.parameters["aesthetic_predictor"] == 1 or self.parameters["aesthetic_predictor"] == 2:
             # LAION Aesthetic Predictor V1 and V2
             score = self.aesthetic_model.predict_from_tensor(image_input)
         else:

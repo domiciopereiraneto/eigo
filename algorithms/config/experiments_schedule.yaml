@@ -1,0 +1,93 @@
+# Batch-experiment schedule for algorithms/experiments_schedule.py.
+#
+# Each item in runs is recursively merged onto config_run_experiments.yaml before
+# launching run_experiments.py. Put tuned algorithm parameters and objective
+# weights here, while keeping shared prompt/model defaults in the base config.
+
+runs:
+  - optimization_method: "adam"
+    cuda: 1
+    aesthetic_score_weight: 0.0
+    clip_score_weight: 1.0
+    image_reward_score_weight: 0.0
+    hpsv2_score_weight: 0.0
+    pickscore_score_weight: 0.0
+    jpeg_size_weight: 0.0
+    adam_lr: 0.004370393536723549
+    adam_weight_decay: 1.0e-06
+    adam_beta1: 0.8295092911236287
+    adam_beta2: 0.9573436157399957
+    adam_eps: 1.1646204201491381e-08
+    results_folder: "results_adam_sanasprint_clip"
+
+  - optimization_method: "cmaes"
+    cuda: 1
+    aesthetic_score_weight: 0.0
+    clip_score_weight: 0.0
+    image_reward_score_weight: 1.0
+    hpsv2_score_weight: 0.0
+    pickscore_score_weight: 0.0
+    jpeg_size_weight: 0.0
+    results_folder: "results_sepcmaes_sanasprint_imagereward"
+    sigma: 0.8627358286640178
+
+  - optimization_method: "cmaes"
+    cuda: 1
+    aesthetic_score_weight: 0.0
+    clip_score_weight: 1.0
+    image_reward_score_weight: 0.0
+    hpsv2_score_weight: 0.0
+    pickscore_score_weight: 0.0
+    jpeg_size_weight: 0.0
+    results_folder: "results_sepcmaes_sanasprint_clip"
+    sigma: 0.7632570590944291
+
+  - optimization_method: "cmaes"
+    cuda: 1
+    aesthetic_score_weight: 0.0
+    clip_score_weight: 0.0
+    image_reward_score_weight: 0.0
+    hpsv2_score_weight: 1.0
+    pickscore_score_weight: 0.0
+    jpeg_size_weight: 0.0
+    results_folder: "results_sepcmaes_sanasprint_hpsv2"
+    sigma: 0.8627358286640178
+
+  - optimization_method: "snes"
+    cuda: 1
+    aesthetic_score_weight: 0.0
+    clip_score_weight: 0.0
+    image_reward_score_weight: 1.0
+    hpsv2_score_weight: 0.0
+    pickscore_score_weight: 0.0
+    jpeg_size_weight: 0.0
+    results_folder: "results_snes_sanasprint_imagereward"
+    snes_sigma: 0.5538679074875307
+    snes_eta_mu: 1.0664522736836475
+    snes_eta_sigma: 0.0074414393740104955
+
+  - optimization_method: "snes"
+    cuda: 1
+    aesthetic_score_weight: 0.0
+    clip_score_weight: 1.0
+    image_reward_score_weight: 0.0
+    hpsv2_score_weight: 0.0
+    pickscore_score_weight: 0.0
+    jpeg_size_weight: 0.0
+    results_folder: "results_snes_sanasprint_clip"
+    snes_sigma: 0.6640443273080594
+    snes_eta_mu: 1.1654852865968315
+    snes_eta_sigma: 0.06173140594172436
+
+  - optimization_method: "snes"
+    cuda: 1
+    aesthetic_score_weight: 0.0
+    clip_score_weight: 0.0
+    image_reward_score_weight: 0.0
+    hpsv2_score_weight: 1.0
+    pickscore_score_weight: 0.0
+    jpeg_size_weight: 0.0
+    results_folder: "results_snes_sanasprint_hpsv2"
+    snes_sigma: 0.7475169964599854
+    snes_eta_mu: 0.9643177568033261
+    snes_eta_sigma: 0.029406226306419973

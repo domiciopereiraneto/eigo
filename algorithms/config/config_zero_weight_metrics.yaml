@@ -1,15 +1,27 @@
-# Re-score existing p2 experiment outputs with evaluate_zero_weight_metrics=true.
+# Re-score existing EIGO experiment outputs for metrics that were skipped because
+# evaluate_zero_weight_metrics was false during optimization.
 #
 # Each item can be an experiment folder containing results_* prompt folders, or a
 # parent folder that contains multiple such experiment folders.
 experiment_folders: [
-    "results_ga_sd15_imagereward",
-    "results_ga_sd15_clip",
-    "results_ga_sd15_hpsv2"
+    "results_sanasprint/results_adam_sanasprint_clip",
+    "results_sanasprint/results_adam_sanasprint_imagereward",
+    "results_sanasprint/results_cosyne_sanasprint_clip",
+    "results_sanasprint/results_cosyne_sanasprint_hpsv2",
+    "results_sanasprint/results_cosyne_sanasprint_imagereward",
+    "results_sanasprint/results_ga_sanasprint_clip",
+    "results_sanasprint/results_ga_sanasprint_hpsv2",
+    "results_sanasprint/results_ga_sanasprint_imagereward",
+    "results_sanasprint/results_sepcmaes_sanasprint_clip",
+    "results_sanasprint/results_sepcmaes_sanasprint_hpsv2",
+    "results_sanasprint/results_sepcmaes_sanasprint_imagereward",
+    "results_sanasprint/results_snes_sanasprint_clip",
+    "results_sanasprint/results_snes_sanasprint_hpsv2",
+    "results_sanasprint/results_snes_sanasprint_imagereward"
 ]
 
-# Base p2 config used when a prompt folder does not contain config.yaml.
-base_config: algorithms/config/config_p2_experiments.yaml
+# Base batch-experiment config used when a prompt folder does not contain config.yaml.
+base_config: algorithms/config/config_run_experiments.yaml
 
 # By default completed CSVs are written next to the originals as:
 # score_results_completed.csv / fitness_results_completed.csv.

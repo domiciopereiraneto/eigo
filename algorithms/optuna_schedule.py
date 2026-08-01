@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Run eigo_optuna_search.py sequentially with scheduled config overrides."""
+"""Run Optuna studies sequentially from scheduled config overrides.
+
+Each schedule entry is recursively merged into the base Optuna config. Use this
+for paper-scale optimizer-objective tuning where every study has its own result
+folder and SQLite storage file.
+"""
 
 import argparse
 import copy

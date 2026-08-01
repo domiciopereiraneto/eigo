@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Create prompt-by-optimization-step image grids for experiment folders."""
+"""Create image grids that show prompts across optimization steps.
+
+The script reads selected prompt folders from one or more experiment directories
+and renders baseline, iteration, generation, or best-so-far images according to
+the grid config.
+"""
 
 from __future__ import annotations
 

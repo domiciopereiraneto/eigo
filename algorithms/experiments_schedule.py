@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Run p2_experiments.py sequentially from a list of config override dictionaries."""
+"""Run batch experiments sequentially from scheduled config overrides.
+
+Each schedule entry is recursively merged into the base run_experiments.py config,
+written to a temporary YAML file, and executed as one batch job.
+"""
 
 import argparse
 import copy
@@ -68,7 +72,7 @@ def run_schedule(args):
 
     print(f"Loaded {len(runs)} scheduled run(s).")
 
-    with tempfile.TemporaryDirectory(prefix="p2_schedule_") as tmpdir:
+    with tempfile.TemporaryDirectory(prefix="experiments_schedule_") as tmpdir:
         tmpdir_path = Path(tmpdir)
 
         for idx, override in enumerate(runs, start=1):
@@ -107,22 +111,22 @@ def run_schedule(args):
 def build_parser():
     parser = argparse.ArgumentParser(
         description=(
-            "Run p2_experiments.py sequentially using a base config and a schedule of overrides."
+            "Run run_experiments.py sequentially using a base config and a schedule of overrides."
         )
     )
     parser.add_argument(
         "--base-config",
-        default="algorithms/config/config_p2_experiments.yaml",
+        default="algorithms/config/config_run_experiments.yaml",
         help="Path to the base config YAML.",
     )
     parser.add_argument(
         "--schedule",
-        default="algorithms/config/p2_schedule.yaml",
+        default="algorithms/config/experiments_schedule.yaml",
         help="Path to schedule YAML (top-level list or {'runs': [...]}).",
     )
     parser.add_argument(
         "--script",
-        default="algorithms/p2_experiments.py",
+        default="algorithms/run_experiments.py",
         help="Path to the script to execute for each run.",
     )
     parser.add_argument(

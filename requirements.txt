@@ -1,4 +1,8 @@
-# Requires Python 3.10
+# Pip dependency list for EIGO. The Conda environment in environment.yml is the
+# recommended setup because the experiment stack mixes CUDA, diffusion, plotting,
+# and spreadsheet dependencies.
+#
+# Requires Python 3.10.
 
 PyYAML==6.0.2
 numpy==2.2.5

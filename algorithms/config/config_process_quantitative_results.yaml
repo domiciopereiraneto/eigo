@@ -1,17 +1,31 @@
-# Quantitative result processing config.
+# Quantitative result processing config for algorithms/process_quantitative_results.py.
 #
 # Run:
 #   python algorithms/process_quantitative_results.py --config algorithms/config/config_process_quantitative_results.yaml
+#
+# The script selects one row from each prompt-level CSV and aggregates metrics
+# across prompts for each experiment folder.
 
 # Each item can be an experiment folder containing results_* prompt folders, or a
 # parent folder to search recursively for experiment folders.
 experiment_folders:
-- results_ga_sd15_imagereward
-- results_ga_sd15_clip
-- results_ga_sd15_hpsv2
+- results_sanasprint/results_adam_sanasprint_clip
+- results_sanasprint/results_adam_sanasprint_imagereward
+- results_sanasprint/results_cosyne_sanasprint_clip
+- results_sanasprint/results_cosyne_sanasprint_hpsv2
+- results_sanasprint/results_cosyne_sanasprint_imagereward
+- results_sanasprint/results_ga_sanasprint_clip
+- results_sanasprint/results_ga_sanasprint_hpsv2
+- results_sanasprint/results_ga_sanasprint_imagereward
+- results_sanasprint/results_sepcmaes_sanasprint_clip
+- results_sanasprint/results_sepcmaes_sanasprint_hpsv2
+- results_sanasprint/results_sepcmaes_sanasprint_imagereward
+- results_sanasprint/results_snes_sanasprint_clip
+- results_sanasprint/results_snes_sanasprint_hpsv2
+- results_sanasprint/results_snes_sanasprint_imagereward
 
 # Output workbook. CSV mirrors are written beside this file.
-output_excel: results_quantitative_ga/quantitative_results.xlsx
+output_excel: results_quantitative_sanasprint_1/quantitative_results_sanasprint_1.xlsx
 
 # Which row to use from each prompt-level CSV before aggregating across prompts:
 #   last: final row in the CSV

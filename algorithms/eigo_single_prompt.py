@@ -1,27 +1,29 @@
-# EIGO engine initialization 
+#!/usr/bin/env python3
+"""Run one EIGO optimization job from algorithms/config/config_eigo.yaml.
+
+Use this entrypoint for quick single-prompt checks before launching larger
+scheduled experiments. For batched paper runs, use run_experiments.py together
+with experiments_schedule.py.
+"""
 
 import sys
 import os
 
-# Add parent directory to Python path for module imports
-# This allows importing modules from the parent directory.
+# Add the repository root so this script can import eigo.py when executed from
+# the project root.
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, parent_dir)
 
 from eigo import Eigo
 import yaml
 
-# Use the provided config path or default
 config_path = "algorithms/config/config_eigo.yaml"
 
-# Load configuration parameters
-# Reads the YAML configuration file and extracts parameters for the optimization process.
+# Load the full backend/optimizer configuration.
 with open(config_path, 'r') as file:
     experimental_setup_parameters = yaml.safe_load(file)
 
 eigo_engine = Eigo(experimental_setup_parameters)
-
-#Optimization execution
 
 print("Starting optimization using method:", experimental_setup_parameters["optimization_method"])
 

@@ -1,44 +1,82 @@
-# Prompt x algorithm best-image grid config.
+# Prompt x algorithm best-image grid config for algorithms/create_prompt_algorithm_grid.py.
 #
 # Run:
 #   python algorithms/create_prompt_algorithm_grid.py --config algorithms/config/config_prompt_algorithm_grid.yaml
+#
+# The script compares selected prompts across algorithm folders using each
+# prompt's best/final image and optional metric captions.
+
+# Layout options:
+#   prompt_x_algorithm: prompts are columns, algorithms are rows.
+#   algorithm_x_prompt: algorithms are columns, prompts are rows.
+layout: algorithm_x_prompt
 
 # Each algorithm folder must resolve to exactly one run directory containing
-# results_* prompt folders. Labels become row headers.
+# results_* prompt folders. Labels become row headers in prompt_x_algorithm and
+# column headers in algorithm_x_prompt.
 algorithms:
+  # - label: Best-of-N
+  #   folder: results_sd15_v3/results_randomsampler_sd15_imagereward
+  # - label: Best-of-N (DPO)
+  #   folder: results_sd15_v3/results_randomsampler_sd15dpo_imagereward
   - label: AdamW
-    folder: results_v3/results_adam_sd15_imagereward
+    folder: results_sanasprint/results_adam_sanasprint_hpsv2
   - label: Zero order
-    folder: results_v3/results_zeroorder_sd15_imagereward
+    folder: results_sanasprint/results_zeroorder_sanasprint_hpsv2
   - label: CoSyNE
-    folder: results_v3/results_cosyne_sd15_imagereward
-  - label: SNES
-    folder: results_v3/results_snes_sd15_imagereward
+    folder: results_sanasprint/results_cosyne_sanasprint_hpsv2
+  - label: GA
+    folder: results_sanasprint/results_ga_sanasprint_hpsv2
   - label: sep-CMA-ES
-    folder: results_v3/results_sepcmaes_sd15_imagereward
+    folder: results_sanasprint/results_sepcmaes_sanasprint_hpsv2
+  - label: SNES
+    folder: results_sanasprint/results_snes_sanasprint_hpsv2
 
 # Prompt folder suffixes to include, e.g. results_LAIONV2_42_1 uses prompt index 1.
 prompt_indices:
-  - 1
-  - 117
-  - 175
-  - 98
-  - 72
+  - 118
+  - 133
+  - 152
+  - 155
+  - 168
+  - 174
+  - 179
+  - 200
+  - 70
+  - 93
 
 # best_all.jpg is the project convention for the best image in a prompt run.
 # If it is missing, fallback_to_latest uses the latest best_N.jpg or it_N.jpg.
 best_image_name: best_all
 fallback_to_latest: true
 
+# Optional metric captions drawn below each image. Use [] to disable. For each
+# prompt, the highest value for each displayed metric is drawn in bold.
+# Supported aliases include objective, aesthetic, clip, image_reward, hpsv2,
+# pickscore, jpeg, or full CSV column names such as max_image_reward_score.
+image_metrics:
+  - hpsv2
+
+# Metrics are read from score_results.csv or fitness_results.csv. For optimized
+# images, last usually matches the final/best_all summary row; best selects the
+# best combined_score/max_fitness row; first is useful for baseline it_0.
+metric_row_selector: last
+baseline_metric_row_selector: first
+metric_font_size: 12
+metric_precision: 3
+metric_gap: 4
+
 # Baseline is read from it_0.jpg in the first configured algorithm folder.
 include_baseline: true
-baseline_label: Baseline
+baseline_label: Initial Generation
 
-output: results_image_grids/prompt_x_algorithm_best_imagereward.jpg
+output: results_image_grids/prompt_x_algorithm_best_sanasprint_hpsv2.jpg
 
 tile_size: 160x160
 algorithm_label_width: 90
 prompt_header_height: 86
+prompt_label_width: 180
+algorithm_header_height: 70
 column_gap: 10
 row_gap: 3
 margin: 12

@@ -1,4 +1,10 @@
-# Prompts to test across all grid combinations
+# Grid-search config for algorithms/eigo_grid_search.py.
+#
+# The script runs every enabled optimizer over every prompt and every cartesian
+# product in that optimizer's grid section. Results are written below
+# results_folder, with one child folder per prompt/method/parameter combination.
+
+# Prompts to test across all grid combinations.
 selected_prompts:
   - "an astronaut riding a horse on mars"
   - "a serene mountain landscape with a tranquil lake at sunset"
@@ -6,11 +12,8 @@ selected_prompts:
   - "a cozy library with ancient books and warm candlelight"
   - "a vibrant underwater coral reef with colorful tropical fish"
 
-# Select which optimizers to include in the grid
-# If true, all combinations in grid.adam are tested with optimization_method=adam
-# If true, all combinations in grid.ga are tested with optimization_method=ga
-# If true, all combinations in grid.cmaes are tested with optimization_method=cmaes
-# If true, all combinations in grid.random_sampler are tested with optimization_method=random_sampler
+# Select which optimizers to include in the grid. Each true flag activates the
+# matching grid.<method> section below.
 test_adam: true
 test_ga: false
 test_cmaes: false
@@ -21,7 +24,7 @@ test_random_sampler: false
 # General parameters (copied from config_eigo.yaml)
 seed: 42
 cuda: 2
-predictor: 2
+aesthetic_predictor: 2
 num_inference_steps: 1
 batch_size: 1
 guidance_scale: 0

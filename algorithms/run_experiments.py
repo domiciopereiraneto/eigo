@@ -1,43 +1,25 @@
-"""
-Population-based optimization of text embeddings for image generation using the configured diffusion backend.
+#!/usr/bin/env python3
+"""Run EIGO over a sampled prompt dataset.
 
-This script employs an optimizer or sampler (CMA-ES, SNES, GA, Adam, or random sampling) to modify or sample text-to-image generations while maximizing aesthetic and CLIP scores. It supports configuration through a YAML file and provides functionality for prompt sampling, image generation, and evaluation.
+The config controls the diffusion backend, scoring objective, optimizer, prompt
+dataset, prompt subset, seeds, and output folder. Each selected prompt is passed
+to the shared Eigo backend and saved as an independent prompt-level result
+directory inside the configured results folder.
 
-Main Features:
-- Loads configuration parameters from a YAML file.
-- Samples prompts from a dataset and groups them by category.
-- Generates images using the configured diffusion backend with optimized text embeddings.
-- Evaluates images using aesthetic and CLIP scores.
-- Saves results, including metrics and generated images, to an output folder.
-- Provides visualization of score evolution over generations.
-
-Dependencies:
-- PyTorch for deep learning operations.
-- diffusers for text-to-image diffusion pipelines.
-- PIL for image processing.
-- datasets for loading prompt datasets.
-- matplotlib for plotting results.
-- pptx for generating PowerPoint presentations.
-- cma for CMA-ES optimization.
-
-Usage:
-Run the script with a configuration file specifying the parameters:
-    python cmaes.py --config path/to/config.yaml
+Example:
+    python algorithms/run_experiments.py --config algorithms/config/config_run_experiments.yaml
 """
 
-# System imports
 import sys
 import os
 import shutil
 import json
 import yaml
 
-# Get the parent directory
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 # Add the project root so local project modules can be imported.
 sys.path.insert(0, parent_dir)
 
-# External imports - grouped by functionality
 import pandas as pd
 import numpy as np
 import random
@@ -49,18 +31,13 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from eigo import Eigo
 
-# Argument parsing for configuration file
-# Allows specifying a custom configuration file path.
 parser = argparse.ArgumentParser(description='Run optimization with configuration file')
-parser.add_argument('--config', type=str, default="algorithms/config/config_p2_experiments.yaml",
+parser.add_argument('--config', type=str, default="algorithms/config/config_run_experiments.yaml",
                    help='Path to configuration YAML file')
 args = parser.parse_args()
 
-# Use the provided config path or default
 config_path = args.config
 
-# Load configuration parameters
-# Reads the YAML configuration file and extracts parameters for the optimization process.
 with open(config_path, 'r') as file:
     config = yaml.safe_load(file)
 
@@ -68,17 +45,15 @@ SEED = config['seed']
 SEED_PATH = config['seed_path']
 OUTPUT_FOLDER = config['results_folder']
 
-# Seed handling
-# Initializes the random seed for reproducibility.
 if SEED_PATH is None:
     seed_list = [SEED]
 else:
     with open(SEED_PATH, 'r') as file:
-        # Read each line, strip newline characters, and convert to integers
         seed_list = [int(line.strip()) for line in file]
 
-# Prompt dataset loading and preprocessing
-# Supports either per-category prompt sampling or a single prompt per seed.
+# Prompt dataset presets define the default Hugging Face dataset path, split,
+# prompt column aliases, and category column aliases for supported benchmark
+# datasets. Config fields can override any of these defaults.
 PROMPT_DATASET_PRESETS = {
     "parti": {
         "path": "nateraw/parti-prompts",

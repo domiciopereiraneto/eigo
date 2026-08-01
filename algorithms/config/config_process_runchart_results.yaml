@@ -1,24 +1,52 @@
-# Runchart plotting config.
+# Runchart plotting config for algorithms/process_runchart_results.py.
 #
 # Run:
 #   python algorithms/process_runchart_results.py --config algorithms/config/config_process_runchart_results.yaml
+#
+# The script aggregates prompt-level metric curves and writes metric-vs-NFE and
+# metric-vs-time CSV/PNG files.
 
 # Each item can be an experiment folder containing results_* prompt folders, or a
 # parent folder to search recursively for experiment folders.
 experiment_folders:
-  # - results_v3/results_adam_sd15_clip
-  # - results_v3/results_zeroorder_sd15_clip
-  # - results_v3/results_cosyne_sd15_clip
-  # - results_v3/results_snes_sd15_clip
-  # - results_v3/results_sepcmaes_sd15_clip
-  - results_v3/results_adam_sd15_imagereward
-  - results_v3/results_zeroorder_sd15_imagereward
-  - results_v3/results_cosyne_sd15_imagereward
-  - results_v3/results_snes_sd15_imagereward
-  - results_v3/results_sepcmaes_sd15_imagereward
+- results_sdxlturbo/results_adam_sdxl_turbo_hpsv2
+- results_sdxlturbo/results_zeroorder_sdxlturbo_hpsv2
+- results_sdxlturbo/results_cosyne_sdxlturbo_hpsv2
+- results_sdxlturbo/results_ga_sdxlturbo_hpsv2
+- results_sdxlturbo/results_snes_sdxlturbo_hpsv2
+- results_sdxlturbo/results_sepcmaes_sdxlturbo_hpsv2
 
+# Optional labels for experiment_folders. If provided, this list must have one
+# label for each active experiment_folders entry.
+experiment_labels:
+  - "AdamW"
+  - "Zero-order"
+  - "CoSyNE"
+  - "GA"
+  - "SNES"
+  - "sep-CMA-ES"
 
-save_folder: results_runcharts_v3
+# Optional matplotlib markers for experiment_folders. If provided, this list
+# must have one marker for each active experiment_folders entry.
+experiment_markers:
+  - "^"
+  - "^"
+  - "o"
+  - "o"
+  - "o"
+  - "o"
+
+# Optional baseline folders to draw as horizontal constant lines. For each
+# configured folder, the script takes the final value from each prompt run,
+# averages those final values, and plots that mean as a constant line.
+constant_experiment_folders:
+  # - results_sd15_v3/results_randomsampler_sd15_imagereward
+  # - results_sd15_v3/results_randomsampler_sd15dpo_imagereward
+constant_labels:
+  # - "Best-of-N"
+  # - "Best-of-N (DPO)"
+
+save_folder: results_runcharts_sdxlturbo
 clean_output: false
 
 # Valid canonical metric names include:
@@ -26,8 +54,8 @@ clean_output: false
 # pickscore_score, jpeg_size_kb, elapsed_time, peak_vram_mb.
 metrics:
   #- clip_score
-  - image_reward_score
-  #- hpsv2_score
+  #- image_reward_score
+  - hpsv2_score
 
 # true plots the best-so-far value for each prompt run before aggregating.
 # For jpeg_size_kb and combined_loss, lower is treated as better.
@@ -37,6 +65,7 @@ best_so_far: true
 # forward passes:
 #   Adam/score CSVs: (iteration + 1) * num_inference_steps
 #   population/fitness CSVs: (1 + generation * pop_size) * num_inference_steps
+#   random sampler fitness CSVs with sample_end: (sample_end + 1) * num_inference_steps
 # Use log to match common inference compute plots, or linear for an untransformed
 # NFE axis.
 nfe_xscale: linear
@@ -52,5 +81,7 @@ nfe_xscale: linear
 time_limit: 500
 
 label_template: "{algorithm}"
-figure_width: 8.0
+figure_width: 6.0
 figure_height: 6.0
+font_size: 13
+marker_size: 6.0

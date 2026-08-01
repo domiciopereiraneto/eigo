@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Run Optuna-based EIGO hyperparameter search as an alternative to grid search."""
+"""Run Optuna hyperparameter search for EIGO optimizers.
+
+Each trial selects one enabled optimizer, samples method-specific hyperparameters,
+evaluates the configured prompt list, and optimizes the mean final metric across
+those prompts. Use optuna_schedule.py to run several optimizer-objective studies
+sequentially.
+"""
 
 import argparse
 import copy
@@ -13,7 +19,8 @@ from pathlib import Path
 
 import yaml
 
-# Add script and parent directories to Python path for module imports
+# Add both algorithms/ and the repository root so this script can import shared
+# helpers from eigo_grid_search.py and the Eigo backend.
 current_dir = os.path.abspath(os.path.dirname(__file__))
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, current_dir)
@@ -380,8 +387,8 @@ def suggest_overrides(trial, method, search_space):
     for key, spec in method_space.items():
         if isinstance(spec, dict) and not condition_matches(overrides, spec.get("depends_on")):
             continue
-        # Prefix trial parameter names because the same backend key can have different
-        # distributions per optimizer method.
+        # Prefix trial parameter names because the same backend key can have a
+        # different distribution for each optimizer method.
         overrides[key] = suggest_parameter(
             trial,
             f"{method}.{key}",

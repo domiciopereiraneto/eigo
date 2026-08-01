@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Backfill zero-weight metrics in existing p2 experiment result CSVs."""
+"""Backfill skipped zero-weight metrics in existing EIGO result CSVs.
+
+When evaluate_zero_weight_metrics is false during optimization, scorer models
+with zero objective weight are not loaded. This utility reopens completed prompt
+folders, recomputes selected metrics, and optionally refreshes aggregate files.
+"""
 
 from __future__ import annotations
 
@@ -215,7 +220,7 @@ class MetricBackfiller:
             "optimization_method": "random_sampler",
             "optimization_target": "prompt_embeddings",
             "model_id": "stable-diffusion-v1-5/stable-diffusion-v1-5",
-            "predictor": 2,
+            "aesthetic_predictor": 2,
             "seed": 42,
             "cuda": "cpu",
         }
@@ -234,7 +239,7 @@ class MetricBackfiller:
                 "model_backend",
                 "torch_dtype",
                 "cuda",
-                "predictor",
+                "aesthetic_predictor",
                 "clip_model_name",
                 "image_reward_model",
                 "image_reward_model_name",
@@ -524,29 +529,29 @@ def aggregate_experiment(experiment_dir: Path, csv_paths: Sequence[Path], csv_na
     print(f"Wrote aggregate files: {csv_out} and {xlsx_out}")
 
 
-def run_p2_aggregate_one_experiment(experiment_dir: Path, base_config_path: Path) -> None:
-    """Run the same per-experiment aggregation used by p2_experiments.py."""
+def run_batch_aggregate_one_experiment(experiment_dir: Path, base_config_path: Path) -> None:
+    """Run the same per-experiment aggregation used by run_experiments.py."""
     import importlib
 
     original_argv = sys.argv[:]
     try:
-        # p2_experiments parses args at import time. Give it a normal p2 config,
-        # not this backfill script's config.
+        # run_experiments parses args at import time. Give it the normal batch
+        # experiment config, not this backfill script's config.
         sys.argv = [
-            str(REPO_ROOT / "algorithms" / "p2_experiments.py"),
+            str(REPO_ROOT / "algorithms" / "run_experiments.py"),
             "--config",
             str(base_config_path),
         ]
-        p2_experiments = importlib.import_module("algorithms.p2_experiments")
+        run_experiments = importlib.import_module("algorithms.run_experiments")
     finally:
         sys.argv = original_argv
 
-    p2_experiments._aggregate_one_experiment(str(experiment_dir))
+    run_experiments._aggregate_one_experiment(str(experiment_dir))
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Backfill zero-weight image metrics in existing p2 experiment folders."
+        description="Backfill zero-weight image metrics in existing EIGO experiment folders."
     )
     parser.add_argument(
         "--config",
@@ -560,7 +565,7 @@ def main() -> None:
     args = parse_args()
     config_path = Path(args.config)
     config = load_yaml(config_path)
-    base_config_path = Path(config.get("base_config", "algorithms/config/config_p2_experiments.yaml"))
+    base_config_path = Path(config.get("base_config", "algorithms/config/config_run_experiments.yaml"))
     if not base_config_path.is_absolute():
         base_config_path = (REPO_ROOT / base_config_path).resolve()
     base_config = load_yaml(base_config_path)
@@ -608,8 +613,8 @@ def main() -> None:
                 print(f"Wrote completed metrics: {out_path}")
         if completed_csvs:
             if overwrite:
-                print(f"Recomputing p2 aggregate_results outputs for: {experiment_dir}")
-                run_p2_aggregate_one_experiment(experiment_dir, base_config_path)
+                print(f"Recomputing batch aggregate outputs for: {experiment_dir}")
+                run_batch_aggregate_one_experiment(experiment_dir, base_config_path)
             else:
                 aggregate_experiment(
                     experiment_dir,

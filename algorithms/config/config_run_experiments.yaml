@@ -1,7 +1,11 @@
-# Primary configuration parameters
-"optimization_method": "ga" # "cmaes", "snes", "cosyne", "ga", "adam", "zero_order", or "random_sampler"
+# Batch experiment config for algorithms/run_experiments.py.
+#
+# This file defines one optimizer/model/objective setup and the prompt subset to
+# run. For paper-scale runs, keep shared defaults here and place optimizer- or
+# objective-specific overrides in algorithms/config/experiments_schedule.yaml.
+"optimization_method": "snes" # "cmaes", "snes", "cosyne", "ga", "adam", "zero_order", or "random_sampler"
 
-# Prompt dataset parameters (used by p2_experiments.py)
+# Prompt dataset parameters (used by run_experiments.py)
 seed_path: null  # Path to a file with seeds; if null, uses the 'seed' below
 seed: 42  # Default seed value for reproducibility
 prompt_dataset: "drawbench"  # Prompt source: "parti" or "drawbench"
@@ -10,29 +14,29 @@ prompt_dataset_config: null  # Optional HF dataset config/subset name
 prompt_dataset_split: null  # Optional split override; defaults to train
 prompt_column: null  # Optional prompt column override
 prompt_category_column: null  # Optional category column override
-prompt_per_categorie: null  # Number of prompts sampled per category from the dataset
+prompt_per_categorie: null  # Legacy key name: number of prompts sampled per category
 prompt_sample_seed: null  # Seed for prompt sampling from the dataset
 use_entire_dataset: true  # If true, use every prompt for each seed; overrides prompt_per_categorie and single_prompt_per_seed
 prompt_index_range: [0,200]  # Optional when use_entire_dataset is true: zero-based [start, end) slice, e.g. [0, 50]
 single_prompt_per_seed: false  # If true, ignore per-category sampling and pick one prompt from the full dataset using each run seed
 
 # General generation/scoring parameters
-cuda: 1  # GPU device ID to use (e.g., 0 for first GPU); falls back to CPU if unavailable
-predictor: 2  # 0: SAM, 1: LAION V1, 2: LAION V2
-num_inference_steps: 50  # Diffusion inference steps during image generation; LCM usually works well with 1-8
+cuda: 0  # GPU device ID to use (e.g., 0 for first GPU); falls back to CPU if unavailable
+aesthetic_predictor: 2  # 0: Simulacra, 1: LAION V1, 2: LAION V2
+num_inference_steps: 2  # Diffusion inference steps during image generation; LCM usually works well with 1-8
 batch_size: 8  # Number of candidates/images to generate and score at once for CMA-ES/GA/zero_order/random_sampler
-guidance_scale: 7.5 # Classifier-free guidance scale (0 means disabled)
+guidance_scale: 4.5 # Classifier-free guidance scale (0 means disabled)
 lcm_origin_steps: 50  # Original diffusion steps for LCM backends; ignored by other backends
-height: 512  # Generated image height (pixels)
-width: 512  # Generated image width (pixels)
+height: 1024  # Generated image height (pixels)
+width: 1024  # Generated image width (pixels)
 aesthetic_score_weight: 0.0  # Weight for aesthetic score in combined fitness
-clip_score_weight: 1.0  # Weight for CLIP score in combined fitness
-image_reward_score_weight: 0.0  # Weight for ImageReward score in combined fitness
+clip_score_weight: 0.0  # Weight for CLIP score in combined fitness
+image_reward_score_weight: 1.0  # Weight for ImageReward score in combined fitness
 hpsv2_score_weight: 0.0  # Weight for HPSv2 score in combined fitness
 pickscore_score_weight: 0.0  # Weight for PickScore score in combined fitness
 jpeg_size_weight: 0.0  # Weight for JPEG size penalty in combined fitness (smaller is better)
-max_aesthetic_score: 10  # Maximum aesthetic score (normalization)
-max_clip_score: 0.5  # Maximum CLIP score (normalization)
+max_aesthetic_score: 1.0  # Maximum aesthetic score (normalization)
+max_clip_score: 1.0  # Maximum CLIP score (normalization)
 max_image_reward_score: 1.0  # Approximate ImageReward normalization constant
 max_hpsv2_score: 1.0  # Approximate HPSv2 normalization constant
 max_pickscore_score: 1.0  # Approximate PickScore normalization constant
@@ -45,15 +49,15 @@ pickscore_model: "yuvalkirstain/PickScore_v1"  # PickScore checkpoint name; set 
 pickscore_processor: "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"  # Processor backbone for PickScore; set to null to disable PickScore calculation
 evaluate_zero_weight_metrics: false  # Keep zero-weight scorer models/graphs out of Adam VRAM
 optimization_target: "prompt_embeddings"  # "prompt_embeddings" or "latent_noise" for all optimization methods
-results_folder: "results_ga_sd15_clip"  # Output directory for runs and artifacts
+results_folder: "results_snes_sanasprint_imagereward"  # Output directory for runs and artifacts
 
 # Diffusion model parameters
-model_id: "stable-diffusion-v1-5/stable-diffusion-v1-5" # Model ID (e.g., "mhdang/dpo-sd1.5-text2image-v1", "black-forest-labs/FLUX.1-schnell", "PixArt-alpha/PixArt-XL-2-1024-MS", "Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers", "Efficient-Large-Model/Sana_1600M_1024px_diffusers", "stabilityai/sdxl-turbo", "SimianLuo/LCM_Dreamshaper_v7")
+model_id: "Efficient-Large-Model/Sana_Sprint_0.6B_1024px_diffusers" # Model ID (e.g., "stable-diffusion-v1-5/stable-diffusion-v1-5", "mhdang/dpo-sd1.5-text2image-v1", "black-forest-labs/FLUX.1-schnell", "PixArt-alpha/PixArt-XL-2-1024-MS", "Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers", "Efficient-Large-Model/Sana_1600M_1024px_diffusers", "stabilityai/sdxl-turbo", "SimianLuo/LCM_Dreamshaper_v7")
 model_backend: "auto"  # "auto", "sd", "sdxl", "flux", "pixart", "lcm", "sana", or "sana_sprint"
 base_model_id: null  # Optional SD base pipeline when model_id is a component repo; DPO SD1.5 defaults to runwayml/stable-diffusion-v1-5
 unet_model_id: null  # Optional SD UNet replacement repo; DPO SD1.5 uses model_id automatically
 unet_subfolder: "unet"  # Subfolder for replacement UNet weights
-torch_dtype: "float16"  # "auto", "float32", "float16", or "bfloat16"
+torch_dtype: "bfloat16"  # "auto", "float32", "float16", or "bfloat16"
 max_sequence_length: 256  # FLUX/Sana text encoder token limit (ignored for SDXL)
 use_safetensors: true  # Prefer safetensors weights when available
 
@@ -96,11 +100,11 @@ zero_order_sigma: 0.1  # Standard deviation of candidate perturbations
 
 # AdamW specific parameters (if selected)
 "num_iterations": 240  # Number of iterations for the Adam optimization process
-"adam_lr": 0.004556900480549182  # Learning rate for the Adam optimizer
+"adam_lr": 0.004125573641519009  # Learning rate for the Adam optimizer
 "adam_weight_decay": 1.0e-06  # Weight decay for the Adam optimizer
-"adam_eps": 1.2617787291102598e-08  # Epsilon value for numerical stability in the Adam
-"adam_beta1": 0.7505613998533813  # Beta1 parameter for the Adam optimizer
-"adam_beta2": 0.9477992866572069  # Beta2 parameter for the Adam optimizer
+"adam_eps": 1.0498339024053381e-08  # Epsilon value for numerical stability in the Adam
+"adam_beta1": 0.7528013517179806  # Beta1 parameter for the Adam optimizer
+"adam_beta2": 0.9449726316622913  # Beta2 parameter for the Adam optimizer
 "adam_max_grad_norm": null  # Gradient norm clipping threshold for Adam; set to null or <=0 to disable
 
 # GA specific parameters

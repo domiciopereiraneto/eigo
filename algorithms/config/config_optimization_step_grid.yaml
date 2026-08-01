@@ -1,21 +1,23 @@
-# Optimization-step image grid config.
+# Optimization-step image grid config for algorithms/create_optimization_step_grid.py.
 #
 # Run:
 #   python algorithms/create_optimization_step_grid.py --config algorithms/config/config_optimization_step_grid.yaml
+#
+# Output grids show selected prompt rows against selected optimization steps or
+# generations. This is useful for qualitative progression figures.
 
 # Each item can be an experiment folder containing results_* prompt folders, or a
 # parent folder containing one or more such experiment folders.
 experiment_folders:
-  - results_v3/results_sepcmaes_sd15_clip
-  - results_v3/results_sepcmaes_sd15_hpsv2
+  - results_sd15_v3/results_snes_sd15_imagereward
+  - results_sd15_v3/results_sepcmaes_sd15_imagereward
 
 # Prompt folder suffixes to include, e.g. results_LAIONV2_42_2 uses prompt index 2.
 prompt_indices:
-  - 1
-  - 117
-  - 175
-  - 98
-  - 72
+  - 145
+  - 55
+  - 6
+  - 58
 
 # Adam uses it_N.jpg for these values. Population methods use gen_N/id_M.jpg,
 # or best_N.jpg when use_best is true.

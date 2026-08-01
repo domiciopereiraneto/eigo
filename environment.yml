@@ -1,3 +1,4 @@
+# Recommended Conda environment for running EIGO experiments and processing.
 name: eigo
 channels:
   - conda-forge

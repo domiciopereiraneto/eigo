@@ -1,11 +1,14 @@
-# Primary configuration parameters
+# Single-prompt config for algorithms/eigo_single_prompt.py.
+#
+# Use this for quick method checks. Batch experiments use
+# config_run_experiments.yaml plus experiments_schedule.yaml.
 "selected_prompt": "an astrounat riding a horse in mars" # Text prompt to guide image generation
 "optimization_method": "cmaes" # "snes", "cosyne", "zero_order", "cmaes", "ga", "adam", or "random_sampler"
 
 # General parameters
 "seed": 42  # Default seed value for reproducibility
 "cuda": 0  # GPU device ID to use (e.g. 0 for the first GPU). If no GPU is available falls back to CPU.
-"predictor": 2  # Predictor type= 0 for SAM 1 for LAION V1 2 for LAION V2
+"aesthetic_predictor": 2  # 0: Simulacra, 1: LAION V1, 2: LAION V2
 "num_inference_steps": 50  # Number of inference steps for the diffusion model during image generation; LCM usually works well with 1-8
 "batch_size": 8  # Number of candidates/images to generate and score at once for CMA-ES/GA/zero_order/random_sampler
 "guidance_scale": 7.5  # Guidance scale for classifier-free guidance (set to 0 for no guidance)
