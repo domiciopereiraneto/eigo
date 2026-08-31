@@ -20,6 +20,7 @@ open-clip-torch==2.26.1
 python-pptx==1.0.2
 accelerate==1.10.0
 cma==4.0.0
+gomea==1.1.0
 opencv-python==4.*
 torch==2.8.0
 transformers==4.55.2

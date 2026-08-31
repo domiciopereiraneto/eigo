@@ -212,11 +212,16 @@ def algorithm_key(experiment_dir: Path) -> str:
     name = experiment_dir.name.lower()
     for key in (
         "adam",
+        "ccsepcmaes",
+        "ccvdcmaes",
+        "cccmaes",
+        "ccsnes",
         "sepcmaes",
         "vdcmae",
         "cmaes",
         "cosyne",
         "snes",
+        "gomea",
         "zeroorder",
         "zero_order",
         "ga",

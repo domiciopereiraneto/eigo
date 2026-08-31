@@ -53,7 +53,7 @@ def _coerce_scalar(value):
 
 def extract_final_results(produced_folder, method):
     produced_path = Path(produced_folder)
-    if method in {"cmaes", "snes", "cosyne", "ga", "zero_order", "random_sampler"}:
+    if method in {"cmaes", "snes", "cosyne", "gomea", "ga", "zero_order", "random_sampler"}:
         csv_path = produced_path / "fitness_results.csv"
         metric_keys = [
             "generation",
@@ -180,19 +180,20 @@ def build_run_queue(config):
     test_cmaes = bool(config.get("test_cmaes", True))
     test_snes = bool(config.get("test_snes", False))
     test_cosyne = bool(config.get("test_cosyne", False))
+    test_gomea = bool(config.get("test_gomea", False))
     test_random_sampler = bool(config.get("test_random_sampler", False))
 
-    if not test_adam and not test_ga and not test_cmaes and not test_snes and not test_cosyne and not test_random_sampler:
+    if not test_adam and not test_ga and not test_cmaes and not test_snes and not test_cosyne and not test_gomea and not test_random_sampler:
         raise ValueError(
             "At least one of 'test_adam', 'test_ga', 'test_cmaes', 'test_snes', 'test_cosyne', "
-            "or 'test_random_sampler' must be true."
+            "'test_gomea', or 'test_random_sampler' must be true."
         )
 
     grid_config = config.get("grid", {})
     if grid_config is None:
         grid_config = {}
     if not isinstance(grid_config, dict):
-        raise ValueError("'grid' must be a dictionary with optional 'adam', 'ga', 'cmaes', 'snes', 'cosyne', and 'random_sampler' sections.")
+        raise ValueError("'grid' must be a dictionary with optional 'adam', 'ga', 'cmaes', 'snes', 'cosyne', 'gomea', and 'random_sampler' sections.")
 
     run_queue = []
 
@@ -223,6 +224,11 @@ def build_run_queue(config):
         cosyne_grid = normalize_grid(grid_config.get("cosyne", {}))
         for combo in expand_grid(cosyne_grid):
             run_queue.append(("cosyne", combo))
+
+    if test_gomea:
+        gomea_grid = normalize_grid(grid_config.get("gomea", {}))
+        for combo in expand_grid(gomea_grid):
+            run_queue.append(("gomea", combo))
 
     if test_random_sampler:
         random_sampler_grid = normalize_grid(grid_config.get("random_sampler", {}))
@@ -334,6 +340,8 @@ def run_grid_search(config, dry_run=False):
                     produced_folder = eigo_engine.run_snes_optimization()
                 elif method == "cosyne":
                     produced_folder = eigo_engine.run_cosyne_optimization()
+                elif method == "gomea":
+                    produced_folder = eigo_engine.run_gomea_optimization()
                 elif method == "random_sampler":
                     produced_folder = eigo_engine.run_random_sampler_optimization()
                 elif method == "zero_order":
@@ -375,6 +383,7 @@ def save_summary(config, summary_rows):
         "test_cmaes": bool(config.get("test_cmaes", True)),
         "test_snes": bool(config.get("test_snes", False)),
         "test_cosyne": bool(config.get("test_cosyne", False)),
+        "test_gomea": bool(config.get("test_gomea", False)),
         "test_random_sampler": bool(config.get("test_random_sampler", False)),
         "total_runs": len(summary_rows),
         "runs": summary_rows,

@@ -12,10 +12,10 @@ runs:
     hpsv2_score_weight: 0.0
     pickscore_score_weight: 0.0
     jpeg_size_weight: 0.0
-    results_folder: "results_optuna_sdxlturbo_sepcmaes_imagereward"
+    results_folder: "results_optuna_sd15_sepcmaes_image_reward"
     optuna:
-      study_name: "eigo_optuna_search_sdxlturbo_sepcmaes_imagereward"
-      storage: "sqlite:///results_optuna_sdxlturbo_sepcmaes_imagereward/optuna.db"
+      study_name: "eigo_optuna_search_sd15_sepcmaes_image_reward"
+      storage: "sqlite:///results_optuna_sd15_sepcmaes_image_reward/optuna.db"
 
   - test_cmaes: true
     aesthetic_score_weight: 0.0
@@ -24,10 +24,10 @@ runs:
     hpsv2_score_weight: 0.0
     pickscore_score_weight: 0.0
     jpeg_size_weight: 0.0
-    results_folder: "results_optuna_sdxlturbo_sepcmaes_clip"
+    results_folder: "results_optuna_sd15_sepcmaes_clip"
     optuna:
-      study_name: "eigo_optuna_search_sdxlturbo_sepcmaes_clip"
-      storage: "sqlite:///results_optuna_sdxlturbo_sepcmaes_clip/optuna.db"
+      study_name: "eigo_optuna_search_sd15_sepcmaes_clip"
+      storage: "sqlite:///results_optuna_sd15_sepcmaes_clip/optuna.db"
 
   - test_cmaes: true
     aesthetic_score_weight: 0.0
@@ -36,43 +36,7 @@ runs:
     hpsv2_score_weight: 1.0
     pickscore_score_weight: 0.0
     jpeg_size_weight: 0.0
-    results_folder: "results_optuna_sdxlturbo_sepcmaes_hpsv2"
+    results_folder: "results_optuna_sd15_sepcmaes_hpsv2"
     optuna:
-      study_name: "eigo_optuna_search_sdxlturbo_sepcmaes_hpsv2"
-      storage: "sqlite:///results_optuna_sdxlturbo_sepcmaes_hpsv2/optuna.db"
-
-  - test_ga: true
-    aesthetic_score_weight: 0.0
-    clip_score_weight: 0.0
-    image_reward_score_weight: 1.0
-    hpsv2_score_weight: 0.0
-    pickscore_score_weight: 0.0
-    jpeg_size_weight: 0.0
-    results_folder: "results_optuna_sdxlturbo_ga_imagereward"
-    optuna:
-      study_name: "eigo_optuna_search_sdxlturbo_ga_imagereward"
-      storage: "sqlite:///results_optuna_sdxlturbo_ga_imagereward/optuna.db"
-
-  - test_ga: true
-    aesthetic_score_weight: 0.0
-    clip_score_weight: 1.0
-    image_reward_score_weight: 0.0
-    hpsv2_score_weight: 0.0
-    pickscore_score_weight: 0.0
-    jpeg_size_weight: 0.0
-    results_folder: "results_optuna_sdxlturbo_ga_clip"
-    optuna:
-      study_name: "eigo_optuna_search_sdxlturbo_ga_clip"
-      storage: "sqlite:///results_optuna_sdxlturbo_ga_clip/optuna.db"
-
-  - test_ga: true
-    aesthetic_score_weight: 0.0
-    clip_score_weight: 0.0
-    image_reward_score_weight: 0.0
-    hpsv2_score_weight: 1.0
-    pickscore_score_weight: 0.0
-    jpeg_size_weight: 0.0
-    results_folder: "results_optuna_sdxlturbo_ga_hpsv2"
-    optuna:
-      study_name: "eigo_optuna_search_sdxlturbo_ga_hpsv2"
-      storage: "sqlite:///results_optuna_sdxlturbo_ga_hpsv2/optuna.db"
+      study_name: "eigo_optuna_search_sd15_sepcmaes_hpsv2"
+      storage: "sqlite:///results_optuna_sd15_sepcmaes_hpsv2/optuna.db"

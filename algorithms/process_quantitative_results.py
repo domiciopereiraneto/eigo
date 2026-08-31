@@ -34,8 +34,13 @@ DEFAULT_METHOD_LABELS = {
     "cmaes": "CMA-ES",
     "sepcmaes": "sep-CMA-ES",
     "vdcmae": "VD-CMA",
+    "cccmaes": "CC-CMA-ES",
+    "ccsepcmaes": "CC-sep-CMA-ES",
+    "ccvdcmaes": "CC-VD-CMA-ES",
     "snes": "SNES",
+    "ccsnes": "CC-SNES",
     "cosyne": "CoSyNE",
+    "gomea": "GOMEA",
     "ga": "GA",
     "zero_order": "Zero order",
     "zeroorder": "Zero order",
@@ -156,6 +161,10 @@ def parse_method(name: str, run_config: dict) -> str:
     for key in (
         "randomsampler",
         "random_sampler",
+        "ccsepcmaes",
+        "ccvdcmaes",
+        "cccmaes",
+        "ccsnes",
         "sepcmaes",
         "vdcmae",
         "zeroorder",
@@ -163,6 +172,7 @@ def parse_method(name: str, run_config: dict) -> str:
         "cmaes",
         "cosyne",
         "snes",
+        "gomea",
         "adam",
         "ga",
     ):
@@ -173,11 +183,24 @@ def parse_method(name: str, run_config: dict) -> str:
     if configured:
         configured_key = str(configured).lower().replace("-", "_")
         if configured_key == "cmaes":
-            variant = str(run_config.get("cmaes_variant", "")).lower()
-            if variant == "sep":
+            variant = str(run_config.get("cmaes_variant", "")).lower().replace("-", "_")
+            if variant in {"sep", "sep_cmaes", "sep_cma_es"}:
                 return "sepcmaes"
-            if variant == "vd":
+            if variant in {"vd", "vd_cmaes", "vd_cma_es"}:
                 return "vdcmae"
+            if variant in {"cc", "cc_cmaes", "cc_cma_es"}:
+                return "cccmaes"
+            if variant in {"cc_sep", "cc_sepcmaes", "cc_sep_cmaes", "cc_sep_cma_es"}:
+                return "ccsepcmaes"
+            if variant in {"cc_vd", "cc_vdcmaes", "cc_vd_cmaes", "cc_vd_cma_es"}:
+                return "ccvdcmaes"
+        configured_target = str(
+            run_config.get("resolved_optimization_target")
+            or run_config.get("optimization_target")
+            or ""
+        ).lower().replace("-", "_")
+        if configured_key == "snes" and configured_target == "noise_embeddings_cc":
+            return "ccsnes"
         return configured_key
     return lowered.split("_", 1)[0] if lowered else "unknown"
 

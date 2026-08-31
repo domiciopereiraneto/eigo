@@ -2,7 +2,7 @@
 This script contains the Eigo class, an optimization engine for diffusion-based image
 generation guided by aesthetic, prompt-alignment, and ImageReward scores. The engine
 supports CMA-ES (standard, sep-CMA-ES and VD-CMA), SNES, CoSyNE, GA, Adam, zero-order
-search, and random sampling.
+search, GOMEA, and random sampling.
 """
 
 import sys
@@ -50,10 +50,13 @@ from pathlib import Path
 from transformers import AutoModel, AutoProcessor
 from src.optimization_targets import (
     LATENT_NOISE,
+    NOISE_EMBEDDINGS_CC,
+    NOISE_EMBEDDINGS_FLAT,
     PROMPT_EMBEDDINGS,
     adam_parameters_from_state,
     adam_tensors,
     build_target_state,
+    cc_components_to_vector,
     clone_best_adam_tensors,
     resolve_optimization_target,
     tensors_from_vector,
@@ -269,6 +272,26 @@ class Eigo:
             config_parameters["aesthetic_predictor"] = 2
         self.model_backend = self._resolve_model_backend(config_parameters)
         self.optimization_target = resolve_optimization_target(config_parameters)
+        cmaes_variant_for_validation = self._normalize_cmaes_variant(
+            config_parameters.get("cmaes_variant", "cmaes")
+        )
+        is_cc_cmaes = (
+            config_parameters.get("optimization_method") == "cmaes"
+            and cmaes_variant_for_validation in {"cc", "cc_sep", "cc_vd"}
+        )
+        is_cc_snes = (
+            config_parameters.get("optimization_method") == "snes"
+            and self.optimization_target == NOISE_EMBEDDINGS_CC
+        )
+        if is_cc_cmaes and self.optimization_target != NOISE_EMBEDDINGS_CC:
+            raise ValueError(
+                "CC-CMA-ES variants require optimization_target: noise_embeddings_cc."
+            )
+        if self.optimization_target == NOISE_EMBEDDINGS_CC and not (is_cc_cmaes or is_cc_snes):
+            raise ValueError(
+                "optimization_target noise_embeddings_cc is currently only supported with "
+                "CC-CMA-ES variants or optimization_method: snes."
+            )
         self.guidance_scale = float(config_parameters.get("guidance_scale", 0.0))
         self.lcm_origin_steps = int(config_parameters.get("lcm_origin_steps", 50))
         if self.lcm_origin_steps <= 0:
@@ -380,12 +403,19 @@ class Eigo:
         if config_parameters["optimization_method"] == "adam":
             method_save_name = "adam"
         elif config_parameters["optimization_method"] == "cmaes":
-            if config_parameters["cmaes_variant"] == "cmaes":
+            cmaes_variant = self._normalize_cmaes_variant(config_parameters["cmaes_variant"])
+            if cmaes_variant == "cmaes":
                 method_save_name = "cmaes"
-            elif config_parameters["cmaes_variant"] == "sep":
+            elif cmaes_variant == "sep":
                 method_save_name = "sepcmaes"
-            elif config_parameters["cmaes_variant"] == "vd":
+            elif cmaes_variant == "vd":
                 method_save_name = "vdcmae"
+            elif cmaes_variant == "cc":
+                method_save_name = "cccmaes"
+            elif cmaes_variant == "cc_sep":
+                method_save_name = "ccsepcmaes"
+            elif cmaes_variant == "cc_vd":
+                method_save_name = "ccvdcmaes"
             else:
                 raise ValueError(f"Unknown CMA-ES variant: {config_parameters['cmaes_variant']}")
         elif config_parameters["optimization_method"] == "ga":
@@ -395,9 +425,11 @@ class Eigo:
         elif config_parameters["optimization_method"] == "zero_order":
             method_save_name = "zeroorder"
         elif config_parameters["optimization_method"] == "snes":
-            method_save_name = "snes"
+            method_save_name = "ccsnes" if self.optimization_target == NOISE_EMBEDDINGS_CC else "snes"
         elif config_parameters["optimization_method"] == "cosyne":
             method_save_name = "cosyne"
+        elif config_parameters["optimization_method"] == "gomea":
+            method_save_name = "gomea"
         else:
             raise ValueError(f"Unknown optimization method: {config_parameters['optimization_method']}")
 
@@ -584,6 +616,57 @@ class Eigo:
     @staticmethod
     def _model_id_tag(model_id):
         return re.sub(r"[^a-z0-9]+", "", model_id.lower().split("/")[-1])
+
+    @staticmethod
+    def _normalize_cmaes_variant(variant):
+        normalized = str(variant).lower().replace("-", "_").replace(" ", "_")
+        aliases = {
+            "standard": "cmaes",
+            "full": "cmaes",
+            "cma": "cmaes",
+            "sepcmaes": "sep",
+            "sep_cmaes": "sep",
+            "sep_cma_es": "sep",
+            "diagonal": "sep",
+            "vd_cma": "vd",
+            "vd_cmaes": "vd",
+            "vd_cma_es": "vd",
+            "cc_cmaes": "cc",
+            "cc_cma_es": "cc",
+            "cccmaes": "cc",
+            "cc_sepcmaes": "cc_sep",
+            "cc_sep_cmaes": "cc_sep",
+            "cc_sep_cma_es": "cc_sep",
+            "ccsep": "cc_sep",
+            "ccsepcmaes": "cc_sep",
+            "cc_vdcmaes": "cc_vd",
+            "cc_vd_cmaes": "cc_vd",
+            "cc_vd_cma_es": "cc_vd",
+            "ccvdcmaes": "cc_vd",
+        }
+        return aliases.get(normalized, normalized)
+
+    @staticmethod
+    def _cmaes_options_for_variant(variant, seed, pop_size, num_generations, results_folder, prefix):
+        es_options = {
+            'seed': seed,
+            'popsize': pop_size,
+            'maxiter': num_generations,
+            'verb_filenameprefix': os.path.join(results_folder, prefix),
+            'verb_log': 0,
+            'verbose': -9,
+        }
+        if variant in {"sep", "cc_sep"}:
+            es_options['CMA_diagonal'] = True
+        elif variant in {"vd", "cc_vd"}:
+            es_options = GaussVDSampler.extend_cma_options(es_options)
+        return es_options
+
+    def _float_parameter(self, key, fallback_key):
+        value = self.parameters.get(key, None)
+        if value is None:
+            value = self.parameters[fallback_key]
+        return float(value)
 
     def _should_evaluate_metric(self, metric_name):
         if self.evaluate_zero_weight_metrics:
@@ -984,7 +1067,7 @@ class Eigo:
     def _build_optimization_target_state(self, selected_prompt, seed):
         prompt_embeds, pooled_prompt_embeds = self._encode_prompt_embeddings(selected_prompt)
         latents = None
-        if self.optimization_target == LATENT_NOISE:
+        if self.optimization_target in {LATENT_NOISE, NOISE_EMBEDDINGS_FLAT, NOISE_EMBEDDINGS_CC}:
             latents = self._prepare_initial_latents(seed)
         return build_target_state(
             self.optimization_target,
@@ -1775,7 +1858,476 @@ class Eigo:
         plt.savefig(results_folder + "/jpeg_size_evolution.jpg")
         plt.close()
 
+    def _build_population_results_frame(
+        self,
+        selected_prompt,
+        generation,
+        avg_fit_list,
+        std_fit_list,
+        max_fit_list,
+        avg_aesthetic_score_list,
+        std_aesthetic_score_list,
+        max_aesthetic_score_list,
+        avg_clip_score_list,
+        std_clip_score_list,
+        max_clip_score_list,
+        avg_image_reward_score_list,
+        std_image_reward_score_list,
+        max_image_reward_score_list,
+        avg_hpsv2_score_list,
+        std_hpsv2_score_list,
+        max_hpsv2_score_list,
+        avg_pickscore_score_list,
+        std_pickscore_score_list,
+        max_pickscore_score_list,
+        avg_jpeg_size_kb_list,
+        std_jpeg_size_kb_list,
+        min_jpeg_size_kb_list,
+        time_list,
+        peak_vram_mb_list,
+        category=None,
+    ):
+        results = pd.DataFrame({
+            "generation": list(range(0, generation + 1)),
+            "prompt": [selected_prompt] + [''] * generation,
+            "avg_fitness": avg_fit_list,
+            "std_fitness": std_fit_list,
+            "max_fitness": max_fit_list,
+            "avg_aesthetic_score": avg_aesthetic_score_list,
+            "std_aesthetic_score": std_aesthetic_score_list,
+            "max_aesthetic_score": max_aesthetic_score_list,
+            "avg_clip_score": avg_clip_score_list,
+            "std_clip_score": std_clip_score_list,
+            "max_clip_score": max_clip_score_list,
+            "avg_image_reward_score": avg_image_reward_score_list,
+            "std_image_reward_score": std_image_reward_score_list,
+            "max_image_reward_score": max_image_reward_score_list,
+            "avg_hpsv2_score": avg_hpsv2_score_list,
+            "std_hpsv2_score": std_hpsv2_score_list,
+            "max_hpsv2_score": max_hpsv2_score_list,
+            "avg_pickscore_score": avg_pickscore_score_list,
+            "std_pickscore_score": std_pickscore_score_list,
+            "max_pickscore_score": max_pickscore_score_list,
+            "avg_jpeg_size_kb": avg_jpeg_size_kb_list,
+            "std_jpeg_size_kb": std_jpeg_size_kb_list,
+            "min_jpeg_size_kb": min_jpeg_size_kb_list,
+            "elapsed_time": time_list,
+            "peak_vram_mb": peak_vram_mb_list,
+        })
+        if category is not None:
+            results["category"] = [category] + [''] * generation
+        return results
+
+    def run_cc_cmaes_optimization(self, seed=None, seed_number=None, prompt=None, category=None, prompt_number=None, cc_method="cmaes"):
+        del seed_number
+        seed = int(self.parameters["seed"] if seed is None else seed)
+        selected_prompt = self.parameters["selected_prompt"] if prompt is None else prompt
+        cc_method = str(cc_method).lower()
+        if cc_method not in {"cmaes", "snes"}:
+            raise ValueError(f"Unknown CC optimizer method: {cc_method}.")
+        variant = self._normalize_cmaes_variant(self.parameters.get("cmaes_variant", "cc"))
+        if cc_method == "cmaes" and variant not in {"cc", "cc_sep", "cc_vd"}:
+            raise ValueError(f"run_cc_cmaes_optimization requires a CC CMA-ES variant, got {variant}.")
+        if self.optimization_target != NOISE_EMBEDDINGS_CC:
+            raise ValueError(
+                "CC coevolution is currently only compatible with optimization_target: noise_embeddings_cc."
+            )
+
+        if cc_method == "snes":
+            cc_pop_size = self.parameters.get("cc_snes_pop_size", None)
+            if cc_pop_size is None:
+                cc_pop_size = self.parameters.get("snes_pop_size", self.parameters["pop_size"])
+            cc_num_generations = self.parameters.get("cc_snes_num_generations", None)
+            if cc_num_generations is None:
+                cc_num_generations = self.parameters.get("snes_num_generations", self.parameters["num_generations"])
+            pop_size = int(cc_pop_size)
+            num_generations = int(cc_num_generations)
+            base_sigma_key = "snes_sigma" if self.parameters.get("snes_sigma", None) is not None else "sigma"
+            embedding_sigma = self._float_parameter("cc_embedding_sigma", base_sigma_key)
+            noise_sigma = self._float_parameter("cc_noise_sigma", base_sigma_key)
+            eta_mu = float(self.parameters.get("snes_eta_mu", 1.0))
+            eta_sigma = self.parameters.get("snes_eta_sigma")
+        else:
+            pop_size = int(self.parameters["pop_size"])
+            num_generations = int(self.parameters["num_generations"])
+            embedding_sigma = self._float_parameter("cc_embedding_sigma", "sigma")
+            noise_sigma = self._float_parameter("cc_noise_sigma", "sigma")
+            eta_mu = None
+            eta_sigma = None
+        if pop_size <= 0:
+            raise ValueError("CC coevolution requires pop_size > 0.")
+        if num_generations <= 0:
+            raise ValueError("CC coevolution requires num_generations > 0.")
+        if embedding_sigma <= 0:
+            raise ValueError("CC coevolution requires cc_embedding_sigma > 0.")
+        if noise_sigma <= 0:
+            raise ValueError("CC coevolution requires cc_noise_sigma > 0.")
+        self.parameters["pop_size"] = pop_size
+        self.parameters["num_generations"] = num_generations
+
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+        random.seed(seed)
+
+        if category is not None:
+            print(f"Selected prompt: {selected_prompt} (Category: {category})")
+        else:
+            print(f"Selected prompt: {selected_prompt}")
+
+        results_folder = f"{self.OUTPUT_FOLDER}/results_{self.model_name}_{seed}"
+        if prompt_number is not None:
+            results_folder += f"_{prompt_number}"
+        os.makedirs(results_folder, exist_ok=True)
+        self._save_run_config(results_folder, seed, selected_prompt, category=category, prompt_number=prompt_number)
+
+        variant_label = (
+            "CC-SNES"
+            if cc_method == "snes"
+            else {
+                "cc": "CC-CMA-ES",
+                "cc_sep": "CC-sep-CMA-ES",
+                "cc_vd": "CC-VD-CMA-ES",
+            }[variant]
+        )
+        print(f"Using {variant_label}")
+        print(
+            f"{variant_label} sigmas: "
+            f"embedding={embedding_sigma}, noise={noise_sigma}"
+        )
+
+        self._reset_peak_vram()
+        with torch.no_grad():
+            target_state = self._build_optimization_target_state(selected_prompt, seed)
+            initial_image = self.generate_image_from_tensors_cmaes(
+                target_state["prompt_embeds"].clone(),
+                target_state["pooled_prompt_embeds"].clone(),
+                seed,
+                latents=target_state["latents"].clone(),
+            )
+            self._save_jpeg(initial_image, f"{results_folder}/it_0.jpg")
+
+        embedding_vector = np.asarray(target_state["initial_embedding_vector"], dtype=np.float64).copy()
+        noise_vector = np.asarray(target_state["initial_noise_vector"], dtype=np.float64).copy()
+        initial_vector = cc_components_to_vector(embedding_vector, noise_vector)
+
+        initial_fitness, initial_aesthetic_score, initial_clip_score, initial_image_reward_score, initial_hpsv2_score, initial_pickscore_score, initial_jpeg_size_kb, _ = (
+            self.evaluate(initial_vector, seed, target_state, selected_prompt)
+        )
+
+        if cc_method == "snes":
+            embedding_es = SeparableNaturalEvolutionStrategy(
+                embedding_vector,
+                embedding_sigma,
+                pop_size,
+                num_generations,
+                seed=seed,
+                eta_mu=eta_mu,
+                eta_sigma=eta_sigma,
+            )
+            noise_es = SeparableNaturalEvolutionStrategy(
+                noise_vector,
+                noise_sigma,
+                pop_size,
+                num_generations,
+                seed=seed + 1,
+                eta_mu=eta_mu,
+                eta_sigma=eta_sigma,
+            )
+        else:
+            embedding_es = cma.CMAEvolutionStrategy(
+                embedding_vector,
+                embedding_sigma,
+                self._cmaes_options_for_variant(
+                    variant,
+                    seed,
+                    pop_size,
+                    num_generations,
+                    results_folder,
+                    "outcmaes_embeddings",
+                ),
+            )
+            noise_es = cma.CMAEvolutionStrategy(
+                noise_vector,
+                noise_sigma,
+                self._cmaes_options_for_variant(
+                    variant,
+                    seed + 1,
+                    pop_size,
+                    num_generations,
+                    results_folder,
+                    "outcmaes_noise",
+                ),
+            )
+
+        best_embedding_vector = embedding_vector.copy()
+        best_noise_vector = noise_vector.copy()
+        representative_fitness = -initial_fitness
+        best_fitness_overall = -initial_fitness
+        best_vector_overall = initial_vector.copy()
+
+        time_list = [0.0]
+        peak_vram_mb_list = [self._peak_vram_mb()]
+        max_fit_list = [-initial_fitness]
+        avg_fit_list = [-initial_fitness]
+        std_fit_list = [0.0]
+        max_aesthetic_score_list = [initial_aesthetic_score]
+        avg_aesthetic_score_list = [initial_aesthetic_score]
+        std_aesthetic_score_list = [0.0]
+        max_clip_score_list = [initial_clip_score]
+        avg_clip_score_list = [initial_clip_score]
+        std_clip_score_list = [0.0]
+        max_image_reward_score_list = [initial_image_reward_score]
+        avg_image_reward_score_list = [initial_image_reward_score]
+        std_image_reward_score_list = [0.0]
+        max_hpsv2_score_list = [initial_hpsv2_score]
+        avg_hpsv2_score_list = [initial_hpsv2_score]
+        std_hpsv2_score_list = [0.0]
+        max_pickscore_score_list = [initial_pickscore_score]
+        avg_pickscore_score_list = [initial_pickscore_score]
+        std_pickscore_score_list = [0.0]
+        min_jpeg_size_kb_list = [initial_jpeg_size_kb]
+        avg_jpeg_size_kb_list = [initial_jpeg_size_kb]
+        std_jpeg_size_kb_list = [0.0]
+
+        start_time = time.time()
+        generation = 0
+
+        while generation < num_generations and not (embedding_es.stop() or noise_es.stop()):
+            elapsed_time = time.time() - start_time
+            if self.parameters['time_limit_seconds'] is not None and elapsed_time >= self.parameters['time_limit_seconds']:
+                print(
+                    "Time limit reached before starting generation "
+                    f"{generation + 1}/{num_generations} (elapsed: {self.format_time(elapsed_time)})."
+                )
+                break
+
+            generation += 1
+            print(f"Generation {generation}/{num_generations}")
+            self._reset_peak_vram()
+            generation_folder = os.path.join(results_folder, f"gen_{generation}")
+            if self.parameters["save_gens"]:
+                os.makedirs(generation_folder, exist_ok=True)
+
+            generation_records = []
+
+            embedding_solutions = embedding_es.ask()
+            embedding_candidates = [
+                cc_components_to_vector(solution, best_noise_vector)
+                for solution in embedding_solutions
+            ]
+            embedding_save_paths = [
+                os.path.join(generation_folder, f"emb_id_{idx}.jpg")
+                if self.parameters["save_gens"] else None
+                for idx in range(1, len(embedding_candidates) + 1)
+            ]
+            embedding_evaluated = self.evaluate_batch(
+                embedding_candidates,
+                [seed] * len(embedding_candidates),
+                target_state,
+                selected_prompt,
+                embedding_save_paths,
+            )
+            embedding_fitnesses = [row[0] for row in embedding_evaluated]
+            embedding_es.tell(embedding_solutions, embedding_fitnesses)
+            emb_best_idx = int(np.argmin(embedding_fitnesses))
+            emb_best_score = -float(embedding_fitnesses[emb_best_idx])
+            if emb_best_score > representative_fitness:
+                best_embedding_vector = np.asarray(embedding_solutions[emb_best_idx], dtype=np.float64).copy()
+                representative_fitness = emb_best_score
+            for solution, evaluated in zip(embedding_solutions, embedding_evaluated):
+                generation_records.append((cc_components_to_vector(solution, best_noise_vector), evaluated))
+
+            noise_solutions = noise_es.ask()
+            noise_candidates = [
+                cc_components_to_vector(best_embedding_vector, solution)
+                for solution in noise_solutions
+            ]
+            noise_save_paths = [
+                os.path.join(generation_folder, f"noise_id_{idx}.jpg")
+                if self.parameters["save_gens"] else None
+                for idx in range(1, len(noise_candidates) + 1)
+            ]
+            noise_evaluated = self.evaluate_batch(
+                noise_candidates,
+                [seed] * len(noise_candidates),
+                target_state,
+                selected_prompt,
+                noise_save_paths,
+            )
+            noise_fitnesses = [row[0] for row in noise_evaluated]
+            noise_es.tell(noise_solutions, noise_fitnesses)
+            noise_best_idx = int(np.argmin(noise_fitnesses))
+            noise_best_score = -float(noise_fitnesses[noise_best_idx])
+            if noise_best_score > representative_fitness:
+                best_noise_vector = np.asarray(noise_solutions[noise_best_idx], dtype=np.float64).copy()
+                representative_fitness = noise_best_score
+            for solution, evaluated in zip(noise_solutions, noise_evaluated):
+                generation_records.append((cc_components_to_vector(best_embedding_vector, solution), evaluated))
+
+            evaluated_values = [record[1] for record in generation_records]
+            tmp_fitnesses = [row[0] for row in evaluated_values]
+            aesthetic_scores = [row[1] for row in evaluated_values]
+            clip_scores = [row[2] for row in evaluated_values]
+            image_reward_scores = [row[3] for row in evaluated_values]
+            hpsv2_scores = [row[4] for row in evaluated_values]
+            pickscore_scores = [row[5] for row in evaluated_values]
+            jpeg_sizes_kb = [row[6] for row in evaluated_values]
+            fitnesses = [-f for f in tmp_fitnesses]
+
+            max_fit = float(np.max(fitnesses))
+            avg_fit = float(np.mean(fitnesses))
+            std_fit = float(np.std(fitnesses))
+            max_aesthetic_score = float(np.max(aesthetic_scores))
+            avg_aesthetic_score = float(np.mean(aesthetic_scores))
+            std_aesthetic_score = float(np.std(aesthetic_scores))
+            max_clip_score = float(np.max(clip_scores))
+            avg_clip_score = float(np.mean(clip_scores))
+            std_clip_score = float(np.std(clip_scores))
+            max_image_reward_score = float(np.max(image_reward_scores))
+            avg_image_reward_score = float(np.mean(image_reward_scores))
+            std_image_reward_score = float(np.std(image_reward_scores))
+            max_hpsv2_score = float(np.max(hpsv2_scores))
+            avg_hpsv2_score = float(np.mean(hpsv2_scores))
+            std_hpsv2_score = float(np.std(hpsv2_scores))
+            max_pickscore_score = float(np.max(pickscore_scores))
+            avg_pickscore_score = float(np.mean(pickscore_scores))
+            std_pickscore_score = float(np.std(pickscore_scores))
+            min_jpeg_size_kb = float(np.min(jpeg_sizes_kb))
+            avg_jpeg_size_kb = float(np.mean(jpeg_sizes_kb))
+            std_jpeg_size_kb = float(np.std(jpeg_sizes_kb))
+
+            generation_best_idx = int(np.argmax(fitnesses))
+            generation_best_vector = generation_records[generation_best_idx][0]
+            if max_fit > best_fitness_overall:
+                best_fitness_overall = max_fit
+                best_vector_overall = np.asarray(generation_best_vector, dtype=np.float64).copy()
+
+            with torch.no_grad():
+                best_pe, best_ppe, best_latents = tensors_from_vector(generation_best_vector, target_state, self.device)
+                best_image = self.generate_image_from_tensors_cmaes(best_pe, best_ppe, seed, latents=best_latents)
+                self._save_jpeg(best_image, os.path.join(results_folder, f"best_{generation}.jpg"))
+
+            elapsed_time = time.time() - start_time
+            average_time_per_generation = elapsed_time / generation
+            estimated_time_remaining = average_time_per_generation * (num_generations - generation)
+            formatted_time_remaining = self.format_time(estimated_time_remaining)
+
+            max_fit_list.append(max_fit)
+            avg_fit_list.append(avg_fit)
+            std_fit_list.append(std_fit)
+            max_aesthetic_score_list.append(max_aesthetic_score)
+            avg_aesthetic_score_list.append(avg_aesthetic_score)
+            std_aesthetic_score_list.append(std_aesthetic_score)
+            max_clip_score_list.append(max_clip_score)
+            avg_clip_score_list.append(avg_clip_score)
+            std_clip_score_list.append(std_clip_score)
+            max_image_reward_score_list.append(max_image_reward_score)
+            avg_image_reward_score_list.append(avg_image_reward_score)
+            std_image_reward_score_list.append(std_image_reward_score)
+            max_hpsv2_score_list.append(max_hpsv2_score)
+            avg_hpsv2_score_list.append(avg_hpsv2_score)
+            std_hpsv2_score_list.append(std_hpsv2_score)
+            max_pickscore_score_list.append(max_pickscore_score)
+            avg_pickscore_score_list.append(avg_pickscore_score)
+            std_pickscore_score_list.append(std_pickscore_score)
+            min_jpeg_size_kb_list.append(min_jpeg_size_kb)
+            avg_jpeg_size_kb_list.append(avg_jpeg_size_kb)
+            std_jpeg_size_kb_list.append(std_jpeg_size_kb)
+            time_list.append(elapsed_time)
+            peak_vram_mb_list.append(self._peak_vram_mb())
+
+            results = self._build_population_results_frame(
+                selected_prompt,
+                generation,
+                avg_fit_list,
+                std_fit_list,
+                max_fit_list,
+                avg_aesthetic_score_list,
+                std_aesthetic_score_list,
+                max_aesthetic_score_list,
+                avg_clip_score_list,
+                std_clip_score_list,
+                max_clip_score_list,
+                avg_image_reward_score_list,
+                std_image_reward_score_list,
+                max_image_reward_score_list,
+                avg_hpsv2_score_list,
+                std_hpsv2_score_list,
+                max_hpsv2_score_list,
+                avg_pickscore_score_list,
+                std_pickscore_score_list,
+                max_pickscore_score_list,
+                avg_jpeg_size_kb_list,
+                std_jpeg_size_kb_list,
+                min_jpeg_size_kb_list,
+                time_list,
+                peak_vram_mb_list,
+                category=category,
+            )
+            results.to_csv(f"{results_folder}/fitness_results.csv", index=False, na_rep='nan')
+            self._save_population_plot_results(results, results_folder)
+
+            print(
+                f"Generation {generation}/{num_generations}: Max fitness: {max_fit}, Avg fitness: {avg_fit}, "
+                f"Max aesthetic score: {max_aesthetic_score}, Avg aesthetic score: {avg_aesthetic_score}, "
+                f"Max clip score: {max_clip_score}, Avg clip score: {avg_clip_score}, "
+                f"Max ImageReward score: {max_image_reward_score}, Avg ImageReward score: {avg_image_reward_score}, "
+                f"Max HPSv2 score: {max_hpsv2_score}, Avg HPSv2 score: {avg_hpsv2_score}, "
+                f"Max PickScore: {max_pickscore_score}, Avg PickScore: {avg_pickscore_score}, "
+                f"Estimated time remaining: {formatted_time_remaining}"
+            )
+
+        with torch.no_grad():
+            best_overall_pe, best_overall_ppe, best_overall_latents = tensors_from_vector(
+                best_vector_overall,
+                target_state,
+                self.device,
+            )
+            best_image = self.generate_image_from_tensors_cmaes(
+                best_overall_pe,
+                best_overall_ppe,
+                seed,
+                latents=best_overall_latents,
+            )
+        self._save_jpeg(best_image, f"{results_folder}/best_all.jpg")
+
+        results = self._build_population_results_frame(
+            selected_prompt,
+            generation,
+            avg_fit_list,
+            std_fit_list,
+            max_fit_list,
+            avg_aesthetic_score_list,
+            std_aesthetic_score_list,
+            max_aesthetic_score_list,
+            avg_clip_score_list,
+            std_clip_score_list,
+            max_clip_score_list,
+            avg_image_reward_score_list,
+            std_image_reward_score_list,
+            max_image_reward_score_list,
+            avg_hpsv2_score_list,
+            std_hpsv2_score_list,
+            max_hpsv2_score_list,
+            avg_pickscore_score_list,
+            std_pickscore_score_list,
+            max_pickscore_score_list,
+            avg_jpeg_size_kb_list,
+            std_jpeg_size_kb_list,
+            min_jpeg_size_kb_list,
+            time_list,
+            peak_vram_mb_list,
+            category=category,
+        )
+        results = self._postprocess_population_results_from_saved_images(results, results_folder, selected_prompt)
+        results.to_csv(f"{results_folder}/fitness_results.csv", index=False, na_rep='nan')
+        self._save_population_plot_results(results, results_folder)
+        return results_folder
+
     def run_cmaes_optimization(self, seed = None, seed_number = None, prompt = None, category = None, prompt_number = None):
+        variant = self._normalize_cmaes_variant(self.parameters.get("cmaes_variant", "cmaes"))
+        if variant in {"cc", "cc_sep", "cc_vd"}:
+            return self.run_cc_cmaes_optimization(seed, seed_number, prompt, category, prompt_number)
 
         if seed is None:
             seed = self.parameters["seed"]
@@ -1808,27 +2360,25 @@ class Eigo:
             target_state = self._build_optimization_target_state(selected_prompt, seed)
 
         # Set population optimizer options
-        es_options = {
-            'seed': seed,
-            'popsize': self.parameters["pop_size"],
-            'maxiter': self.parameters["num_generations"],
-            'verb_filenameprefix': results_folder + '/outcmaes',  # Save logs
-            'verb_log': 0,  # Disable log output
-            'verbose': -9,  # Suppress console output
-        }
+        es_options = self._cmaes_options_for_variant(
+            variant,
+            seed,
+            self.parameters["pop_size"],
+            self.parameters["num_generations"],
+            results_folder,
+            "outcmaes",
+        )
 
         if self.parameters["optimization_method"] == "snes":
             print("Using Separable Natural Evolution Strategy (SNES)")
         elif self.parameters["optimization_method"] == "cosyne":
             print("Using Cooperative Synapse Neuroevolution (CoSyNE)")
-        elif self.parameters["cmaes_variant"] == "cmaes":
+        elif variant == "cmaes":
             print("Using standard CMA-ES")
-        elif self.parameters["cmaes_variant"] == "sep":
+        elif variant == "sep":
             print("Using sep-CMA-ES")
-            es_options['CMA_diagonal'] = True
-        elif self.parameters["cmaes_variant"] == "vd":
+        elif variant == "vd":
             print("Using VD-CMA-ES")
-            es_options = GaussVDSampler.extend_cma_options(es_options)
         else:
             raise ValueError(f"Unknown CMA-ES variant: {self.parameters['cmaes_variant']}")
 
@@ -1879,8 +2429,8 @@ class Eigo:
         peak_vram_mb_list = [self._peak_vram_mb()]
         best_aesthetic_score_overall = initial_aesthetic_score
         best_clip_score_overall = initial_clip_score
-        best_fitness_overall = initial_fitness
-        best_text_embeddings_overall = trainable_params_init
+        best_fitness_overall = -initial_fitness
+        best_text_embeddings_overall = trainable_params_init.copy()
 
         start_time = time.time()
         generation = 0
@@ -2027,7 +2577,7 @@ class Eigo:
 
             if best_fitness > best_fitness_overall:
                 best_fitness_overall = best_fitness
-                best_text_embeddings_overall = best_x
+                best_text_embeddings_overall = np.asarray(best_x).copy()
 
             generation += 1
 
@@ -2133,11 +2683,340 @@ class Eigo:
 
     def run_snes_optimization(self, seed=None, seed_number=None, prompt=None, category=None, prompt_number=None):
         """Optimize with a diagonal Gaussian using SNES natural-gradient updates."""
+        if self.optimization_target == NOISE_EMBEDDINGS_CC:
+            return self.run_cc_cmaes_optimization(
+                seed,
+                seed_number,
+                prompt,
+                category,
+                prompt_number,
+                cc_method="snes",
+            )
         return self.run_cmaes_optimization(seed, seed_number, prompt, category, prompt_number)
 
     def run_cosyne_optimization(self, seed=None, seed_number=None, prompt=None, category=None, prompt_number=None):
         """Optimize vector coordinates as cooperatively coevolved subpopulations."""
         return self.run_cmaes_optimization(seed, seed_number, prompt, category, prompt_number)
+
+    def _gomea_linkage_model(self, gomea_module):
+        linkage_name = str(self.parameters.get("gomea_linkage_model", "linkage_tree")).lower()
+        if linkage_name in {"linkage_tree", "lt"}:
+            return None
+        if linkage_name in {"univariate", "uni"}:
+            return gomea_module.linkage.Univariate()
+        if linkage_name == "full":
+            return gomea_module.linkage.Full()
+        if linkage_name in {"static_linkage_tree", "static"}:
+            return gomea_module.linkage.StaticLinkageTree()
+        if linkage_name in {"block_marginal_product", "bmp"}:
+            block_size = self.parameters.get("gomea_bmp_block_size", None)
+            if block_size is None:
+                return gomea_module.linkage.BlockMarginalProduct()
+            block_size = int(block_size)
+            if block_size <= 0:
+                raise ValueError("gomea_bmp_block_size must be a positive integer.")
+            return gomea_module.linkage.BlockMarginalProduct(block_size)
+        raise ValueError(
+            "Unknown gomea_linkage_model. Expected one of: linkage_tree, "
+            "univariate, full, static_linkage_tree, block_marginal_product."
+        )
+
+    def run_gomea_optimization(self, seed=None, seed_number=None, prompt=None, category=None, prompt_number=None):
+        """Optimize the selected target with real-valued GOMEA."""
+        try:
+            import gomea
+        except ImportError as exc:
+            raise ImportError(
+                "GOMEA optimization requires the optional 'gomea' package. "
+                "Install it with `pip install gomea`."
+            ) from exc
+
+        seed = int(self.parameters["seed"] if seed is None else seed)
+        selected_prompt = self.parameters["selected_prompt"] if prompt is None else prompt
+        pop_size = int(self.parameters.get("gomea_pop_size", self.parameters["pop_size"]))
+        num_generations = int(self.parameters.get("gomea_num_generations", self.parameters["num_generations"]))
+        sigma = float(self.parameters.get("gomea_init_range", self.parameters["sigma"]))
+        max_evaluations = self.parameters.get("gomea_max_evaluations", None)
+        max_evaluations = pop_size * num_generations if max_evaluations is None else int(max_evaluations)
+        if pop_size <= 0:
+            raise ValueError("gomea_pop_size must be a positive integer.")
+        if num_generations <= 0:
+            raise ValueError("gomea_num_generations must be a positive integer.")
+        if sigma <= 0:
+            raise ValueError("gomea_init_range must be greater than zero.")
+        if max_evaluations <= 0:
+            raise ValueError("gomea_max_evaluations must be a positive integer.")
+
+        self.parameters["pop_size"] = pop_size
+        self.parameters["num_generations"] = num_generations
+
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+        random.seed(seed)
+
+        if category is not None:
+            print(f"Selected prompt: {selected_prompt} (Category: {category})")
+        else:
+            print(f"Selected prompt: {selected_prompt}")
+
+        results_folder = f"{self.OUTPUT_FOLDER}/results_{self.model_name}_{seed}"
+        if prompt_number is not None:
+            results_folder += f"_{prompt_number}"
+        os.makedirs(results_folder, exist_ok=True)
+        self._save_run_config(results_folder, seed, selected_prompt, category=category, prompt_number=prompt_number)
+
+        self._reset_peak_vram()
+        with torch.no_grad():
+            target_state = self._build_optimization_target_state(selected_prompt, seed)
+            initial_vector = np.asarray(target_state["initial_vector"], dtype=np.float64)
+            initial_image = self.generate_image_from_tensors_cmaes(
+                target_state["prompt_embeds"].clone(),
+                target_state["pooled_prompt_embeds"].clone(),
+                seed,
+                latents=None if target_state["latents"] is None else target_state["latents"].clone(),
+            )
+            self._save_jpeg(initial_image, f"{results_folder}/it_0.jpg")
+            initial_fitness, initial_aesthetic_score, initial_clip_score, initial_image_reward_score, initial_hpsv2_score, initial_pickscore_score, initial_jpeg_size_kb, _ = (
+                self.evaluate(initial_vector, seed, target_state, selected_prompt)
+            )
+
+        start_time = time.time()
+        records = []
+        grouped_rows = []
+        time_list = [0.0]
+        peak_vram_mb_list = [self._peak_vram_mb()]
+        max_fit_list = [-initial_fitness]
+        avg_fit_list = [-initial_fitness]
+        std_fit_list = [0.0]
+        max_aesthetic_score_list = [initial_aesthetic_score]
+        avg_aesthetic_score_list = [initial_aesthetic_score]
+        std_aesthetic_score_list = [0.0]
+        max_clip_score_list = [initial_clip_score]
+        avg_clip_score_list = [initial_clip_score]
+        std_clip_score_list = [0.0]
+        max_image_reward_score_list = [initial_image_reward_score]
+        avg_image_reward_score_list = [initial_image_reward_score]
+        std_image_reward_score_list = [0.0]
+        max_hpsv2_score_list = [initial_hpsv2_score]
+        avg_hpsv2_score_list = [initial_hpsv2_score]
+        std_hpsv2_score_list = [0.0]
+        max_pickscore_score_list = [initial_pickscore_score]
+        avg_pickscore_score_list = [initial_pickscore_score]
+        std_pickscore_score_list = [0.0]
+        min_jpeg_size_kb_list = [initial_jpeg_size_kb]
+        avg_jpeg_size_kb_list = [initial_jpeg_size_kb]
+        std_jpeg_size_kb_list = [0.0]
+        best_vector = initial_vector
+        best_fitness_overall = float(-initial_fitness)
+        processed_generations = set()
+
+        def build_gomea_results():
+            generations = [0] + grouped_rows
+            results = pd.DataFrame({
+                "generation": generations,
+                "prompt": [selected_prompt] + [''] * (len(generations) - 1),
+                "avg_fitness": avg_fit_list,
+                "std_fitness": std_fit_list,
+                "max_fitness": max_fit_list,
+                "avg_aesthetic_score": avg_aesthetic_score_list,
+                "std_aesthetic_score": std_aesthetic_score_list,
+                "max_aesthetic_score": max_aesthetic_score_list,
+                "avg_clip_score": avg_clip_score_list,
+                "std_clip_score": std_clip_score_list,
+                "max_clip_score": max_clip_score_list,
+                "avg_image_reward_score": avg_image_reward_score_list,
+                "std_image_reward_score": std_image_reward_score_list,
+                "max_image_reward_score": max_image_reward_score_list,
+                "avg_hpsv2_score": avg_hpsv2_score_list,
+                "std_hpsv2_score": std_hpsv2_score_list,
+                "max_hpsv2_score": max_hpsv2_score_list,
+                "avg_pickscore_score": avg_pickscore_score_list,
+                "std_pickscore_score": std_pickscore_score_list,
+                "max_pickscore_score": max_pickscore_score_list,
+                "avg_jpeg_size_kb": avg_jpeg_size_kb_list,
+                "std_jpeg_size_kb": std_jpeg_size_kb_list,
+                "min_jpeg_size_kb": min_jpeg_size_kb_list,
+                "elapsed_time": time_list,
+                "peak_vram_mb": peak_vram_mb_list,
+            })
+            if category is not None:
+                results["category"] = [category] + [''] * (len(generations) - 1)
+            return results
+
+        def save_gomea_results(postprocess=False):
+            results = build_gomea_results()
+            if postprocess:
+                results = self._postprocess_population_results_from_saved_images(
+                    results,
+                    results_folder,
+                    selected_prompt,
+                )
+            results.to_csv(f"{results_folder}/fitness_results.csv", index=False, na_rep='nan')
+            self._save_population_plot_results(results, results_folder)
+            return results
+
+        def finalize_gomea_generation(generation_index, force=False):
+            nonlocal best_vector, best_fitness_overall
+            if generation_index in processed_generations:
+                return
+            generation_records = [record for record in records if record["generation"] == generation_index]
+            if not generation_records:
+                return
+            if not force and len(generation_records) < pop_size:
+                return
+
+            grouped_rows.append(generation_index)
+            processed_generations.add(generation_index)
+            fitnesses = np.asarray([record["fitness"] for record in generation_records], dtype=float)
+            aesthetic_scores = np.asarray([record["aesthetic_score"] for record in generation_records], dtype=float)
+            clip_scores = np.asarray([record["clip_score"] for record in generation_records], dtype=float)
+            image_reward_scores = np.asarray([record["image_reward_score"] for record in generation_records], dtype=float)
+            hpsv2_scores = np.asarray([record["hpsv2_score"] for record in generation_records], dtype=float)
+            pickscore_scores = np.asarray([record["pickscore_score"] for record in generation_records], dtype=float)
+            jpeg_sizes_kb = np.asarray([record["jpeg_size_kb"] for record in generation_records], dtype=float)
+
+            max_fit_list.append(float(np.max(fitnesses)))
+            avg_fit_list.append(float(np.mean(fitnesses)))
+            std_fit_list.append(float(np.std(fitnesses)))
+            max_aesthetic_score_list.append(float(np.max(aesthetic_scores)))
+            avg_aesthetic_score_list.append(float(np.mean(aesthetic_scores)))
+            std_aesthetic_score_list.append(float(np.std(aesthetic_scores)))
+            max_clip_score_list.append(float(np.max(clip_scores)))
+            avg_clip_score_list.append(float(np.mean(clip_scores)))
+            std_clip_score_list.append(float(np.std(clip_scores)))
+            max_image_reward_score_list.append(float(np.max(image_reward_scores)))
+            avg_image_reward_score_list.append(float(np.mean(image_reward_scores)))
+            std_image_reward_score_list.append(float(np.std(image_reward_scores)))
+            max_hpsv2_score_list.append(float(np.max(hpsv2_scores)))
+            avg_hpsv2_score_list.append(float(np.mean(hpsv2_scores)))
+            std_hpsv2_score_list.append(float(np.std(hpsv2_scores)))
+            max_pickscore_score_list.append(float(np.max(pickscore_scores)))
+            avg_pickscore_score_list.append(float(np.mean(pickscore_scores)))
+            std_pickscore_score_list.append(float(np.std(pickscore_scores)))
+            min_jpeg_size_kb_list.append(float(np.min(jpeg_sizes_kb)))
+            avg_jpeg_size_kb_list.append(float(np.mean(jpeg_sizes_kb)))
+            std_jpeg_size_kb_list.append(float(np.std(jpeg_sizes_kb)))
+            time_list.append(float(max(record["elapsed_time"] for record in generation_records)))
+            peak_vram_mb_list.append(float(max(record["peak_vram_mb"] for record in generation_records)))
+
+            generation_best = max(generation_records, key=lambda row: row["fitness"])
+            with torch.no_grad():
+                pe, ppe, latents = tensors_from_vector(generation_best["candidate"], target_state, self.device)
+                best_image = self.generate_image_from_tensors_cmaes(pe, ppe, seed, latents=latents)
+                self._save_jpeg(best_image, f"{results_folder}/best_{generation_index}.jpg")
+
+            generation_best_fitness = float(generation_best["fitness"])
+            if generation_best_fitness > best_fitness_overall:
+                best_fitness_overall = generation_best_fitness
+                best_vector = generation_best["candidate"]
+
+            elapsed_time = time_list[-1]
+            generations_done = len(grouped_rows)
+            generations_left = max(0, num_generations - generations_done)
+            average_time_per_generation = elapsed_time / generations_done if generations_done else 0.0
+            estimated_time_remaining = average_time_per_generation * generations_left
+            formatted_time_remaining = self.format_time(estimated_time_remaining)
+
+            save_gomea_results(postprocess=False)
+
+            print(
+                f"Generation {generation_index}/{num_generations}: "
+                f"Max fitness: {max_fit_list[-1]}, Avg fitness: {avg_fit_list[-1]}, "
+                f"Max aesthetic score: {max_aesthetic_score_list[-1]}, Avg aesthetic score: {avg_aesthetic_score_list[-1]}, "
+                f"Max clip score: {max_clip_score_list[-1]}, Avg clip score: {avg_clip_score_list[-1]}, "
+                f"Max ImageReward score: {max_image_reward_score_list[-1]}, Avg ImageReward score: {avg_image_reward_score_list[-1]}, "
+                f"Max HPSv2 score: {max_hpsv2_score_list[-1]}, Avg HPSv2 score: {avg_hpsv2_score_list[-1]}, "
+                f"Max PickScore: {max_pickscore_score_list[-1]}, Avg PickScore: {avg_pickscore_score_list[-1]}, "
+                f"Estimated time remaining: {formatted_time_remaining}"
+            )
+
+        class EigoGomeaFitness(gomea.fitness.BBOFitnessFunctionRealValued):
+            def similarity_measure(fitness_self, var_a, var_b):
+                del fitness_self
+                return 0.0 if var_a == var_b else 1.0
+
+            def objective_function(fitness_self, objective_index, variables):
+                del fitness_self, objective_index
+                eval_index = len(records)
+                generation_index = eval_index // pop_size + 1
+                individual_index = eval_index % pop_size + 1
+                if individual_index == 1:
+                    print(f"Generation {generation_index}/{num_generations}")
+                    self._reset_peak_vram()
+
+                if self.parameters["save_gens"]:
+                    gen_folder = f"{results_folder}/gen_{generation_index}"
+                    os.makedirs(gen_folder, exist_ok=True)
+                    save_path = f"{gen_folder}/id_{individual_index}.jpg"
+                else:
+                    save_path = None
+
+                candidate = initial_vector + np.asarray(variables, dtype=np.float64)
+                fitness, aesthetic_score, clip_score, image_reward_score, hpsv2_score, pickscore_score, jpeg_size_kb, _ = (
+                    self.evaluate(candidate, seed, target_state, selected_prompt, save_path)
+                )
+                records.append({
+                    "generation": generation_index,
+                    "candidate": candidate.copy(),
+                    "fitness": -float(fitness),
+                    "objective": float(fitness),
+                    "aesthetic_score": float(aesthetic_score),
+                    "clip_score": float(clip_score),
+                    "image_reward_score": float(image_reward_score),
+                    "hpsv2_score": float(hpsv2_score),
+                    "pickscore_score": float(pickscore_score),
+                    "jpeg_size_kb": float(jpeg_size_kb),
+                    "elapsed_time": time.time() - start_time,
+                    "peak_vram_mb": self._peak_vram_mb(),
+                })
+                finalize_gomea_generation(generation_index)
+                return float(fitness)
+
+        max_seconds = self.parameters.get("time_limit_seconds")
+        max_seconds = -1 if max_seconds is None else float(max_seconds)
+        optimizer_kwargs = {
+            "fitness": EigoGomeaFitness(initial_vector.size),
+            "lower_init_range": -sigma,
+            "upper_init_range": sigma,
+            "max_number_of_populations": 1,
+            "base_population_size": pop_size,
+            "max_number_of_generations": num_generations,
+            "max_number_of_evaluations": max_evaluations,
+            "max_number_of_seconds": max_seconds,
+            "random_seed": seed,
+        }
+        linkage_model = self._gomea_linkage_model(gomea)
+        if linkage_model is not None:
+            optimizer_kwargs["linkage_model"] = linkage_model
+        optimizer = gomea.RealValuedGOMEA(**optimizer_kwargs)
+
+        print(
+            "Using real-valued GOMEA "
+            f"(pop_size={pop_size}, evaluations={max_evaluations}, init_range={sigma})"
+        )
+        try:
+            optimizer.run()
+        except RuntimeError as exc:
+            if "Unknown linkage model" not in str(exc) or "linkage_model" not in optimizer_kwargs or records:
+                raise
+            print(
+                "GOMEA rejected the configured linkage model; retrying with the "
+                "package default linkage model."
+            )
+            optimizer_kwargs.pop("linkage_model", None)
+            optimizer = gomea.RealValuedGOMEA(**optimizer_kwargs)
+            optimizer.run()
+
+        for generation_index in sorted({record["generation"] for record in records}):
+            finalize_gomea_generation(generation_index, force=True)
+
+        with torch.no_grad():
+            pe, ppe, latents = tensors_from_vector(best_vector, target_state, self.device)
+            best_image = self.generate_image_from_tensors_cmaes(pe, ppe, seed, latents=latents)
+            self._save_jpeg(best_image, f"{results_folder}/best_all.jpg")
+
+        save_gomea_results(postprocess=True)
+        return results_folder
 
     def run_zero_order_optimization(self, seed=None, seed_number=None, prompt=None, category=None, prompt_number=None):
         """Optimize the selected target by retaining the best Gaussian perturbation."""
@@ -2724,7 +3603,7 @@ class Eigo:
 
         self._reset_peak_vram()
         with torch.no_grad():
-            if self.optimization_target == LATENT_NOISE:
+            if self.optimization_target in {LATENT_NOISE, NOISE_EMBEDDINGS_FLAT}:
                 target_state = self._build_optimization_target_state(selected_prompt, seed)
             else:
                 prompt_embeds, pooled_prompt_embeds = self._encode_prompt_embeddings(selected_prompt)
@@ -2733,6 +3612,8 @@ class Eigo:
         trainable_params_init = target_state["initial_vector"]
         sample_seeds = self._generate_sample_seeds(seed, num_images, excluded_seeds={seed})
         random_sampler_uses_latents = self.optimization_target == LATENT_NOISE
+        random_sampler_uses_joint_vector = self.optimization_target == NOISE_EMBEDDINGS_FLAT
+        random_sampler_sigma = float(self.parameters.get("random_sampler_sigma", self.parameters.get("sigma", 0.1)))
 
         sample_rows = []
         sample_paths = []
@@ -2883,6 +3764,15 @@ class Eigo:
                     ).astype(np.float32)
                     evaluation_seed = seed
                     sample_path = os.path.join(results_folder, f"sample_{sample_index}_latent_seed_{sample_seed}.jpg")
+                elif random_sampler_uses_joint_vector:
+                    print(f"Random sample {sample_index}/{num_images} with joint-vector seed {sample_seed}")
+                    rng = np.random.default_rng(sample_seed)
+                    sampled_vector = (
+                        trainable_params_init
+                        + rng.normal(0.0, random_sampler_sigma, size=trainable_params_init.shape)
+                    ).astype(np.float32)
+                    evaluation_seed = seed
+                    sample_path = os.path.join(results_folder, f"sample_{sample_index}_joint_seed_{sample_seed}.jpg")
                 else:
                     print(f"Random sample {sample_index}/{num_images} with generation seed {sample_seed}")
                     sampled_vector = trainable_params_init
@@ -3046,7 +3936,7 @@ class Eigo:
                 "sample": idx,
                 "generation": batch_generation,
                 "seed": sample_seed,
-                "generation_seed": seed if random_sampler_uses_latents else sample_seed,
+                "generation_seed": seed if (random_sampler_uses_latents or random_sampler_uses_joint_vector) else sample_seed,
                 "sample_target": self.optimization_target,
                 "prompt": selected_prompt if idx == 0 else "",
                 "fitness": float(canonical_fitness),

@@ -19,6 +19,7 @@ test_ga: false
 test_cmaes: false
 test_snes: false
 test_cosyne: false
+test_gomea: false
 test_random_sampler: false
 
 # General parameters (copied from config_eigo.yaml)
@@ -50,6 +51,7 @@ hpsv2_version: "v2.1"  # Set to null to disable HPSv2 calculation
 pickscore_model: "yuvalkirstain/PickScore_v1"  # Set to null to disable PickScore calculation
 pickscore_processor: "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"  # Set to null to disable PickScore calculation
 evaluate_zero_weight_metrics: false  # Keep zero-weight scorer models/graphs out of Adam VRAM
+optimization_target: "prompt_embeddings"  # "prompt_embeddings", "latent_noise", "noise_embeddings_flat", or "noise_embeddings_cc" (CC-CMA-ES/CC-SNES only)
 model_id: "stabilityai/sdxl-turbo" # e.g., "mhdang/dpo-sd1.5-text2image-v1", "Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers" with model_backend: "sana_sprint" or "auto"
 model_backend: "auto" # "auto", "sd", "sdxl", "flux", "pixart", "lcm", "sana", or "sana_sprint"
 base_model_id: null  # Optional SD base pipeline when model_id is a component repo; DPO SD1.5 defaults to runwayml/stable-diffusion-v1-5
@@ -72,6 +74,8 @@ num_generations: 50
 pop_size: 50
 cmaes_variant: "sep"
 sigma: 0.5
+cc_embedding_sigma: null  # CC embedding sigma; null falls back to sigma for CMA-ES or snes_sigma for SNES
+cc_noise_sigma: null  # CC latent-noise sigma; null falls back to sigma for CMA-ES or snes_sigma for SNES
 save_gens: false
 
 # Adam defaults (used if not overridden by grid.adam)
@@ -95,6 +99,15 @@ ga_mutation_rate: 0.1
 
 # Random sampler defaults (used if not overridden by grid.random_sampler)
 num_images_to_generate: 20
+random_sampler_sigma: 0.1
+
+# GOMEA defaults (used if not overridden by grid.gomea)
+gomea_num_generations: 50
+gomea_pop_size: 50
+gomea_init_range: 0.5
+gomea_linkage_model: "linkage_tree"
+gomea_bmp_block_size: 2
+gomea_max_evaluations: null
 
 # Time limit in seconds (null -> use num_generations/num_iterations)
 time_limit_seconds: null
@@ -115,16 +128,30 @@ grid:
   cmaes:
     pop_size: [20, 50]
     sigma: [0.05,0.1, 0.2, 0.3, 0.4, 0.5]
+    # For CC-CMA-ES grids, add cmaes_variant: ["cc", "cc_sep"] and
+    # optimization_target: ["noise_embeddings_cc"], then tune these separately.
+    # cc_embedding_sigma: [0.01, 0.03, 0.1]
+    # cc_noise_sigma: [0.05, 0.1, 0.2]
 
   snes:
     snes_pop_size: [20, 50]
     snes_sigma: [0.05, 0.1, 0.2, 0.5]
+    # For CC-SNES grids, add optimization_target: ["noise_embeddings_cc"],
+    # then tune these separately.
+    # cc_embedding_sigma: [0.01, 0.03, 0.1]
+    # cc_noise_sigma: [0.05, 0.1, 0.2]
 
   cosyne:
     cosyne_pop_size: [16, 32]
     cosyne_init_range: [0.05, 0.1, 0.25, 0.5]
     cosyne_mutation_probability: [0.1, 0.3, 0.5]
     cosyne_mutation_scale: [0.05, 0.1, 0.3]
+
+  gomea:
+    gomea_pop_size: [20, 50]
+    gomea_init_range: [0.05, 0.1, 0.2, 0.5]
+    gomea_linkage_model: ["linkage_tree", "block_marginal_product"]
+    gomea_bmp_block_size: [2]
 
   random_sampler:
     num_images_to_generate: [20, 50]

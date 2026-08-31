@@ -161,13 +161,18 @@ def population_size(run_config: dict, metadata: dict) -> int:
     method = str(metadata.get("algorithm_key", "")).lower()
     keys_by_method = {
         "snes": ("snes_pop_size", "pop_size"),
+        "ccsnes": ("cc_snes_pop_size", "snes_pop_size", "pop_size"),
         "cosyne": ("cosyne_pop_size", "pop_size"),
+        "gomea": ("gomea_pop_size", "pop_size"),
         "zeroorder": ("zero_order_pop_size", "pop_size"),
         "zero_order": ("zero_order_pop_size", "pop_size"),
         "ga": ("ga_pop_size", "pop_size"),
         "cmaes": ("pop_size",),
         "sepcmaes": ("pop_size",),
         "vdcmae": ("pop_size",),
+        "cccmaes": ("pop_size",),
+        "ccsepcmaes": ("pop_size",),
+        "ccvdcmaes": ("pop_size",),
         "randomsampler": ("num_images_to_generate", "pop_size"),
         "random_sampler": ("num_images_to_generate", "pop_size"),
     }
@@ -180,6 +185,8 @@ def population_size(run_config: dict, metadata: dict) -> int:
         except (TypeError, ValueError):
             continue
         if pop_size > 0:
+            if method in {"cccmaes", "ccsepcmaes", "ccvdcmaes", "ccsnes"}:
+                return 2 * pop_size
             return pop_size
     return 1
 

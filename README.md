@@ -6,8 +6,8 @@ The core implementation is the `Eigo` class in [eigo.py](/home/posgrad/phd2025/d
 
 ## Main Capabilities
 
-- Optimize continuous prompt embeddings or latent noise without retraining the diffusion model.
-- Run AdamW, GA, CMA-ES, sep-CMA-ES, VD-CMA, SNES, CoSyNE, zero-order search, and random sampling.
+- Optimize continuous prompt embeddings, latent noise, a joined noise/embedding vector, or separate noise/embedding sub-vectors for cooperative coevolution without retraining the diffusion model.
+- Run AdamW, GA, CMA-ES, sep-CMA-ES, VD-CMA, CC-CMA-ES, CC-sep-CMA-ES, SNES, CC-SNES, CoSyNE, GOMEA, zero-order search, and random sampling.
 - Score candidates with CLIPScore, LAION aesthetic predictors, ImageReward, HPSv2, PickScore, and JPEG-size objectives.
 - Run prompt batches from Parti Prompts, DrawBench, or compatible Hugging Face datasets.
 - Tune method hyperparameters with Optuna.
@@ -18,7 +18,7 @@ The core implementation is the `Eigo` class in [eigo.py](/home/posgrad/phd2025/d
 ```text
 eigo.py                                      # Shared optimization backend
 src/
-  optimization_targets.py                    # Prompt-embedding and latent-noise target helpers
+  optimization_targets.py                    # Prompt-embedding, latent-noise, joint, and CC target helpers
   aesthetic_evaluation.py                    # Aesthetic predictor wrappers
 algorithms/
   eigo_single_prompt.py                      # One prompt, one optimizer
@@ -60,12 +60,14 @@ The first run may download model checkpoints and prompt datasets from Hugging Fa
 Most scripts are configured with YAML files in [algorithms/config](/home/posgrad/phd2025/dneto/eigo_old/algorithms/config). The most commonly edited fields are:
 
 - `model_id`, `model_backend`, `torch_dtype`, `height`, `width`, `num_inference_steps`, and `guidance_scale`
-- `optimization_target`: `prompt_embeddings` or `latent_noise`
-- `optimization_method`: `adam`, `ga`, `cmaes`, `snes`, `cosyne`, `zero_order`, or `random_sampler`
+- `optimization_target`: `prompt_embeddings`, `latent_noise`, `noise_embeddings_flat`, or `noise_embeddings_cc`
+- `optimization_method`: `adam`, `ga`, `cmaes`, `snes`, `cosyne`, `gomea`, `zero_order`, or `random_sampler`
 - `aesthetic_predictor`: `0` for Simulacra, `1` for LAION V1, or `2` for LAION V2
 - objective weights such as `clip_score_weight`, `image_reward_score_weight`, and `hpsv2_score_weight`
-- method parameters such as `num_generations`, `pop_size`, `sigma`, `snes_sigma`, `cosyne_mutation_scale`, and `adam_lr`
+- method parameters such as `num_generations`, `pop_size`, `sigma`, `snes_sigma`, `cosyne_mutation_scale`, `gomea_init_range`, and `adam_lr`
 - `results_folder`, which controls where artifacts are written
+
+For CC-CMA-ES, set `optimization_method: cmaes`, `optimization_target: noise_embeddings_cc`, and `cmaes_variant` to `cc`, `cc_sep`, or `cc_vd`. For CC-SNES, set `optimization_method: snes` and `optimization_target: noise_embeddings_cc`. Both CC implementations keep the noise and embedding vectors as separate sub-populations and evaluate both sub-populations once per generation. Use `cc_embedding_sigma` and `cc_noise_sigma` to set separate initial search scales; either can be `null` or omitted to fall back to `sigma` for CMA-ES or `snes_sigma` for SNES.
 
 Set `evaluate_zero_weight_metrics: false` to avoid loading scorer models whose weights are zero. This is useful for reducing AdamW memory use. Set it to `true` only when zero-weight metrics should still be logged for analysis.
 
