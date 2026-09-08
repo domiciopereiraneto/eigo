@@ -15,13 +15,13 @@ test_ga: false
 test_cmaes: false
 test_random_sampler: false
 test_zero_order: false
-test_snes: false
+test_snes: true
 test_cosyne: false
 test_gomea: false
 
 # General parameters (copied from config_eigo.yaml)
 seed: 42
-cuda: 3
+cuda: 1
 aesthetic_predictor: 2
 num_inference_steps: 50
 batch_size: 8
@@ -30,8 +30,8 @@ lcm_origin_steps: 50
 height: 512
 width: 512
 aesthetic_score_weight: 0.0
-clip_score_weight: 0.0
-image_reward_score_weight: 1.0
+clip_score_weight: 1.0
+image_reward_score_weight: 0.0
 hpsv2_score_weight: 0.0
 pickscore_score_weight: 0.0
 jpeg_size_weight: 0.0
@@ -48,7 +48,7 @@ hpsv2_version: "v2.1"  # Set to null to disable HPSv2 calculation
 pickscore_model: "yuvalkirstain/PickScore_v1"  # Set to null to disable PickScore calculation
 pickscore_processor: "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"  # Set to null to disable PickScore calculation
 evaluate_zero_weight_metrics: false  # Keep zero-weight scorer models/graphs out of Adam VRAM
-optimization_target: "noise_embeddings_flat"  # "prompt_embeddings", "latent_noise", "noise_embeddings_flat", or "noise_embeddings_cc" (CC-CMA-ES/CC-SNES only)
+optimization_target: "noise_embeddings_cc"  # "prompt_embeddings", "latent_noise", "noise_embeddings_flat", or "noise_embeddings_cc" (CC-CMA-ES/CC-SNES only)
 model_id: "stable-diffusion-v1-5/stable-diffusion-v1-5" # Model ID (e.g., "mhdang/dpo-sd1.5-text2image-v1", "black-forest-labs/FLUX.1-schnell", "PixArt-alpha/PixArt-XL-2-1024-MS", "Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers", "Efficient-Large-Model/Sana_1600M_1024px_diffusers", "stabilityai/sdxl-turbo", "SimianLuo/LCM_Dreamshaper_v7")
 model_backend: "auto" # "auto", "sd", "sdxl", "flux", "pixart", "lcm", "sana", or "sana_sprint"
 base_model_id: null  # Optional SD base pipeline when model_id is a component repo; DPO SD1.5 defaults to runwayml/stable-diffusion-v1-5
@@ -64,7 +64,7 @@ enable_gradient_checkpointing: false
 enable_attention_slicing: false
 enable_vae_slicing: false
 enable_vae_tiling: false
-results_folder: "results_optuna_sd15_ccsepcmaes_noise_embeddings_imagereward"
+results_folder: "results_optuna_sd15_ccsnes_clip"
 
 # CMA-ES defaults (used if not overridden by optuna.search_space.cmaes)
 num_generations: 15
@@ -83,6 +83,10 @@ snes_eta_mu: 1.0
 snes_eta_sigma: null  # null uses the dimension-dependent SNES default
 cc_snes_num_generations: null  # CC-SNES generations; null falls back to snes_num_generations
 cc_snes_pop_size: null  # CC-SNES sub-population size; null falls back to snes_pop_size
+cc_embedding_eta_mu: null  # CC-SNES embedding mean learning rate; null falls back to snes_eta_mu
+cc_embedding_eta_sigma: null  # CC-SNES embedding sigma learning rate; null falls back to snes_eta_sigma
+cc_noise_eta_mu: null  # CC-SNES noise mean learning rate; null falls back to snes_eta_mu
+cc_noise_eta_sigma: null  # CC-SNES noise sigma learning rate; null falls back to snes_eta_sigma
 
 # CoSyNE defaults (used if not overridden by optuna.search_space.cosyne)
 cosyne_num_generations: 15
@@ -136,8 +140,8 @@ optuna:
   n_trials: 30
   direction: "maximize"
   metric: "auto"  # auto -> combined_score for Adam, max_fitness for population methods
-  study_name: "eigo_optuna_search_sd15_ccsepcmaes_imagereward"
-  storage: "sqlite:///results_optuna_sd15_ccsepcmaes_imagereward/optuna.db"
+  study_name: "eigo_optuna_search_sd15_ccsnes_clip"
+  storage: "sqlite:///results_optuna_sd15_ccsnes_clip/optuna.db"
   load_if_exists: true
   catch_trial_errors: true
   sampler:
@@ -272,28 +276,48 @@ optuna:
       #   low: 8
       #   high: 64
       #   step: 8
-      # For CC-SNES studies, set optimization_target to noise_embeddings_cc,
-      # then tune these separately.
-      # cc_embedding_sigma:
+      # For non-CC SNES studies, use optimization_target values other than
+      # noise_embeddings_cc, then tune these shared SNES parameters.
+      # snes_sigma:
       #   type: "float"
       #   low: 0.01
-      #   high: 0.3
-      #   log: true
-      # cc_noise_sigma:
-      #   type: "float"
-      #   low: 0.05
       #   high: 1.0
       #   log: true
-      snes_sigma:
+      # snes_eta_mu:
+      #   type: "float"
+      #   low: 0.1
+      #   high: 1.5
+      # snes_eta_sigma:
+      #   type: "float"
+      #   low: 0.001
+      #   high: 0.1
+      #   log: true
+      # For CC-SNES studies, set optimization_target to noise_embeddings_cc,
+      # then tune these separately.
+      cc_embedding_sigma:
         type: "float"
         low: 0.01
         high: 1.0
         log: true
-      snes_eta_mu:
+      cc_noise_sigma:
+        type: "float"
+        low: 0.01
+        high: 1.0
+        log: true
+      cc_embedding_eta_mu:
         type: "float"
         low: 0.1
         high: 1.5
-      snes_eta_sigma:
+      cc_embedding_eta_sigma:
+        type: "float"
+        low: 0.001
+        high: 0.1
+        log: true
+      cc_noise_eta_mu:
+        type: "float"
+        low: 0.1
+        high: 1.5
+      cc_noise_eta_sigma:
         type: "float"
         low: 0.001
         high: 0.1

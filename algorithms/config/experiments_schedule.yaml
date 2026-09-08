@@ -5,28 +5,35 @@
 # weights here, while keeping shared prompt/model defaults in the base config.
 
 runs:
-  - optimization_method: "snes"
-    cuda: 0
+  - optimization_method: "cmaes"
+    cuda: 1
+    aesthetic_score_weight: 0.0
+    clip_score_weight: 0.0
+    image_reward_score_weight: 1.0
+    hpsv2_score_weight: 0.0
+    pickscore_score_weight: 0.0
+    jpeg_size_weight: 0.0
+    results_folder: "results_sepcmaes_sd15_noise_embeddings_imagereward"
+    sigma: 0.11594403956910003
+
+  - optimization_method: "cmaes"
+    cuda: 1
     aesthetic_score_weight: 0.0
     clip_score_weight: 1.0
     image_reward_score_weight: 0.0
     hpsv2_score_weight: 0.0
     pickscore_score_weight: 0.0
     jpeg_size_weight: 0.0
-    results_folder: "results_snes_sd15_noise_embeddings_clip"
-    snes_sigma: 0.11946490435760347
-    snes_eta_mu: 1.4720768886807325
-    snes_eta_sigma: 0.002809673564737971
+    results_folder: "results_sepcmaes_sd15_noise_embeddings_clip"
+    sigma: 0.05465965798510398
 
-  - optimization_method: "snes"
-    cuda: 0
+  - optimization_method: "cmaes"
+    cuda: 1
     aesthetic_score_weight: 0.0
     clip_score_weight: 0.0
     image_reward_score_weight: 0.0
     hpsv2_score_weight: 1.0
     pickscore_score_weight: 0.0
     jpeg_size_weight: 0.0
-    results_folder: "results_snes_sd15_noise_embeddings_hpsv2"
-    snes_sigma: 0.12689081933149204
-    snes_eta_mu: 1.194044244470211
-    snes_eta_sigma: 0.001045774796543485
+    results_folder: "results_sepcmaes_sd15_noise_embeddings_hpsv2"
+    sigma: 0.07978542347074176

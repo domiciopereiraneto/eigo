@@ -69,6 +69,10 @@ save_gens: true # Save individuals of each generation to the results folder
 "snes_eta_sigma": null  # null uses the dimension-dependent SNES default
 "cc_snes_num_generations": null  # CC-SNES generations; null falls back to snes_num_generations
 "cc_snes_pop_size": null  # CC-SNES sub-population size; null falls back to snes_pop_size
+"cc_embedding_eta_mu": null  # CC-SNES embedding mean learning rate; null falls back to snes_eta_mu
+"cc_embedding_eta_sigma": null  # CC-SNES embedding sigma learning rate; null falls back to snes_eta_sigma
+"cc_noise_eta_mu": null  # CC-SNES noise mean learning rate; null falls back to snes_eta_mu
+"cc_noise_eta_sigma": null  # CC-SNES noise sigma learning rate; null falls back to snes_eta_sigma
 
 # CoSyNE parameters
 "cosyne_num_generations": 100

@@ -1945,15 +1945,31 @@ class Eigo:
             base_sigma_key = "snes_sigma" if self.parameters.get("snes_sigma", None) is not None else "sigma"
             embedding_sigma = self._float_parameter("cc_embedding_sigma", base_sigma_key)
             noise_sigma = self._float_parameter("cc_noise_sigma", base_sigma_key)
-            eta_mu = float(self.parameters.get("snes_eta_mu", 1.0))
-            eta_sigma = self.parameters.get("snes_eta_sigma")
+            shared_eta_mu = self.parameters.get("snes_eta_mu", 1.0)
+            shared_eta_sigma = self.parameters.get("snes_eta_sigma")
+            embedding_eta_mu = self.parameters.get("cc_embedding_eta_mu")
+            if embedding_eta_mu is None:
+                embedding_eta_mu = shared_eta_mu
+            noise_eta_mu = self.parameters.get("cc_noise_eta_mu")
+            if noise_eta_mu is None:
+                noise_eta_mu = shared_eta_mu
+            embedding_eta_sigma = self.parameters.get("cc_embedding_eta_sigma")
+            if embedding_eta_sigma is None:
+                embedding_eta_sigma = shared_eta_sigma
+            noise_eta_sigma = self.parameters.get("cc_noise_eta_sigma")
+            if noise_eta_sigma is None:
+                noise_eta_sigma = shared_eta_sigma
+            embedding_eta_mu = float(embedding_eta_mu)
+            noise_eta_mu = float(noise_eta_mu)
         else:
             pop_size = int(self.parameters["pop_size"])
             num_generations = int(self.parameters["num_generations"])
             embedding_sigma = self._float_parameter("cc_embedding_sigma", "sigma")
             noise_sigma = self._float_parameter("cc_noise_sigma", "sigma")
-            eta_mu = None
-            eta_sigma = None
+            embedding_eta_mu = None
+            noise_eta_mu = None
+            embedding_eta_sigma = None
+            noise_eta_sigma = None
         if pop_size <= 0:
             raise ValueError("CC coevolution requires pop_size > 0.")
         if num_generations <= 0:
@@ -1994,6 +2010,14 @@ class Eigo:
             f"{variant_label} sigmas: "
             f"embedding={embedding_sigma}, noise={noise_sigma}"
         )
+        if cc_method == "snes":
+            print(
+                f"{variant_label} learning rates: "
+                f"embedding_eta_mu={embedding_eta_mu}, "
+                f"embedding_eta_sigma={embedding_eta_sigma}, "
+                f"noise_eta_mu={noise_eta_mu}, "
+                f"noise_eta_sigma={noise_eta_sigma}"
+            )
 
         self._reset_peak_vram()
         with torch.no_grad():
@@ -2021,8 +2045,8 @@ class Eigo:
                 pop_size,
                 num_generations,
                 seed=seed,
-                eta_mu=eta_mu,
-                eta_sigma=eta_sigma,
+                eta_mu=embedding_eta_mu,
+                eta_sigma=embedding_eta_sigma,
             )
             noise_es = SeparableNaturalEvolutionStrategy(
                 noise_vector,
@@ -2030,8 +2054,8 @@ class Eigo:
                 pop_size,
                 num_generations,
                 seed=seed + 1,
-                eta_mu=eta_mu,
-                eta_sigma=eta_sigma,
+                eta_mu=noise_eta_mu,
+                eta_sigma=noise_eta_sigma,
             )
         else:
             embedding_es = cma.CMAEvolutionStrategy(
@@ -2092,7 +2116,9 @@ class Eigo:
         start_time = time.time()
         generation = 0
 
-        while generation < num_generations and not (embedding_es.stop() or noise_es.stop()):
+        while generation < num_generations:
+            if cc_method == "snes" and (embedding_es.stop() or noise_es.stop()):
+                break
             elapsed_time = time.time() - start_time
             if self.parameters['time_limit_seconds'] is not None and elapsed_time >= self.parameters['time_limit_seconds']:
                 print(

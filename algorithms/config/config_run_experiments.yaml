@@ -3,7 +3,7 @@
 # This file defines one optimizer/model/objective setup and the prompt subset to
 # run. For paper-scale runs, keep shared defaults here and place optimizer- or
 # objective-specific overrides in algorithms/config/experiments_schedule.yaml.
-"optimization_method": "snes" # "cmaes", "snes", "cosyne", "gomea", "ga", "adam", "zero_order", or "random_sampler"
+"optimization_method": "cmaes" # "cmaes", "snes", "cosyne", "gomea", "ga", "adam", "zero_order", or "random_sampler"
 
 # Prompt dataset parameters (used by run_experiments.py)
 seed_path: null  # Path to a file with seeds; if null, uses the 'seed' below
@@ -30,7 +30,7 @@ lcm_origin_steps: 50  # Original diffusion steps for LCM backends; ignored by ot
 height: 512  # Generated image height (pixels)
 width: 512  # Generated image width (pixels)
 aesthetic_score_weight: 0.0  # Weight for aesthetic score in combined fitness
-clip_score_weight: 0.0  # Weight for CLIP score in combined fitness
+clip_score_weight: 1.0  # Weight for CLIP score in combined fitness
 image_reward_score_weight: 0.0  # Weight for ImageReward score in combined fitness
 hpsv2_score_weight: 0.0  # Weight for HPSv2 score in combined fitness
 pickscore_score_weight: 0.0  # Weight for PickScore score in combined fitness
@@ -48,8 +48,8 @@ hpsv2_version: "v2.1"  # HPSv2 checkpoint version; set to null to disable HPSv2 
 pickscore_model: "yuvalkirstain/PickScore_v1"  # PickScore checkpoint name; set to null to disable PickScore calculation
 pickscore_processor: "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"  # Processor backbone for PickScore; set to null to disable PickScore calculation
 evaluate_zero_weight_metrics: false  # Keep zero-weight scorer models/graphs out of Adam VRAM
-optimization_target: "noise_embeddings_flat"  # "prompt_embeddings", "latent_noise", "noise_embeddings_flat", or "noise_embeddings_cc" (CC-CMA-ES/CC-SNES only)
-results_folder: "results_snes_sd15_noise_embeddings_imagereward"  # Output directory for runs and artifacts
+optimization_target: "noise_embeddings_cc"  # "prompt_embeddings", "latent_noise", "noise_embeddings_flat", or "noise_embeddings_cc" (CC-CMA-ES/CC-SNES only)
+results_folder: "results_ccsepcmaes_sd15_noise_embeddings_clip"  # Output directory for runs and artifacts
 
 # Diffusion model parameters
 model_id: "stable-diffusion-v1-5/stable-diffusion-v1-5"  # Model ID (e.g., "stable-diffusion-v1-5/stable-diffusion-v1-5", "mhdang/dpo-sd1.5-text2image-v1", "black-forest-labs/FLUX.1-schnell", "PixArt-alpha/PixArt-XL-2-1024-MS", "Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers", "Efficient-Large-Model/Sana_1600M_1024px_diffusers", "stabilityai/sdxl-turbo", "SimianLuo/LCM_Dreamshaper_v7")
@@ -73,10 +73,10 @@ enable_vae_tiling: false  # Useful for high-res decode on limited VRAM
 # CMA-ES specific parameters
 num_generations: 15 # Number of CMA-ES generations
 pop_size: 16  # CMA-ES population size
-cmaes_variant: "sep"  # "cmaes", "sep", "vd", "cc", "cc_sep", or "cc_vd"; CC variants require noise_embeddings_cc
+cmaes_variant: "cc_sep"  # "cmaes", "sep", "vd", "cc", "cc_sep", or "cc_vd"; CC variants require noise_embeddings_cc
 sigma: 0.1  # Initial CMA-ES standard deviation
-cc_embedding_sigma: null  # CC embedding sigma; null falls back to sigma for CMA-ES or snes_sigma for SNES
-cc_noise_sigma: null  # CC latent-noise sigma; null falls back to sigma for CMA-ES or snes_sigma for SNES
+cc_embedding_sigma: 0.03463717808865262  # CC embedding sigma; null falls back to sigma for CMA-ES or snes_sigma for SNES
+cc_noise_sigma: 0.17175482489007365  # CC latent-noise sigma; null falls back to sigma for CMA-ES or snes_sigma for SNES
 save_gens: true # Save individuals of each generation to the results folder
 
 # SNES specific parameters (optional; fall back to the common values above)
@@ -87,6 +87,10 @@ snes_eta_mu: 1.0260938503695356
 snes_eta_sigma: 0.001019945081357347  # null uses the dimension-dependent SNES default
 cc_snes_num_generations: null  # CC-SNES generations; null falls back to snes_num_generations
 cc_snes_pop_size: null  # CC-SNES sub-population size; null falls back to snes_pop_size
+cc_embedding_eta_mu: null  # CC-SNES embedding mean learning rate; null falls back to snes_eta_mu
+cc_embedding_eta_sigma: null  # CC-SNES embedding sigma learning rate; null falls back to snes_eta_sigma
+cc_noise_eta_mu: null  # CC-SNES noise mean learning rate; null falls back to snes_eta_mu
+cc_noise_eta_sigma: null  # CC-SNES noise sigma learning rate; null falls back to snes_eta_sigma
 
 # CoSyNE specific parameters
 cosyne_num_generations: 15
