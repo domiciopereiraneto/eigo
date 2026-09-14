@@ -1,30 +1,11 @@
-# Optuna-search config for algorithms/eigo_optuna_search.py.
-#
-# Each trial samples one enabled optimizer and that optimizer's search-space
-# parameters, evaluates all resolved prompts, and reports the mean final metric
-# to Optuna. Use optuna_schedule.yaml for multiple optimizer-objective studies.
-
-# Prompts evaluated by each Optuna trial are sampled from optuna.prompt_source.
-# To use explicit prompts instead, set optuna.prompt_source.type: "config" and
-# add selected_prompts here.
-
-# Select which optimizers Optuna can sample. If more than one is enabled, the
-# optimizer itself becomes a categorical trial parameter.
-test_adam: false
-test_ga: false
-test_cmaes: false
-test_random_sampler: false
-test_zero_order: false
-test_snes: true
-test_cosyne: false
-test_gomea: false
-
-# General parameters (copied from config_eigo.yaml)
+# Discrete text encoder token experiments. See README.md for parameter semantics.
+test_ga: true
+test_random_sampler: true
+test_gomea: true
 seed: 42
 cuda: 1
 aesthetic_predictor: 2
 num_inference_steps: 50
-batch_size: 8
 guidance_scale: 7.5
 lcm_origin_steps: 50
 height: 512
@@ -42,348 +23,90 @@ max_hpsv2_score: 1.0
 max_pickscore_score: 1.0
 max_jpeg_size_kb: 1024.0
 jpeg_quality: 95
-image_reward_model: "ImageReward-v1.0" # Set to null to disable ImageReward calculation
-clip_model_name: "ViT-B/32"  # OpenAI CLIP model used for CLIP score and LAION aesthetic predictors
-hpsv2_version: "v2.1"  # Set to null to disable HPSv2 calculation
-pickscore_model: "yuvalkirstain/PickScore_v1"  # Set to null to disable PickScore calculation
-pickscore_processor: "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"  # Set to null to disable PickScore calculation
-evaluate_zero_weight_metrics: false  # Keep zero-weight scorer models/graphs out of Adam VRAM
-optimization_target: "noise_embeddings_cc"  # "prompt_embeddings", "latent_noise", "noise_embeddings_flat", or "noise_embeddings_cc" (CC-CMA-ES/CC-SNES only)
-model_id: "stable-diffusion-v1-5/stable-diffusion-v1-5" # Model ID (e.g., "mhdang/dpo-sd1.5-text2image-v1", "black-forest-labs/FLUX.1-schnell", "PixArt-alpha/PixArt-XL-2-1024-MS", "Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers", "Efficient-Large-Model/Sana_1600M_1024px_diffusers", "stabilityai/sdxl-turbo", "SimianLuo/LCM_Dreamshaper_v7")
-model_backend: "auto" # "auto", "sd", "sdxl", "flux", "pixart", "lcm", "sana", or "sana_sprint"
-base_model_id: null  # Optional SD base pipeline when model_id is a component repo; DPO SD1.5 defaults to runwayml/stable-diffusion-v1-5
-unet_model_id: null  # Optional SD UNet replacement repo; DPO SD1.5 uses model_id automatically
-unet_subfolder: "unet"  # Subfolder for replacement UNet weights
-torch_dtype: "float16"
-max_sequence_length: 256  # FLUX/Sana text encoder token limit
+image_reward_model: ImageReward-v1.0
+clip_model_name: ViT-B/32
+hpsv2_version: v2.1
+pickscore_model: yuvalkirstain/PickScore_v1
+pickscore_processor: laion/CLIP-ViT-H-14-laion2B-s32B-b79K
+evaluate_zero_weight_metrics: false
+optimization_target: text_tokens
+model_id: stable-diffusion-v1-5/stable-diffusion-v1-5
+model_backend: auto
+base_model_id: null
+unet_model_id: null
+unet_subfolder: unet
+torch_dtype: float16
+max_sequence_length: 256
 use_safetensors: true
 use_multi_gpu: false
-pipeline_device_map: "balanced"
+pipeline_device_map: balanced
 max_memory: null
-enable_gradient_checkpointing: false
 enable_attention_slicing: false
 enable_vae_slicing: false
 enable_vae_tiling: false
-results_folder: "results_optuna_sd15_ccsnes_clip"
-
-# CMA-ES defaults (used if not overridden by optuna.search_space.cmaes)
+results_folder: results_eigo_optuna_search_tokens
 num_generations: 15
 pop_size: 16
-cmaes_variant: "sep"  # "cmaes", "sep", "vd", "cc", "cc_sep", or "cc_vd"; CC variants require noise_embeddings_cc
-sigma: 0.5
-cc_embedding_sigma: null  # CC embedding sigma; null falls back to sigma for CMA-ES or snes_sigma for SNES
-cc_noise_sigma: null  # CC latent-noise sigma; null falls back to sigma for CMA-ES or snes_sigma for SNES
 save_gens: false
-
-# SNES defaults (used if not overridden by optuna.search_space.snes)
-snes_num_generations: 15
-snes_pop_size: 16
-snes_sigma: 0.5
-snes_eta_mu: 1.0
-snes_eta_sigma: null  # null uses the dimension-dependent SNES default
-cc_snes_num_generations: null  # CC-SNES generations; null falls back to snes_num_generations
-cc_snes_pop_size: null  # CC-SNES sub-population size; null falls back to snes_pop_size
-cc_embedding_eta_mu: null  # CC-SNES embedding mean learning rate; null falls back to snes_eta_mu
-cc_embedding_eta_sigma: null  # CC-SNES embedding sigma learning rate; null falls back to snes_eta_sigma
-cc_noise_eta_mu: null  # CC-SNES noise mean learning rate; null falls back to snes_eta_mu
-cc_noise_eta_sigma: null  # CC-SNES noise sigma learning rate; null falls back to snes_eta_sigma
-
-# CoSyNE defaults (used if not overridden by optuna.search_space.cosyne)
-cosyne_num_generations: 15
-cosyne_pop_size: 16
-cosyne_init_range: 0.1
-cosyne_mutation_probability: 0.3
-cosyne_mutation_scale: 0.3
-cosyne_parent_count: 4
-cosyne_offspring_count: 4
-
-# GOMEA defaults (used if not overridden by optuna.search_space.gomea)
 gomea_num_generations: 15
 gomea_pop_size: 16
-gomea_init_range: 0.1
-gomea_linkage_model: "linkage_tree"
+gomea_linkage_model: linkage_tree
 gomea_bmp_block_size: 2
 gomea_max_evaluations: null
-
-# Zero-order defaults (used if not overridden by optuna.search_space.zero_order)
-zero_order_num_generations: 15
-zero_order_pop_size: 16
-zero_order_sigma: 0.5
-
-# Adam defaults (used if not overridden by optuna.search_space.adam)
-num_iterations: 50
-adam_lr: 5e-3
-adam_weight_decay: 0
-adam_eps: 1e-8
-adam_beta1: 0.9
-adam_beta2: 0.999
-adam_max_grad_norm: null
-
-# GA defaults (used if not overridden by optuna.search_space.ga)
-ga_mutation_std: 0.05
-ga_elite_count: 1
-ga_crossover_operator: "uniform"
+ga_elite_count: 2
+ga_crossover_operator: uniform
 ga_crossover_rate: 0.8
-ga_crossover_alpha: 0.5
-ga_blend_alpha: 0.5
-ga_mutation_operator: "gaussian"
+ga_mutation_operator: replacement
 ga_mutation_rate: 0.1
-
-# Random sampler defaults (used if not overridden by optuna.search_space.random_sampler)
 num_images_to_generate: 20
-random_sampler_sigma: 0.1
-
-# Time limit in seconds (null -> use num_generations/num_iterations)
 time_limit_seconds: null
-
 optuna:
   n_trials: 30
-  direction: "maximize"
-  metric: "auto"  # auto -> combined_score for Adam, max_fitness for population methods
-  study_name: "eigo_optuna_search_sd15_ccsnes_clip"
-  storage: "sqlite:///results_optuna_sd15_ccsnes_clip/optuna.db"
+  direction: maximize
+  metric: auto
+  study_name: eigo_text_tokens
+  storage: sqlite:///results_eigo_optuna_search_tokens/optuna.db
   load_if_exists: true
   catch_trial_errors: true
   sampler:
-    name: "tpe"  # tpe or random
+    name: tpe
     seed: 42
-
   prompt_source:
-    type: "diffusiondb"  # "diffusiondb" or "config"
-    dataset: "poloclub/diffusiondb"
-    subset: "2m_random_1k"
-    split: "train"
-    prompt_column: "prompt"
+    type: diffusiondb
+    dataset: poloclub/diffusiondb
+    subset: 2m_random_1k
+    split: train
+    prompt_column: prompt
     count: 10
     seed: 42
     streaming: false
     require_clip_tokenizable: true
     clip_context_length: 77
-
   plots:
-    enabled: true  # true, false, or a list such as ["optimization_history", "slice"]
-    output_dir: "optuna_plots"
-    include_plotlyjs: "cdn"
-
-  # Supported parameter specs:
-  # - list -> categorical choices
-  # - {type: categorical, choices: [...]}
-  # - {type: float, low: ..., high: ..., log: true|false, step: null}
-  # - {type: int, low: ..., high: ..., log: true|false, step: 1}
+    enabled: true
+    output_dir: optuna_plots
+    include_plotlyjs: cdn
   search_space:
-    adam:
-      adam_lr:
-        type: "float"
-        low: 3e-4
-        high: 5e-3
-        log: true
-      adam_weight_decay:
-        type: "categorical"
-        choices: [0.0, 1e-6, 1e-4, 1e-3, 1e-2]
-      adam_beta1:
-        type: "float"
-        low: 0.7
-        high: 0.95
-      adam_beta2:
-        type: "float"
-        low: 0.9
-        high: 0.999
-      adam_eps:
-        type: "float"
-        low: 1e-8
-        high: 1e-5
-        log: true
-
     ga:
-      # pop_size:
-      #   type: "int"
-      #   low: 10
-      #   high: 50
-      #   step: 10
-      ga_crossover_operator:
-        type: "categorical"
-        choices: ["uniform", "arithmetic", "blend"]
-      ga_mutation_std:
-        type: "float"
-        low: 0.05
-        high: 1.0
-        log: true
-      ga_mutation_operator:
-        type: "categorical"
-        choices: ["gaussian", "cauchy"]
       ga_mutation_rate:
-        type: "float"
-        low: 0.05
-        high: 0.6
-      ga_crossover_rate:
-        type: "float"
-        low: 0.5
-        high: 0.95
-        depends_on:
-          parameter: "ga_crossover_operator"
-          values: ["uniform"]
-      ga_crossover_alpha:
-        type: "float"
-        low: 0.1
-        high: 0.9
-        depends_on:
-          parameter: "ga_crossover_operator"
-          values: ["arithmetic"]
-      ga_blend_alpha:
-        type: "float"
-        low: 0.0
-        high: 1.0
-        depends_on:
-          parameter: "ga_crossover_operator"
-          values: ["blend"]
-      ga_elite_count:
-        type: "int"
-        low: 1
-        high: 3
-
-    cmaes:
-      # pop_size:
-      #   type: "int"
-      #   low: 10
-      #   high: 60
-      #   step: 10
-      sigma:
-        type: "float"
+        type: float
+        low: 0.01
+        high: 0.5
+      token_init_rate:
+        type: float
         low: 0.05
         high: 1.0
-        log: true
-      # For CC-CMA-ES studies, set cmaes_variant to cc/cc_sep and
-      # optimization_target to noise_embeddings_cc, then enable these.
-      # cc_embedding_sigma:
-      #   type: "float"
-      #   low: 0.01
-      #   high: 1.0
-      #   log: true
-      # cc_noise_sigma:
-      #   type: "float"
-      #   low: 0.01
-      #   high: 1.0
-      #   log: true
-
-    snes:
-      # snes_num_generations:
-      #   type: "int"
-      #   low: 5
-      #   high: 50
-      #   step: 5
-      # snes_pop_size:
-      #   type: "int"
-      #   low: 8
-      #   high: 64
-      #   step: 8
-      # For non-CC SNES studies, use optimization_target values other than
-      # noise_embeddings_cc, then tune these shared SNES parameters.
-      # snes_sigma:
-      #   type: "float"
-      #   low: 0.01
-      #   high: 1.0
-      #   log: true
-      # snes_eta_mu:
-      #   type: "float"
-      #   low: 0.1
-      #   high: 1.5
-      # snes_eta_sigma:
-      #   type: "float"
-      #   low: 0.001
-      #   high: 0.1
-      #   log: true
-      # For CC-SNES studies, set optimization_target to noise_embeddings_cc,
-      # then tune these separately.
-      cc_embedding_sigma:
-        type: "float"
-        low: 0.01
-        high: 1.0
-        log: true
-      cc_noise_sigma:
-        type: "float"
-        low: 0.01
-        high: 1.0
-        log: true
-      cc_embedding_eta_mu:
-        type: "float"
-        low: 0.1
-        high: 1.5
-      cc_embedding_eta_sigma:
-        type: "float"
-        low: 0.001
-        high: 0.1
-        log: true
-      cc_noise_eta_mu:
-        type: "float"
-        low: 0.1
-        high: 1.5
-      cc_noise_eta_sigma:
-        type: "float"
-        low: 0.001
-        high: 0.1
-        log: true
-
-    cosyne:
-      # Keep generations fixed when comparing trials so every trial has the same
-      # number of update steps. Enable population search only if unequal total
-      # image-evaluation budgets are acceptable.
-      # cosyne_pop_size:
-      #   type: "categorical"
-      #   choices: [8, 16, 32, 64]
-      cosyne_init_range:
-        type: "float"
-        low: 0.01
-        high: 1.0
-        log: true
-      cosyne_mutation_probability:
-        type: "float"
-        low: 0.05
-        high: 0.6
-      cosyne_mutation_scale:
-        type: "float"
-        low: 0.01
-        high: 1.0
-        log: true
-      cosyne_parent_count:
-        type: "int"
-        low: 2
-        high: 8
-        step: 2
-      cosyne_offspring_count:
-        type: "int"
-        low: 2
-        high: 8
-        step: 2
-
+      ga_crossover_operator:
+      - uniform
+      - one_point
     gomea:
-      gomea_init_range:
-        type: "float"
-        low: 0.01
+      token_init_rate:
+        type: float
+        low: 0.05
         high: 1.0
-        log: true
       gomea_linkage_model:
-        type: "categorical"
-        choices: ["linkage_tree", "block_marginal_product"]
-      gomea_bmp_block_size:
-        type: "categorical"
-        choices: [2, 4, 8, 16]
-        depends_on:
-          parameter: "gomea_linkage_model"
-          values: ["block_marginal_product"]
-
-    zero_order:
-      # zero_order_num_generations:
-      #   type: "int"
-      #   low: 5
-      #   high: 50
-      #   step: 5
-      # zero_order_pop_size:
-      #   type: "int"
-      #   low: 8
-      #   high: 64
-      #   step: 8
-      zero_order_sigma:
-        type: "float"
-        low: 0.01
-        high: 1.0
-        log: true
+      - univariate
+      - linkage_tree
+      - full
+    random_sampler: {}
+token_init_rate: 0.1

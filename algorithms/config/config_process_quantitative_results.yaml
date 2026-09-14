@@ -1,40 +1,8 @@
-# Quantitative result processing config for algorithms/process_quantitative_results.py.
-#
-# Run:
-#   python algorithms/process_quantitative_results.py --config algorithms/config/config_process_quantitative_results.yaml
-#
-# The script selects one row from each prompt-level CSV and aggregates metrics
-# across prompts for each experiment folder.
-
-# Each item can be an experiment folder containing results_* prompt folders, or a
-# parent folder to search recursively for experiment folders.
+# Discrete text encoder token experiments. See README.md for parameter semantics.
 experiment_folders:
-- results_sanasprint/results_adam_sanasprint_clip
-- results_sanasprint/results_adam_sanasprint_imagereward
-- results_sanasprint/results_cosyne_sanasprint_clip
-- results_sanasprint/results_cosyne_sanasprint_hpsv2
-- results_sanasprint/results_cosyne_sanasprint_imagereward
-- results_sanasprint/results_ga_sanasprint_clip
-- results_sanasprint/results_ga_sanasprint_hpsv2
-- results_sanasprint/results_ga_sanasprint_imagereward
-- results_sanasprint/results_sepcmaes_sanasprint_clip
-- results_sanasprint/results_sepcmaes_sanasprint_hpsv2
-- results_sanasprint/results_sepcmaes_sanasprint_imagereward
-- results_sanasprint/results_snes_sanasprint_clip
-- results_sanasprint/results_snes_sanasprint_hpsv2
-- results_sanasprint/results_snes_sanasprint_imagereward
-
-# Output workbook. CSV mirrors are written beside this file.
+- results_ga_tokens
+- results_gomea_tokens
+- results_random_sampler_tokens
 output_excel: results_quantitative_sanasprint_1/quantitative_results_sanasprint_1.xlsx
-
-# Which row to use from each prompt-level CSV before aggregating across prompts:
-#   last: final row in the CSV
-#   best: row with best combined_score/max_fitness
-#   first: initial row
 row_selector: best
-
-# canonical summarizes objective, aesthetic_score, clip_score, image_reward_score,
-# hpsv2_score, pickscore_score, jpeg_size_kb, elapsed_time, and peak_vram_mb when
-# those columns exist. Use auto to summarize every numeric CSV column except basic
-# metadata/step columns, or provide a list of metric names/columns.
 metrics: canonical

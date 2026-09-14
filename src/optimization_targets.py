@@ -1,195 +1,130 @@
+"""Integer search spaces captured at the pipeline's text encoder boundary."""
+from contextlib import contextmanager
 import numpy as np
 import torch
 
 
-PROMPT_EMBEDDINGS = "prompt_embeddings"
-LATENT_NOISE = "latent_noise"
-NOISE_EMBEDDINGS_FLAT = "noise_embeddings_flat"
-NOISE_EMBEDDINGS_CC = "noise_embeddings_cc"
-
-
 def resolve_optimization_target(parameters):
-    target = str(parameters.get("optimization_target", PROMPT_EMBEDDINGS)).lower().replace("-", "_")
-    aliases = {
-        "prompt": PROMPT_EMBEDDINGS,
-        "prompts": PROMPT_EMBEDDINGS,
-        "embedding": PROMPT_EMBEDDINGS,
-        "embeddings": PROMPT_EMBEDDINGS,
-        "text_embeddings": PROMPT_EMBEDDINGS,
-        "prompt_embeddings": PROMPT_EMBEDDINGS,
-        "latent": LATENT_NOISE,
-        "latents": LATENT_NOISE,
-        "noise": LATENT_NOISE,
-        "latent_noise": LATENT_NOISE,
-        "noise_latent": LATENT_NOISE,
-        "noise_embeddings_flat": NOISE_EMBEDDINGS_FLAT,
-        "noise_embeddings": NOISE_EMBEDDINGS_FLAT,
-        "latent_embeddings_flat": NOISE_EMBEDDINGS_FLAT,
-        "latent_embeddings": NOISE_EMBEDDINGS_FLAT,
-        "embeddings_noise_flat": NOISE_EMBEDDINGS_FLAT,
-        "embeddings_noise": NOISE_EMBEDDINGS_FLAT,
-        "joint": NOISE_EMBEDDINGS_FLAT,
-        "joint_flat": NOISE_EMBEDDINGS_FLAT,
-        "noise_embeddings_cc": NOISE_EMBEDDINGS_CC,
-        "latent_embeddings_cc": NOISE_EMBEDDINGS_CC,
-        "embeddings_noise_cc": NOISE_EMBEDDINGS_CC,
-        "joint_cc": NOISE_EMBEDDINGS_CC,
-    }
-    if target not in aliases:
-        valid = ", ".join(sorted({
-            PROMPT_EMBEDDINGS,
-            LATENT_NOISE,
-            NOISE_EMBEDDINGS_FLAT,
-            NOISE_EMBEDDINGS_CC,
-        }))
-        raise ValueError(f"Invalid optimization_target '{target}'. Expected one of: {valid}.")
-    return aliases[target]
+    target = parameters.get('optimization_target', 'text_tokens')
+    if target != 'text_tokens':
+        raise ValueError('Only optimization_target: text_tokens is supported.')
+    return target
 
 
-def build_target_state(target_name, prompt_embeds, pooled_prompt_embeds, latents=None):
-    state = {
-        "target_name": target_name,
-        "prompt_shape": tuple(prompt_embeds.shape),
-        "pooled_shape": tuple(pooled_prompt_embeds.shape),
-        "latent_shape": None if latents is None else tuple(latents.shape),
-        "prompt_embeds": prompt_embeds.detach().clone().to(torch.float32),
-        "pooled_prompt_embeds": pooled_prompt_embeds.detach().clone().to(torch.float32),
-        "latents": None if latents is None else latents.detach().clone().to(torch.float32),
-    }
+class TokenSpace:
+    """Preserve backend tokenization, masks, special tokens and pooling behavior.
 
-    if target_name == PROMPT_EMBEDDINGS:
-        state["initial_vector"] = torch.cat([
-            state["prompt_embeds"].flatten(),
-            state["pooled_prompt_embeds"].flatten(),
-        ]).cpu().numpy()
-    elif target_name == LATENT_NOISE:
-        if state["latents"] is None:
-            raise ValueError("Latent noise optimization requires initial latents.")
-        state["initial_vector"] = state["latents"].flatten().cpu().numpy()
-    elif target_name == NOISE_EMBEDDINGS_FLAT:
-        if state["latents"] is None:
-            raise ValueError("Joint noise/embedding optimization requires initial latents.")
-        state["initial_vector"] = torch.cat([
-            state["prompt_embeds"].flatten(),
-            state["pooled_prompt_embeds"].flatten(),
-            state["latents"].flatten(),
-        ]).cpu().numpy()
-    elif target_name == NOISE_EMBEDDINGS_CC:
-        if state["latents"] is None:
-            raise ValueError("CC noise/embedding optimization requires initial latents.")
-        state["initial_embedding_vector"] = torch.cat([
-            state["prompt_embeds"].flatten(),
-            state["pooled_prompt_embeds"].flatten(),
-        ]).cpu().numpy()
-        state["initial_noise_vector"] = state["latents"].flatten().cpu().numpy()
-        state["initial_vector"] = cc_components_to_vector(
-            state["initial_embedding_vector"],
-            state["initial_noise_vector"],
-        )
-    else:
-        raise ValueError(f"Unsupported optimization target: {target_name}")
+    Each encoder has its own vocabulary and mutable coordinates. Replacement
+    occurs only on its first (positive prompt) forward call. The pipeline still
+    handles negative prompts and all backend-specific embedding transformations.
+    """
+    def __init__(self, engine, prompt):
+        self.engine, self.prompt = engine, prompt
+        self.parts = []
+        handles = []
+        try:
+            for suffix in ('', '_2', '_3'):
+                encoder = getattr(engine.pipe, 'text_encoder' + suffix, None)
+                tokenizer = getattr(engine.pipe, 'tokenizer' + suffix, None)
+                if encoder is None or tokenizer is None:
+                    continue
+                part = dict(name='text_encoder' + suffix, encoder=encoder, tokenizer=tokenizer)
+                self.parts.append(part)
+                def capture(module, args, kwargs, part=part):
+                    if 'ids' not in part:
+                        ids = kwargs.get('input_ids', args[0] if args else None)
+                        if ids is None or ids.ndim != 2 or ids.shape[0] != 1:
+                            raise ValueError('Expected one tokenized positive prompt per encoder.')
+                        part['ids'] = ids.detach().clone()
+                        part['mask'] = kwargs.get('attention_mask')
+                handles.append(encoder.register_forward_pre_hook(capture, with_kwargs=True))
+            with torch.no_grad():
+                engine._encode_prompt_embeddings(prompt)
+        finally:
+            for handle in handles:
+                handle.remove()
+        self.parts = [p for p in self.parts if 'ids' in p]
+        if not self.parts:
+            raise ValueError('No supported text encoder input_ids were captured.')
+        initial, self.domains = [], []
+        for part in self.parts:
+            ids = part['ids'].cpu().numpy().reshape(-1)
+            specials = part['tokenizer'].all_special_ids
+            mutable = ~np.isin(ids, specials)
+            if part['mask'] is not None:
+                mutable &= part['mask'].detach().cpu().numpy().reshape(-1).astype(bool)
+            part['positions'] = np.flatnonzero(mutable)
+            vocab = part['tokenizer'].get_vocab().values()
+            size = part['encoder'].get_input_embeddings().num_embeddings
+            allowed = np.array(sorted(set(vocab) - set(specials)), dtype=np.int64)
+            allowed = allowed[(allowed >= 0) & (allowed < size)]
+            if not len(allowed):
+                raise ValueError('Encoder vocabulary has no non-special tokens.')
+            part['start'] = len(initial)
+            initial.extend(ids[mutable].tolist())
+            self.domains.extend([allowed] * int(mutable.sum()))
+            part['end'] = len(initial)
+        self.initial = np.asarray(initial, dtype=np.int64)
+        if not len(self.initial):
+            raise ValueError('Prompt has no mutable non-special tokens.')
 
-    return state
+    def validate(self, vector):
+        vector = np.asarray(vector)
+        if vector.shape != self.initial.shape or not np.issubdtype(vector.dtype, np.integer):
+            raise ValueError('Candidate must be an integer vector matching the token space.')
+        for value, domain in zip(vector, self.domains):
+            i = np.searchsorted(domain, value)
+            if i == len(domain) or domain[i] != value:
+                raise ValueError(f'Invalid token ID: {value}')
+        return vector
 
+    def sample(self, rng, base=None, rate=1.0):
+        if not 0 <= rate <= 1:
+            raise ValueError('Token replacement rate must be between 0 and 1.')
+        vector = self.initial.copy() if base is None else self.validate(base).copy()
+        for i in np.flatnonzero(rng.random(len(vector)) < rate):
+            vector[i] = rng.choice(self.domains[i])
+        return vector
 
-def tensors_from_vector(vector, state, device):
-    target_name = state["target_name"]
-    if target_name == PROMPT_EMBEDDINGS:
-        prompt_size = int(np.prod(state["prompt_shape"]))
-        pooled_size = int(np.prod(state["pooled_shape"]))
-        prompt_embeds = torch.tensor(vector[:prompt_size], dtype=torch.float32, device=device).view(state["prompt_shape"])
-        pooled_prompt_embeds = torch.tensor(vector[prompt_size:prompt_size + pooled_size], dtype=torch.float32, device=device).view(state["pooled_shape"])
-        latents = state["latents"]
-        if latents is not None:
-            latents = latents.to(device=device, dtype=torch.float32)
-    elif target_name == LATENT_NOISE:
-        prompt_embeds = state["prompt_embeds"].to(device=device, dtype=torch.float32)
-        pooled_prompt_embeds = state["pooled_prompt_embeds"].to(device=device, dtype=torch.float32)
-        latents = torch.tensor(vector, dtype=torch.float32, device=device).view(state["latent_shape"])
-    elif target_name in {NOISE_EMBEDDINGS_FLAT, NOISE_EMBEDDINGS_CC}:
-        prompt_size = int(np.prod(state["prompt_shape"]))
-        pooled_size = int(np.prod(state["pooled_shape"]))
-        latent_size = int(np.prod(state["latent_shape"]))
-        vector = cc_components_to_vector(*vector) if is_cc_component_vector(vector) else vector
-        prompt_end = prompt_size
-        pooled_end = prompt_end + pooled_size
-        latent_end = pooled_end + latent_size
-        if len(vector) != latent_end:
-            raise ValueError(
-                f"Expected vector length {latent_end} for {target_name}, got {len(vector)}."
-            )
-        prompt_embeds = torch.tensor(vector[:prompt_end], dtype=torch.float32, device=device).view(state["prompt_shape"])
-        pooled_prompt_embeds = torch.tensor(vector[prompt_end:pooled_end], dtype=torch.float32, device=device).view(state["pooled_shape"])
-        latents = torch.tensor(vector[pooled_end:latent_end], dtype=torch.float32, device=device).view(state["latent_shape"])
-    else:
-        raise ValueError(f"Unsupported optimization target: {target_name}")
-    return prompt_embeds, pooled_prompt_embeds, latents
+    def token_ids(self, vector, part):
+        ids = part['ids'].clone()
+        ids[0, part['positions']] = torch.as_tensor(
+            vector[part['start']:part['end']], device=ids.device, dtype=ids.dtype)
+        return ids
 
+    @contextmanager
+    def inject(self, vector):
+        vector = self.validate(vector)
+        handles, seen = [], set()
+        try:
+            for part in self.parts:
+                def replace(module, args, kwargs, part=part):
+                    if part['name'] in seen:
+                        return
+                    seen.add(part['name'])
+                    ids = self.token_ids(vector, part)
+                    if 'input_ids' in kwargs:
+                        kwargs = dict(kwargs, input_ids=ids)
+                    else:
+                        args = (ids,) + args[1:]
+                    return args, kwargs
+                handles.append(part['encoder'].register_forward_pre_hook(replace, with_kwargs=True))
+            yield
+            if len(seen) != len(self.parts):
+                raise RuntimeError('Pipeline did not call every captured text encoder.')
+        finally:
+            for handle in handles:
+                handle.remove()
 
-def adam_parameters_from_state(state):
-    if state["target_name"] == PROMPT_EMBEDDINGS:
-        trainable = [
-            torch.nn.Parameter(state["prompt_embeds"].clone()),
-            torch.nn.Parameter(state["pooled_prompt_embeds"].clone()),
-        ]
-        fixed = {
-            "prompt_embeds": None,
-            "pooled_prompt_embeds": None,
-            "latents": state["latents"],
-        }
-    elif state["target_name"] == LATENT_NOISE:
-        trainable = [torch.nn.Parameter(state["latents"].clone())]
-        fixed = {
-            "prompt_embeds": state["prompt_embeds"],
-            "pooled_prompt_embeds": state["pooled_prompt_embeds"],
-            "latents": None,
-        }
-    elif state["target_name"] in {NOISE_EMBEDDINGS_FLAT, NOISE_EMBEDDINGS_CC}:
-        trainable = [
-            torch.nn.Parameter(state["prompt_embeds"].clone()),
-            torch.nn.Parameter(state["pooled_prompt_embeds"].clone()),
-            torch.nn.Parameter(state["latents"].clone()),
-        ]
-        fixed = {
-            "prompt_embeds": None,
-            "pooled_prompt_embeds": None,
-            "latents": None,
-        }
-    else:
-        raise ValueError(f"Unsupported optimization target: {state['target_name']}")
-    return trainable, fixed
+    def encode(self, vector):
+        with torch.no_grad(), self.inject(vector):
+            return self.engine._encode_prompt_embeddings(self.prompt)
 
-
-def adam_tensors(trainable, fixed, target_name):
-    if target_name == PROMPT_EMBEDDINGS:
-        return trainable[0], trainable[1], fixed["latents"]
-    if target_name == LATENT_NOISE:
-        return fixed["prompt_embeds"], fixed["pooled_prompt_embeds"], trainable[0]
-    if target_name in {NOISE_EMBEDDINGS_FLAT, NOISE_EMBEDDINGS_CC}:
-        return trainable[0], trainable[1], trainable[2]
-    raise ValueError(f"Unsupported optimization target: {target_name}")
-
-
-def clone_best_adam_tensors(trainable, fixed, target_name):
-    prompt_embeds, pooled_prompt_embeds, latents = adam_tensors(trainable, fixed, target_name)
-    return [
-        prompt_embeds.detach().clone(),
-        pooled_prompt_embeds.detach().clone(),
-        None if latents is None else latents.detach().clone(),
-    ]
-
-
-def is_cc_component_vector(vector):
-    return (
-        isinstance(vector, (tuple, list))
-        and len(vector) == 2
-        and not torch.is_tensor(vector[0])
-        and not torch.is_tensor(vector[1])
-    )
-
-
-def cc_components_to_vector(embedding_vector, noise_vector):
-    return np.concatenate([
-        np.asarray(embedding_vector, dtype=np.float64).reshape(-1),
-        np.asarray(noise_vector, dtype=np.float64).reshape(-1),
-    ])
+    def artifact(self, vector):
+        vector = self.validate(vector)
+        return {'optimization_target': 'text_tokens', 'original_prompt': self.prompt,
+                'tokens': vector.tolist(), 'encoders': {
+                    p['name']: {'input_ids': self.token_ids(vector, p)[0].cpu().tolist(),
+                                'mutable_positions': p['positions'].tolist(),
+                                'decoded_text': p['tokenizer'].decode(self.token_ids(vector, p)[0].cpu().tolist())}
+                    for p in self.parts}}

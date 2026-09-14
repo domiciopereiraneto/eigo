@@ -1,185 +1,113 @@
-# EIGO
+# EIGO: discrete text token optimization
 
-Evolutionary Image Generation Optimization (EIGO) is an experiment framework for inference-time optimization of text-to-image diffusion generation. It keeps the image generator fixed and searches over prompt embeddings or initial latent noise using gradient-based, evolutionary, and random-search baselines.
+EIGO optimizes the integer token IDs consumed by diffusion models' text encoders.
+The supported methods are `ga`, `gomea`, and `random_sampler`; the only
+`optimization_target` is `text_tokens`.
 
-The core implementation is the `Eigo` class in [eigo.py](/home/posgrad/phd2025/dneto/eigo_old/eigo.py). The `algorithms/` directory contains runnable entrypoints for single-prompt runs, batched prompt-dataset experiments, hyperparameter search, scheduled runs, and result processing.
+The existing SD (including DPO UNet replacements), SDXL, FLUX, PixArt, LCM,
+Sana and Sana Sprint loaders remain available. Each pipeline performs its native
+prompt preprocessing. EIGO captures the positive input IDs at each text encoder,
+then replaces only non-special, non-padding positions with valid IDs from that
+encoder's tokenizer vocabulary. Multi-encoder models use separate token segments
+and vocabularies. Sequence lengths, attention masks, negative prompts and special
+tokens remain fixed. For backends that add instruction text, non-special tokens
+in that instruction are also part of the search space.
 
-## Main Capabilities
+Candidates are encoded directly from IDs, without decoding and retokenizing.
+The encoders and diffusion model are frozen. Every candidate in a run uses the
+same diffusion seed; only the tokens change. Fitness compares the generated image
+against the **original prompt**, using the configured aesthetic, CLIP, ImageReward,
+HPSv2, PickScore and JPEG-size objectives. Candidate evaluation is sequential so
+backend-specific masks and encoder state remain associated with each candidate.
 
-- Optimize continuous prompt embeddings, latent noise, a joined noise/embedding vector, or separate noise/embedding sub-vectors for cooperative coevolution without retraining the diffusion model.
-- Run AdamW, GA, CMA-ES, sep-CMA-ES, VD-CMA, CC-CMA-ES, CC-sep-CMA-ES, SNES, CC-SNES, CoSyNE, GOMEA, zero-order search, and random sampling.
-- Score candidates with CLIPScore, LAION aesthetic predictors, ImageReward, HPSv2, PickScore, and JPEG-size objectives.
-- Run prompt batches from Parti Prompts, DrawBench, or compatible Hugging Face datasets.
-- Tune method hyperparameters with Optuna.
-- Produce quantitative summaries, runcharts, optimization-step grids, and prompt-by-algorithm image grids.
-
-## Repository Layout
-
-```text
-eigo.py                                      # Shared optimization backend
-src/
-  optimization_targets.py                    # Prompt-embedding, latent-noise, joint, and CC target helpers
-  aesthetic_evaluation.py                    # Aesthetic predictor wrappers
-algorithms/
-  eigo_single_prompt.py                      # One prompt, one optimizer
-  run_experiments.py                         # Prompt-dataset batch experiments
-  experiments_schedule.py                    # Sequential batch-run launcher
-  eigo_grid_search.py                        # Cartesian parameter sweeps
-  eigo_optuna_search.py                      # Optuna hyperparameter search
-  optuna_schedule.py                         # Sequential Optuna launcher
-  process_quantitative_results.py            # Tables and spreadsheets
-  process_runchart_results.py                # Metric-vs-NFE/time plots
-  create_optimization_step_grid.py           # Prompt x optimization-step image grids
-  create_prompt_algorithm_grid.py            # Prompt x algorithm best-image grids
-  fill_zero_weight_metrics.py                # Backfill metrics that were skipped during optimization
-  config/                                    # YAML configs for each entrypoint
-environment.yml                              # Recommended Conda environment
-requirements.txt                             # Pip dependency list
-dependencies.yml                             # Full Conda export for stricter reproduction
-```
-
-## Setup
-
-Create the recommended Conda environment:
+## Setup and entry points
 
 ```bash
 conda env create -f environment.yml
 conda activate eigo
-```
-
-If you prefer pip inside an existing Python 3.10 environment:
-
-```bash
-pip install -r requirements.txt
-```
-
-The first run may download model checkpoints and prompt datasets from Hugging Face and the scorer packages. Make sure the target machine has enough disk space and GPU memory for the selected model backend.
-
-## Configuration
-
-Most scripts are configured with YAML files in [algorithms/config](/home/posgrad/phd2025/dneto/eigo_old/algorithms/config). The most commonly edited fields are:
-
-- `model_id`, `model_backend`, `torch_dtype`, `height`, `width`, `num_inference_steps`, and `guidance_scale`
-- `optimization_target`: `prompt_embeddings`, `latent_noise`, `noise_embeddings_flat`, or `noise_embeddings_cc`
-- `optimization_method`: `adam`, `ga`, `cmaes`, `snes`, `cosyne`, `gomea`, `zero_order`, or `random_sampler`
-- `aesthetic_predictor`: `0` for Simulacra, `1` for LAION V1, or `2` for LAION V2
-- objective weights such as `clip_score_weight`, `image_reward_score_weight`, and `hpsv2_score_weight`
-- method parameters such as `num_generations`, `pop_size`, `sigma`, `snes_sigma`, `cosyne_mutation_scale`, `gomea_init_range`, and `adam_lr`
-- `results_folder`, which controls where artifacts are written
-
-For CC-CMA-ES, set `optimization_method: cmaes`, `optimization_target: noise_embeddings_cc`, and `cmaes_variant` to `cc`, `cc_sep`, or `cc_vd`. For CC-SNES, set `optimization_method: snes` and `optimization_target: noise_embeddings_cc`. Both CC implementations keep the noise and embedding vectors as separate sub-populations and evaluate both sub-populations once per generation. Use `cc_embedding_sigma` and `cc_noise_sigma` to set separate initial search scales; either can be `null` or omitted to fall back to `sigma` for CMA-ES or `snes_sigma` for SNES. For CC-SNES, `cc_embedding_eta_mu`, `cc_embedding_eta_sigma`, `cc_noise_eta_mu`, and `cc_noise_eta_sigma` can set separate SNES adaptation rates; `null` or omitted values fall back to the shared `snes_eta_mu` and `snes_eta_sigma` settings.
-
-Set `evaluate_zero_weight_metrics: false` to avoid loading scorer models whose weights are zero. This is useful for reducing AdamW memory use. Set it to `true` only when zero-weight metrics should still be logged for analysis.
-
-## Single-Prompt Runs
-
-Edit [algorithms/config/config_eigo.yaml](/home/posgrad/phd2025/dneto/eigo_old/algorithms/config/config_eigo.yaml), then run:
-
-```bash
 python algorithms/eigo_single_prompt.py
-```
-
-This runs one prompt with the optimizer selected in `optimization_method` and saves images, CSV metrics, plots, and the effective config under `results_folder`.
-
-## Batch Experiments
-
-Edit [algorithms/config/config_run_experiments.yaml](/home/posgrad/phd2025/dneto/eigo_old/algorithms/config/config_run_experiments.yaml), then run:
-
-```bash
 python algorithms/run_experiments.py --config algorithms/config/config_run_experiments.yaml
-```
-
-The batch runner samples prompts from `nateraw/parti-prompts` or `sayakpaul/drawbench`, or from another compatible Hugging Face dataset if `prompt_dataset_path` is provided. Use `use_entire_dataset`, `prompt_index_range`, `prompt_per_categorie`, `prompt_sample_seed`, `seed`, and `seed_path` to control prompt and seed selection.
-
-To run several configured batches sequentially:
-
-```bash
-python algorithms/experiments_schedule.py \
-  --base-config algorithms/config/config_run_experiments.yaml \
-  --schedule algorithms/config/experiments_schedule.yaml
-```
-
-Each `runs` entry in the schedule is recursively merged onto the base config and launched as a separate batch.
-
-## Hyperparameter Search
-
-Edit [algorithms/config/config_eigo_optuna_search.yaml](/home/posgrad/phd2025/dneto/eigo_old/algorithms/config/config_eigo_optuna_search.yaml), then run:
-
-```bash
+python algorithms/experiments_schedule.py
+python algorithms/eigo_grid_search.py --config algorithms/config/config_eigo_grid_search.yaml
 python algorithms/eigo_optuna_search.py --config algorithms/config/config_eigo_optuna_search.yaml
+python algorithms/optuna_schedule.py
 ```
 
-Use `--dry-run` to print the enabled methods and search spaces without launching trials:
+Model checkpoints and enabled scoring models must be available locally or
+accessible through their providers. Set `cuda: cpu` for CPU execution. Single
+prompt settings live in `algorithms/config/config_eigo.yaml`; batch settings live
+in `config_run_experiments.yaml`. Schedules merge their overrides onto the
+corresponding base config. Grid search and Optuna expose only the three methods.
+Old continuous-search configs must be migrated; old optimization targets fail
+validation.
+
+## Search parameters
+
+| Parameter | Meaning |
+| --- | --- |
+| `token_init_rate` | Probability of replacing each token when initializing GA/GOMEA populations (0–1). The original prompt is included. |
+| `num_generations`, `pop_size` | GA generations and population size; `pop_size` also groups random samples for reporting. |
+| `ga_mutation_rate` | Independent probability of vocabulary replacement per token. |
+| `ga_mutation_operator` | `replacement` or `none`. |
+| `ga_crossover_operator` | `uniform` or `one_point`. |
+| `ga_crossover_rate` | Probability of inheriting from the first parent in uniform crossover. |
+| `ga_elite_count` | Number of retained individuals; at least 1 and smaller than population size. Parents use binary tournament selection. |
+| `gomea_num_generations`, `gomea_pop_size` | GOMEA generations and population size. |
+| `gomea_linkage_model` | `linkage_tree`, `static_linkage_tree`, `univariate`, `full`, or `block_marginal_product`. |
+| `gomea_bmp_block_size` | Positive block length for the block linkage model. |
+| `gomea_max_evaluations` | Optional cap on candidate evaluations, excluding the baseline. Null uses the generation limit. |
+| `num_images_to_generate` | Number of independent random token candidates, excluding the baseline. |
+| `time_limit_seconds` | Optional search deadline checked between candidate evaluations. An in-flight generation call can finish after the deadline. |
+
+GOMEA is implemented locally for categorical variables. Linkage trees use token
+mutual information and average-linkage clustering. Optimal mixing accepts
+non-worsening donor substitutions, with elitist forced improvement when mixing
+stalls. A static tree is learned once; the ordinary tree is rebuilt each
+generation. Tree construction can be costly for very long prompts; univariate
+and block models avoid the pairwise linkage computation.
+
+Random sampling draws each mutable position independently and uniformly from its
+encoder's non-special vocabulary. It does not search random diffusion seeds.
+
+## Results and replay
+
+Each prompt run saves:
+
+- `config.yaml`, `initial_tokens.json`, and `best_tokens.json` with complete
+  per-encoder IDs, mutable positions and decoded text for inspection.
+- `candidates.jsonl` with every evaluated candidate's integer vector, seed,
+  generation and objective score.
+- `it_0.jpg`, `best_N.jpg`, `best_all.jpg`, and optional `gen_N/id_M.jpg` images.
+- `fitness_results.csv` and plots, including cumulative candidate `evaluations`
+  and `best_fitness`. The baseline is excluded from that count; run charts add it
+  when calculating diffusion function evaluations.
+
+Decoded text is descriptive: re-tokenizing it may produce different IDs. Replay
+an artifact using the same model, original prompt and configuration:
+
+```python
+import json
+import numpy as np
+from eigo import Eigo
+from src.optimization_targets import TokenSpace
+
+engine = Eigo(config)
+artifact = json.load(open("best_tokens.json"))
+space = TokenSpace(engine, artifact["original_prompt"])
+pe, pooled = space.encode(np.asarray(artifact["tokens"], dtype=np.int64))
+image = engine.generate_image_from_tensors(pe, pooled, config["seed"])
+```
+
+The processing, image-grid and zero-weight metric backfill scripts remain in
+`algorithms/`; their matching configs point to token experiment folders. Report
+readers can still read older CSV schemas, but no old optimizer can be launched.
+
+## Tests
 
 ```bash
-python algorithms/eigo_optuna_search.py \
-  --config algorithms/config/config_eigo_optuna_search.yaml \
-  --dry-run
+python -m unittest discover -s tests -v
 ```
 
-The `optuna` section controls the study name, SQLite storage, sampler, prompt source, objective metric, trial count, and per-method search spaces. Lists are categorical choices; dictionaries can define `float`, `int`, or `categorical` distributions. Conditional parameters use `depends_on`.
-
-To run several Optuna studies sequentially:
-
-```bash
-python algorithms/optuna_schedule.py \
-  --base-config algorithms/config/config_eigo_optuna_search.yaml \
-  --schedule algorithms/config/optuna_schedule.yaml
-```
-
-## Result Processing
-
-Quantitative summaries:
-
-```bash
-python algorithms/process_quantitative_results.py \
-  --config algorithms/config/config_process_quantitative_results.yaml
-```
-
-This writes `quantitative_summary_long.csv`, `quantitative_summary_wide.csv`, `quantitative_prompt_values.csv`, and an Excel workbook.
-
-Runcharts:
-
-```bash
-python algorithms/process_runchart_results.py \
-  --config algorithms/config/config_process_runchart_results.yaml
-```
-
-This writes metric curves by number of function evaluations and elapsed time.
-
-Optimization-step image grids:
-
-```bash
-python algorithms/create_optimization_step_grid.py \
-  --config algorithms/config/config_optimization_step_grid.yaml
-```
-
-Prompt-by-algorithm best-image grids:
-
-```bash
-python algorithms/create_prompt_algorithm_grid.py \
-  --config algorithms/config/config_prompt_algorithm_grid.yaml
-```
-
-Backfill skipped zero-weight metrics for existing runs:
-
-```bash
-python algorithms/fill_zero_weight_metrics.py \
-  --config algorithms/config/config_zero_weight_metrics.yaml
-```
-
-## Output Structure
-
-Experiment folders contain one `results_*` directory per prompt. Depending on the optimizer, each prompt directory contains files such as:
-
-- `config.yaml`
-- `score_results.csv` for AdamW-style optimization
-- `fitness_results.csv` for population and random-search methods
-- generated images, including `it_0` baseline images and best/final outputs
-- plots and summary images
-
-Higher-level processing scripts read these prompt directories and write aggregate CSV, Excel, PNG, or JPG artifacts to the configured output folders.
-
-## License
-
-[![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/)
+Tests use small local encoders and synthetic objectives; no checkpoint downloads
+are needed. Full model runs additionally require the model weights and suitable
+compute resources.

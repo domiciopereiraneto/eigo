@@ -1,53 +1,17 @@
-# Re-score existing EIGO experiment outputs for metrics that were skipped because
-# evaluate_zero_weight_metrics was false during optimization.
-#
-# Each item can be an experiment folder containing results_* prompt folders, or a
-# parent folder that contains multiple such experiment folders.
-experiment_folders: [
-    "results_sanasprint/results_adam_sanasprint_clip",
-    "results_sanasprint/results_adam_sanasprint_imagereward",
-    "results_sanasprint/results_cosyne_sanasprint_clip",
-    "results_sanasprint/results_cosyne_sanasprint_hpsv2",
-    "results_sanasprint/results_cosyne_sanasprint_imagereward",
-    "results_sanasprint/results_ga_sanasprint_clip",
-    "results_sanasprint/results_ga_sanasprint_hpsv2",
-    "results_sanasprint/results_ga_sanasprint_imagereward",
-    "results_sanasprint/results_sepcmaes_sanasprint_clip",
-    "results_sanasprint/results_sepcmaes_sanasprint_hpsv2",
-    "results_sanasprint/results_sepcmaes_sanasprint_imagereward",
-    "results_sanasprint/results_snes_sanasprint_clip",
-    "results_sanasprint/results_snes_sanasprint_hpsv2",
-    "results_sanasprint/results_snes_sanasprint_imagereward"
-]
-
-# Base batch-experiment config used when a prompt folder does not contain config.yaml.
+# Token experiment reporting.
+experiment_folders:
+- results_ga_tokens
+- results_gomea_tokens
+- results_random_sampler_tokens
 base_config: algorithms/config/config_run_experiments.yaml
-
-# By default completed CSVs are written next to the originals as:
-# score_results_completed.csv / fitness_results_completed.csv.
-# Set overwrite: true to replace score_results.csv / fitness_results.csv instead.
 overwrite: true
-output_suffix: "_completed"
+output_suffix: _completed
 backup_original: false
-
-# Completed experiment-level summary files.
 aggregate_csv_name: aggregate_final_metrics_completed.csv
 aggregate_excel_name: aggregate_final_metrics_completed.xlsx
-
-# Optional CUDA override. If null, uses the run config's cuda value.
 cuda: 1
-
-# Scratch folder used only because Eigo creates an output directory when scorer
-# models are initialized. Existing experiment files are still read/written in
-# experiment_folders.
 scorer_results_folder: /tmp/eigo_zero_weight_backfill
-
-# Metrics to calculate. Use "all" or a list with any of:
-# aesthetic_score, clip_score, image_reward_score, hpsv2_score,
-# pickscore_score, jpeg_size_kb.
-# Short aliases like aesthetic, clip, image_reward, hpsv2, pickscore, and jpeg
-# are also accepted.
 metrics_to_calculate:
-  - clip_score
-  - image_reward_score
-  - hpsv2_score
+- clip_score
+- image_reward_score
+- hpsv2_score

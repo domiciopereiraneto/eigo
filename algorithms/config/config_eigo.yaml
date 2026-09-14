@@ -1,118 +1,62 @@
-# Single-prompt config for algorithms/eigo_single_prompt.py.
-#
-# Use this for quick method checks. Batch experiments use
-# config_run_experiments.yaml plus experiments_schedule.yaml.
-"selected_prompt": "an astrounat riding a horse in mars" # Text prompt to guide image generation
-"optimization_method": "cmaes" # "gomea", "snes", "cosyne", "zero_order", "cmaes", "ga", "adam", or "random_sampler"
-
-# General parameters
-"seed": 42  # Default seed value for reproducibility
-"cuda": 0  # GPU device ID to use (e.g. 0 for the first GPU). If no GPU is available falls back to CPU.
-"aesthetic_predictor": 2  # 0: Simulacra, 1: LAION V1, 2: LAION V2
-"num_inference_steps": 50  # Number of inference steps for the diffusion model during image generation; LCM usually works well with 1-8
-"batch_size": 8  # Number of candidates/images to generate and score at once for CMA-ES/GA/zero_order/random_sampler; GOMEA evaluates one callback at a time
-"guidance_scale": 7.5  # Guidance scale for classifier-free guidance (set to 0 for no guidance)
-"lcm_origin_steps": 50  # Original diffusion steps for LCM backends; ignored by other backends
-"height": 512  # Height of the generated image in pixels
-"width": 512  # Width of the generated image in pixels
-"aesthetic_score_weight": 0.0  # Weight for the aesthetic score in the combined fitness function
-"clip_score_weight": 1.0  # Weight for the CLIP score in the combined fitness function
-"image_reward_score_weight": 0.0  # Weight for the ImageReward score in the combined fitness function
-"hpsv2_score_weight": 0.0  # Weight for the HPSv2 score in the combined fitness function
-"pickscore_score_weight": 0.0  # Weight for the PickScore score in the combined fitness function
-"jpeg_size_weight": 0.0  # Weight for JPEG size penalty in combined fitness (smaller is better)
-"max_aesthetic_score": 10  # Maximum possible aesthetic score (used for normalization)
-"max_clip_score": 0.5  # Maximum possible CLIP score (used for normalization)
-"max_image_reward_score": 1.0  # Approximate ImageReward normalization constant
-"max_hpsv2_score": 1.0  # Approximate HPSv2 normalization constant
-"max_pickscore_score": 1.0  # Approximate PickScore normalization constant
-"max_jpeg_size_kb": 1024.0  # JPEG size normalization constant in kilobytes
-"jpeg_quality": 95  # JPEG encoding quality used for saved images and size evaluation
-"image_reward_model": "ImageReward-v1.0"  # ImageReward checkpoint name; set to null to disable ImageReward calculation
-"clip_model_name": "ViT-B/32"  # OpenAI CLIP model used for CLIP score and LAION aesthetic predictors
-"hpsv2_version": "v2.1"  # HPSv2 checkpoint version; set to null to disable HPSv2 calculation
-"pickscore_model": "yuvalkirstain/PickScore_v1"  # PickScore checkpoint name; set to null to disable PickScore calculation
-"pickscore_processor": "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"  # Processor backbone for PickScore; set to null to disable PickScore calculation
-"evaluate_zero_weight_metrics": false  # If false, zero-weight metrics are not loaded/evaluated; recommended for Adam VRAM
-"optimization_target": "prompt_embeddings"  # "prompt_embeddings", "latent_noise", "noise_embeddings_flat", or "noise_embeddings_cc" (CC-CMA-ES/CC-SNES only)
-"model_id": "stable-diffusion-v1-5/stable-diffusion-v1-5" # Model ID (e.g., "mhdang/dpo-sd1.5-text2image-v1", "runwayml/stable-diffusion-v1-5", "stabilityai/stable-diffusion-2-1-base", "black-forest-labs/FLUX.1-schnell", "PixArt-alpha/PixArt-XL-2-1024-MS", "Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers", "Efficient-Large-Model/Sana_1600M_1024px_diffusers", "stabilityai/sdxl-turbo", "SimianLuo/LCM_Dreamshaper_v7")
-"model_backend": "auto"  # Diffusion backend: "auto", "sd", "sdxl", "flux", "pixart", "lcm", "sana", or "sana_sprint"
-"base_model_id": null  # Optional SD base pipeline when model_id is a component repo; DPO SD1.5 defaults to runwayml/stable-diffusion-v1-5
-"unet_model_id": null  # Optional SD UNet replacement repo; DPO SD1.5 uses model_id automatically
-"unet_subfolder": "unet"  # Subfolder for replacement UNet weights
-"torch_dtype": "float16"  # "auto", "float32", "float16", or "bfloat16" (FLUX on GPU usually benefits from bfloat16)
-"max_sequence_length": 256  # Max token length for FLUX/Sana text encoding (ignored for SD/SDXL)
-"use_safetensors": true  # Load model weights from safetensors when available
-"use_multi_gpu": false  # If true and multiple CUDA devices exist, shard the diffusion pipeline across GPUs
-"pipeline_device_map": "balanced"  # Device-map strategy for multi-GPU sharding (e.g., "balanced", "auto")
-"max_memory": null  # Optional per-device memory map, e.g. {"cuda:0":"22GiB","cuda:1":"22GiB","cpu":"64GiB"}
-"enable_gradient_checkpointing": false  # Recommended true for Adam with FLUX/PixArt to reduce activation memory
-"enable_attention_slicing": false  # Enable attention slicing for lower VRAM usage (slower)
-"enable_vae_slicing": false  # Enable VAE slicing for lower VRAM usage
-"enable_vae_tiling": false  # Enable VAE tiling for high-resolution/low-VRAM decoding
-"results_folder": "results_sepcmaes_sd15_imagereward_test"  # Folder to save results including
-
-# CMA-ES, SNES, and zero-order parameters (if selected)
-"num_generations": 15  # Number of generations for the CMA-ES optimization process
-"pop_size": 16  # Population size for CMA-ES/GA/zero-order optimization
-"cmaes_variant": "sep"  # Variant of CMA-ES: "cmaes", "sep", "vd", "cc", "cc_sep", or "cc_vd"; CC variants require noise_embeddings_cc
-"sigma": 0.1  # Search-noise standard deviation for CMA-ES/zero-order optimization
-"cc_embedding_sigma": null  # CC embedding sigma; null falls back to sigma for CMA-ES or snes_sigma for SNES
-"cc_noise_sigma": null  # CC latent-noise sigma; null falls back to sigma for CMA-ES or snes_sigma for SNES
-save_gens: true # Save individuals of each generation to the results folder
-
-# Optional SNES overrides (defaults to num_generations, pop_size, and sigma above)
-"snes_num_generations": 100
-"snes_pop_size": 20
-"snes_sigma": 0.5
-"snes_eta_mu": 1.0  # Mean natural-gradient learning rate
-"snes_eta_sigma": null  # null uses the dimension-dependent SNES default
-"cc_snes_num_generations": null  # CC-SNES generations; null falls back to snes_num_generations
-"cc_snes_pop_size": null  # CC-SNES sub-population size; null falls back to snes_pop_size
-"cc_embedding_eta_mu": null  # CC-SNES embedding mean learning rate; null falls back to snes_eta_mu
-"cc_embedding_eta_sigma": null  # CC-SNES embedding sigma learning rate; null falls back to snes_eta_sigma
-"cc_noise_eta_mu": null  # CC-SNES noise mean learning rate; null falls back to snes_eta_mu
-"cc_noise_eta_sigma": null  # CC-SNES noise sigma learning rate; null falls back to snes_eta_sigma
-
-# CoSyNE parameters
-"cosyne_num_generations": 100
-"cosyne_pop_size": 20
-"cosyne_init_range": 0.5  # Uniform initial perturbation around the target vector
-"cosyne_mutation_probability": 0.3
-"cosyne_mutation_scale": 0.3  # Scale of Cauchy mutation noise
-"cosyne_parent_count": 5
-"cosyne_offspring_count": 5
-
-# GOMEA parameters
-"gomea_num_generations": 15
-"gomea_pop_size": 16
-"gomea_init_range": 0.1  # Uniform initialization range for deltas around the initial target vector
-"gomea_linkage_model": "linkage_tree"  # "linkage_tree", "univariate", "full", "static_linkage_tree", or "block_marginal_product"
-"gomea_bmp_block_size": 2  # Block size for gomea_linkage_model: "block_marginal_product"
-"gomea_max_evaluations": null  # null uses gomea_num_generations * gomea_pop_size
-
-# Adam specific parameters (if selected)
-"num_iterations": 1000  # Number of iterations for the Adam optimization process
-"adam_lr": 1e-3  # Learning rate for the Adam optimizer
-"adam_weight_decay": 0  # Weight decay for the Adam optimizer
-"adam_eps": 1e-8  # Epsilon value for numerical stability in the Adam
-"adam_beta1": 0.9  # Beta1 parameter for the Adam optimizer
-"adam_beta2": 0.999  # Beta2 parameter for the Adam optimizer
-"adam_max_grad_norm": null  # Gradient norm clipping threshold for Adam; set to null or <=0 to disable
-
-# GA specific parameters (if selected)
-"ga_mutation_std": 0.05  # Standard deviation of Gaussian mutation noise
-"ga_elite_count": 2  # Number of top individuals copied unchanged to the next generation
-"ga_crossover_operator": "uniform"  # "uniform", "arithmetic", or "blend" for continuous variables
-"ga_crossover_rate": 0.5  # Per-dimension probability of inheriting from parent A during crossover
-"ga_crossover_alpha": 0.5  # Parent-A weight for arithmetic crossover
-"ga_blend_alpha": 0.5  # BLX-alpha expansion around parent values for blend crossover
-"ga_mutation_operator": "gaussian"  # "gaussian", "cauchy", or "none"
-"ga_mutation_rate": 0.1  # Per-dimension probability of applying mutation noise
-
-# Random sampler specific parameters (if selected)
-"num_images_to_generate": 20  # Number of random seeds/images to evaluate; latent_noise samples random latent vectors
-"random_sampler_sigma": 0.1  # Gaussian perturbation std for noise_embeddings_flat random sampling
-
-# Time limit specification
-time_limit_seconds: null # Time limit in seconds, if null then it follows the number of generations/iterations
+# Discrete text encoder token experiments. See README.md for parameter semantics.
+selected_prompt: an astrounat riding a horse in mars
+optimization_method: ga
+seed: 42
+cuda: 0
+aesthetic_predictor: 2
+num_inference_steps: 50
+guidance_scale: 7.5
+lcm_origin_steps: 50
+height: 512
+width: 512
+aesthetic_score_weight: 0.0
+clip_score_weight: 1.0
+image_reward_score_weight: 0.0
+hpsv2_score_weight: 0.0
+pickscore_score_weight: 0.0
+jpeg_size_weight: 0.0
+max_aesthetic_score: 10
+max_clip_score: 0.5
+max_image_reward_score: 1.0
+max_hpsv2_score: 1.0
+max_pickscore_score: 1.0
+max_jpeg_size_kb: 1024.0
+jpeg_quality: 95
+image_reward_model: ImageReward-v1.0
+clip_model_name: ViT-B/32
+hpsv2_version: v2.1
+pickscore_model: yuvalkirstain/PickScore_v1
+pickscore_processor: laion/CLIP-ViT-H-14-laion2B-s32B-b79K
+evaluate_zero_weight_metrics: false
+optimization_target: text_tokens
+model_id: stable-diffusion-v1-5/stable-diffusion-v1-5
+model_backend: auto
+base_model_id: null
+unet_model_id: null
+unet_subfolder: unet
+torch_dtype: float16
+max_sequence_length: 256
+use_safetensors: true
+use_multi_gpu: false
+pipeline_device_map: balanced
+max_memory: null
+enable_attention_slicing: false
+enable_vae_slicing: false
+enable_vae_tiling: false
+results_folder: results_eigo_tokens
+num_generations: 15
+pop_size: 16
+save_gens: true
+gomea_num_generations: 15
+gomea_pop_size: 16
+gomea_linkage_model: linkage_tree
+gomea_bmp_block_size: 2
+gomea_max_evaluations: null
+ga_elite_count: 2
+ga_crossover_operator: uniform
+ga_crossover_rate: 0.5
+ga_mutation_operator: replacement
+ga_mutation_rate: 0.1
+num_images_to_generate: 20
+time_limit_seconds: null
+token_init_rate: 0.1
