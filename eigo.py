@@ -48,6 +48,9 @@ from io import BytesIO
 from contextlib import nullcontext
 from pathlib import Path
 from transformers import AutoModel, AutoProcessor
+from src.verifier_ensemble import (
+    METRICS, ensemble_run, ensemble_scores, normalize_ensemble_list,
+)
 from src.optimization_targets import (
     LATENT_NOISE,
     NOISE_EMBEDDINGS_CC,
@@ -260,6 +263,13 @@ class Eigo:
     def __init__(self, config_parameters):
         cls = type(self)
         self.parameters = config_parameters
+        self.ensemble_list = normalize_ensemble_list(config_parameters.get("ensemble_list"))
+        if self.ensemble_list and config_parameters.get("optimization_method") in {"adam", "gomea"}:
+            raise ValueError(
+                "ensemble_list requires a population-based optimizer or random_sampler. "
+                "Adam needs differentiable scores; GOMEA caches scalar fitness values "
+                "that cannot be updated when sample ranks change."
+            )
         if "aesthetic_predictor" not in config_parameters and "predictor" in config_parameters:
             config_parameters["aesthetic_predictor"] = config_parameters["predictor"]
         elif (
@@ -445,6 +455,17 @@ class Eigo:
             f"psw{int(self.pickscore_score_weight*100)}_"
             f"jpgw{int(self.jpeg_size_weight*100)}"
         )
+
+        if self.ensemble_list:
+            self.OUTPUT_FOLDER += "_ensemble_" + "-".join(sorted(self.ensemble_list))
+
+        for metric, enabled in (
+            ("image_reward_score", self.use_image_reward),
+            ("hpsv2_score", self.use_hpsv2),
+            ("pickscore_score", self.use_pickscore),
+        ):
+            if metric in self.ensemble_list and not enabled:
+                raise ValueError(f"Ensemble metric {metric} requires its scorer model to be configured.")
 
         # Save the selected prompts and their categories to a text file in the results folder
         os.makedirs(self.OUTPUT_FOLDER, exist_ok=True)
@@ -669,6 +690,8 @@ class Eigo:
         return float(value)
 
     def _should_evaluate_metric(self, metric_name):
+        if self.ensemble_list:
+            return metric_name in self.ensemble_list or self.evaluate_zero_weight_metrics
         if self.evaluate_zero_weight_metrics:
             return True
         metric_weights = {
@@ -1485,6 +1508,9 @@ class Eigo:
         return scores.squeeze().to(torch.float32)
 
     def _combine_metric_components(self, metric_values):
+        if self.ensemble_list:
+            # Raw metrics are ranked jointly by _rank_evaluations, after scoring.
+            return 0.0, {"ensemble_score": 0.0}
         metric_weights = {
             "aesthetic_score": self.aesthetic_score_weight,
             "clip_score": self.clip_score_weight,
@@ -1493,7 +1519,7 @@ class Eigo:
             "pickscore_score": self.pickscore_score_weight,
             "jpeg_size_kb": self.jpeg_size_weight,
         }
-        components = {}
+        components = {"ensemble_score": 0.0}
         total = None
         for metric_name, raw_value in metric_values.items():
             weight = metric_weights.get(metric_name, 0.0)
@@ -1552,6 +1578,9 @@ class Eigo:
         }
 
     def _postprocess_population_results_from_saved_images(self, results, results_folder, selected_prompt):
+        if self.ensemble_list:
+            # Ensemble ranks must be computed jointly, never from one saved image.
+            return results.copy()
         results = results.copy()
         metric_columns = self._population_metric_columns()
         for row_idx in range(len(results)):
@@ -1701,8 +1730,11 @@ class Eigo:
         if save_path is not None:
             jpeg_size_kb = self._save_jpeg(image, save_path)
 
-        # CMA-ES minimizes the function, so we need to invert the score if higher is better
-        return -fitness, aesthetic_score, clip_score, image_reward_score, hpsv2_score, pickscore_score, jpeg_size_kb, components
+        result = (-fitness, aesthetic_score, clip_score, image_reward_score,
+                  hpsv2_score, pickscore_score, jpeg_size_kb, components)
+        if getattr(self, "_ensemble_run", None) is not None:
+            self._ensemble_run.add(image, result)
+        return self._rank_evaluations([result])[0]
 
     def evaluate_batch(self, input_embeddings, seeds, target_state, selected_prompt, save_paths=None):
         if len(input_embeddings) == 0:
@@ -1714,6 +1746,8 @@ class Eigo:
         if len(save_paths) != len(input_embeddings):
             raise ValueError("evaluate_batch requires one save path per input embedding.")
 
+        if getattr(self, "_ensemble_run", None) is not None:
+            self._ensemble_run.cohort += 1
         results = []
         batch_size = self.batch_size
         for batch_start in range(0, len(input_embeddings), batch_size):
@@ -1761,8 +1795,18 @@ class Eigo:
                         jpeg_size_kb,
                         components,
                     ))
+                    if getattr(self, "_ensemble_run", None) is not None:
+                        self._ensemble_run.add(image, results[-1])
 
-        return results
+        return self._rank_evaluations(results)
+
+    def _rank_evaluations(self, results):
+        if not self.ensemble_list:
+            return results
+        samples = [dict(zip(METRICS, result[1:7])) for result in results]
+        scores = ensemble_scores(samples, self.ensemble_list)
+        return [(-float(score), *result[1:7], {**result[7], "ensemble_score": float(score)})
+                for result, score in zip(results, scores)]
 
     def _save_population_plot_results(self, results, results_folder):
         def plot_mean_std(x_axis, m_vec, std_vec, description, title=None, y_label=None, x_label=None):
@@ -1781,7 +1825,8 @@ class Eigo:
         plt.figure(figsize=(10, 6))
         plot_mean_std(results['generation'], results['avg_fitness'], results['std_fitness'], "Fitness")
         plt.plot(results['generation'], results['max_fitness'], 'r-', label="Best Fitness")
-        plt.ylim(0, 1.1)
+        if not self.ensemble_list:
+            plt.ylim(0, 1.1)
         plt.xlabel('Generation')
         plt.ylabel('Fitness')
         plt.grid()
@@ -1918,6 +1963,7 @@ class Eigo:
             results["category"] = [category] + [''] * generation
         return results
 
+    @ensemble_run
     def run_cc_cmaes_optimization(self, seed=None, seed_number=None, prompt=None, category=None, prompt_number=None, cc_method="cmaes"):
         del seed_number
         seed = int(self.parameters["seed"] if seed is None else seed)
@@ -2157,7 +2203,7 @@ class Eigo:
             embedding_es.tell(embedding_solutions, embedding_fitnesses)
             emb_best_idx = int(np.argmin(embedding_fitnesses))
             emb_best_score = -float(embedding_fitnesses[emb_best_idx])
-            if emb_best_score > representative_fitness:
+            if self.ensemble_list or emb_best_score > representative_fitness:
                 best_embedding_vector = np.asarray(embedding_solutions[emb_best_idx], dtype=np.float64).copy()
                 representative_fitness = emb_best_score
             for solution, evaluated in zip(embedding_solutions, embedding_evaluated):
@@ -2184,13 +2230,13 @@ class Eigo:
             noise_es.tell(noise_solutions, noise_fitnesses)
             noise_best_idx = int(np.argmin(noise_fitnesses))
             noise_best_score = -float(noise_fitnesses[noise_best_idx])
-            if noise_best_score > representative_fitness:
+            if self.ensemble_list or noise_best_score > representative_fitness:
                 best_noise_vector = np.asarray(noise_solutions[noise_best_idx], dtype=np.float64).copy()
                 representative_fitness = noise_best_score
             for solution, evaluated in zip(noise_solutions, noise_evaluated):
                 generation_records.append((cc_components_to_vector(best_embedding_vector, solution), evaluated))
 
-            evaluated_values = [record[1] for record in generation_records]
+            evaluated_values = self._rank_evaluations([record[1] for record in generation_records])
             tmp_fitnesses = [row[0] for row in evaluated_values]
             aesthetic_scores = [row[1] for row in evaluated_values]
             clip_scores = [row[2] for row in evaluated_values]
@@ -2350,6 +2396,7 @@ class Eigo:
         self._save_population_plot_results(results, results_folder)
         return results_folder
 
+    @ensemble_run
     def run_cmaes_optimization(self, seed = None, seed_number = None, prompt = None, category = None, prompt_number = None):
         variant = self._normalize_cmaes_variant(self.parameters.get("cmaes_variant", "cmaes"))
         if variant in {"cc", "cc_sep", "cc_vd"}:
@@ -2747,6 +2794,7 @@ class Eigo:
             "univariate, full, static_linkage_tree, block_marginal_product."
         )
 
+    @ensemble_run
     def run_gomea_optimization(self, seed=None, seed_number=None, prompt=None, category=None, prompt_number=None):
         """Optimize the selected target with real-valued GOMEA."""
         try:
@@ -3044,6 +3092,7 @@ class Eigo:
         save_gomea_results(postprocess=True)
         return results_folder
 
+    @ensemble_run
     def run_zero_order_optimization(self, seed=None, seed_number=None, prompt=None, category=None, prompt_number=None):
         """Optimize the selected target by retaining the best Gaussian perturbation."""
         seed = int(self.parameters["seed"] if seed is None else seed)
@@ -3220,6 +3269,7 @@ class Eigo:
             raise ValueError(f"Unsupported GA mutation operator: {operator}")
         return child
 
+    @ensemble_run
     def run_ga_optimization(self, seed = None, seed_number = None, prompt = None, category = None, prompt_number = None):
         if seed is None:
             seed = self.parameters["seed"]
@@ -3601,6 +3651,7 @@ class Eigo:
             sample_seeds.append(candidate)
         return sample_seeds
 
+    @ensemble_run
     def run_random_sampler_optimization(self, seed=None, seed_number=None, prompt=None, category=None, prompt_number=None):
         if seed is None:
             seed = self.parameters["seed"]
@@ -3999,6 +4050,7 @@ class Eigo:
 
         return results_folder
 
+    @ensemble_run
     def run_adam_optimization(self, seed = None, seed_number = None, prompt = None, category = None, prompt_number = None):
 
         def plot_results(results, results_folder):

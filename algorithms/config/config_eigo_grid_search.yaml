@@ -32,6 +32,9 @@ guidance_scale: 0
 lcm_origin_steps: 50
 height: 512
 width: 512
+# Equal-weight metric ranks replace the weighted objective when nonempty.
+# Example: [clip_score, image_reward_score, hpsv2_score]. Adam/GOMEA require [].
+ensemble_list: []  # [] or null disables the ensemble; ensemble_score is 0
 aesthetic_score_weight: 0.5
 clip_score_weight: 0.5
 image_reward_score_weight: 0.0

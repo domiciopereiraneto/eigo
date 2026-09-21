@@ -15,35 +15,40 @@ layout: algorithm_x_prompt
 # results_* prompt folders. Labels become row headers in prompt_x_algorithm and
 # column headers in algorithm_x_prompt.
 algorithms:
-  # - label: Best-of-N
-  #   folder: results_sd15_v3/results_randomsampler_sd15_imagereward
-  # - label: Best-of-N (DPO)
-  #   folder: results_sd15_v3/results_randomsampler_sd15dpo_imagereward
-  - label: AdamW
-    folder: results_sanasprint/results_adam_sanasprint_hpsv2
-  - label: Zero order
-    folder: results_sanasprint/results_zeroorder_sanasprint_hpsv2
-  - label: CoSyNE
-    folder: results_sanasprint/results_cosyne_sanasprint_hpsv2
-  - label: GA
-    folder: results_sanasprint/results_ga_sanasprint_hpsv2
   - label: sep-CMA-ES
-    folder: results_sanasprint/results_sepcmaes_sanasprint_hpsv2
+    folder: results_new/results_sepcmaes_sd15_noise_embeddings_clip
+    #folder: results_new/results_sepcmaes_sd15_noise_embeddings_hpsv2
+    #folder: results_new/results_sepcmaes_sd15_noise_embeddings_imagereward
   - label: SNES
-    folder: results_sanasprint/results_snes_sanasprint_hpsv2
+    folder: results_new/results_snes_sd15_noise_embeddings_clip
+    #folder: results_new/results_snes_sd15_noise_embeddings_hpsv2
+    #folder: results_new/results_snes_sd15_noise_embeddings_imagereward
+  - label: CC-sep-CMA-ES
+    folder: results_new/results_ccsepcmaes_sd15_noise_embeddings_clip
+    #folder: results_new/results_ccsepcmaes_sd15_noise_embeddings_hpsv2
+    #folder: results_new/results_ccsepcmaes_sd15_noise_embeddings_imagereward
+  - label: CC-SNES
+    folder: results_new/results_ccsnes_sd15_noise_embeddings_clip
+    #folder: results_new/results_ccsnes_sd15_noise_embeddings_hpsv2
+    #folder: results_new/results_ccsnes_sd15_noise_embeddings_imagereward
 
 # Prompt folder suffixes to include, e.g. results_LAIONV2_42_1 uses prompt index 1.
 prompt_indices:
+  - 1
+  - 117
   - 118
   - 133
-  - 152
   - 155
-  - 168
   - 174
-  - 179
   - 200
   - 70
-  - 93
+  - 77
+  - 33
+  - 31
+  - 166
+  - 150
+  - 142
+  - 164
 
 # best_all.jpg is the project convention for the best image in a prompt run.
 # If it is missing, fallback_to_latest uses the latest best_N.jpg or it_N.jpg.
@@ -55,7 +60,7 @@ fallback_to_latest: true
 # Supported aliases include objective, aesthetic, clip, image_reward, hpsv2,
 # pickscore, jpeg, or full CSV column names such as max_image_reward_score.
 image_metrics:
-  - hpsv2
+  - pickscore
 
 # Metrics are read from score_results.csv or fitness_results.csv. For optimized
 # images, last usually matches the final/best_all summary row; best selects the
@@ -70,7 +75,7 @@ metric_gap: 4
 include_baseline: true
 baseline_label: Initial Generation
 
-output: results_image_grids/prompt_x_algorithm_best_sanasprint_hpsv2.jpg
+output: results_image_grids/prompt_x_algorithm_best_sd15_clip_pickscore.jpg
 
 tile_size: 160x160
 algorithm_label_width: 90

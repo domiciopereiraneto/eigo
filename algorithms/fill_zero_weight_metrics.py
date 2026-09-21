@@ -195,6 +195,9 @@ class MetricBackfiller:
             config.update(load_yaml(run_config_path))
         if self.cuda_override is not None:
             config["cuda"] = self.cuda_override
+        # Backfill evaluates images individually; preserve the original joint ranks.
+        config["_source_ensemble_list"] = config.get("ensemble_list")
+        config["ensemble_list"] = []
         config["evaluate_zero_weight_metrics"] = True
         config["metrics_to_calculate"] = ",".join(self.metrics_to_calculate)
         if "image_reward_score" not in self.metrics_set:
@@ -322,7 +325,7 @@ class MetricBackfiller:
             if image_path is None:
                 raise FileNotFoundError(f"Missing image for row {row_idx}: {prompt_dir}/it_{iteration}.jpg")
             scores = self.score_image(engine, image_path, prompt)
-            if self.recompute_objective:
+            if self.recompute_objective and not config.get("_source_ensemble_list"):
                 df.at[row_idx, "combined_score"] = scores["fitness"]
                 df.at[row_idx, "combined_loss"] = 1.0 - scores["fitness"]
             for metric in self.metrics_to_calculate:
@@ -391,7 +394,7 @@ class MetricBackfiller:
                 raise FileNotFoundError(f"Missing images for generation {generation} under {prompt_dir}")
             scored = [self.score_image(engine, image_path, prompt) for image_path in image_paths]
             metrics_for_row = list(self.metrics_to_calculate)
-            if self.recompute_objective:
+            if self.recompute_objective and not config.get("_source_ensemble_list"):
                 metrics_for_row.insert(0, "fitness")
             for metric in metrics_for_row:
                 columns = POPULATION_COLUMNS[metric]

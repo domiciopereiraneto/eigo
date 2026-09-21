@@ -183,3 +183,117 @@ Higher-level processing scripts read these prompt directories and write aggregat
 ## License
 
 [![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/)
+
+## GenEval benchmark
+
+`algorithms/run_geneval.py` runs a list of EIGO configurations over the official
+[GenEval prompts](https://github.com/djghosh13/geneval), exports each run's
+`best_all` image, invokes the official evaluator, and writes `geneval_summary.csv`.
+The columns match the GenEval results table: `Model`, `Overall`, `Single object`,
+`Two object`, `Counting`, `Colors`, `Position`, and `Color attribution`.
+Each named algorithm gets one row. Category scores are fractions of correct images;
+Overall is the unweighted mean of the six category scores, as in GenEval.
+
+First install GenEval's dependencies and detector following its
+[setup instructions](https://github.com/djghosh13/geneval#setup). Keep its evaluation
+environment separate from EIGO if needed. Set `geneval_repo`,
+`evaluation.model_path`, and `evaluation.python` in
+`algorithms/config/config_run_geneval.yaml`; the latter can be the absolute path
+to that environment's Python executable. GenEval evaluation requires CUDA.
+The runner does not install dependencies or download detector weights.
+
+```bash
+python algorithms/run_geneval.py --config algorithms/config/config_run_geneval.yaml --dry-run
+python algorithms/run_geneval.py --config algorithms/config/config_run_geneval.yaml
+```
+
+All paths in the YAML are relative to that YAML file (the evaluation Python can
+also be an executable name on PATH). Configuration merges in this order:
+`base_config`, `defaults`, then each algorithm's `parameters`. Use existing EIGO
+parameter names for models, metric weights, optimization targets, and optimizer
+settings. The example config uses SD 1.5 prompt embeddings, sep-CMA-ES, 15
+generations, 16 individuals, and HPSv2 guidance. Add entries to `algorithms` for
+other configurations; their unique `name` becomes the CSV Model label.
+Resolved settings and the exact prompt metadata are saved in each run's manifest.
+
+By default all prompts run with four seeds, yielding four independently optimized
+best images per prompt. Set `seeds: [42]` for one best image per prompt. Candidate
+selection uses the configured EIGO objective; GenEval only evaluates the selected
+images afterward. Existing EIGO JPEG best images are decoded and exported as
+PNGs, retaining their existing JPEG compression rather than regenerating them.
+
+Outputs live under `results_folder/<algorithm-name>/`: `optimization/` retains
+EIGO artifacts, `images/` contains GenEval's numbered prompt/sample layout, and
+`results.jsonl` retains official per-image correctness, reasons, and detector
+results. Generation runs in a child process that exits before the evaluator loads
+its models, releasing generation GPU memory.
+
+Rerunning the same config resumes exported images; changes to prompts, seeds, or
+resolved EIGO settings require a new output folder or algorithm name to prevent
+mixing experiments. Evaluation runs afresh. Stages can also be run separately:
+
+```bash
+python algorithms/run_geneval.py --stage generate
+python algorithms/run_geneval.py --stage evaluate
+python algorithms/run_geneval.py --stage summarize
+```
+
+Use `prompt_index_range: [0, 6]` for a small smoke run in a separate results folder.
+Missing categories and Overall are left blank if a subset does not cover all six
+tasks. Summary generation rejects missing or duplicate per-image results. The
+CSV is replaced only after every configured algorithm has a complete evaluation.
+A full run performs `number of prompts × number of seeds × number of algorithms`
+optimizations, each with its configured population/generation budget.
+
+CPU-only integration contract tests:
+
+```bash
+python -m unittest discover -s tests -p 'test_run_geneval.py'
+```
+
+### Verifier ensemble
+
+Set `ensemble_list` in an EIGO config (single prompt, experiments, grid search,
+Optuna, or GenEval's inherited config/algorithm parameters), for example:
+
+```yaml
+ensemble_list: [clip_score, image_reward_score, hpsv2_score]
+```
+
+A nonempty list replaces the weighted objective with the unweighted mean of
+metric ranks, following the verifier-ensemble description in
+[the paper](https://ieeexplore.ieee.org/document/11091849). Each metric ranks the
+candidates from worst (rank 1) to best (rank N); ties receive their average rank.
+The largest mean rank wins. Metric weights and normalization constants do not
+participate. Listed scorers are loaded even with zero metric weights.
+
+Supported names are `aesthetic_score`, `clip_score`, `image_reward_score`,
+`hpsv2_score`, `pickscore_score`, and `jpeg_size_kb` (smaller JPEG size is better).
+Short names such as `clip`, `image_reward`, `hpsv2`, and `jpeg_size` also work.
+Unknown or duplicate names, and explicitly disabled required models, are errors.
+Omitting the parameter, `ensemble_list: []`, or `ensemble_list: null` preserves
+the existing weighted objective and records an ensemble score of zero.
+
+CMA-ES, SNES, CoSyNE, GA, and zero-order search rank each full candidate population
+before selection, independently of GPU microbatch size. Cooperative CMA-ES/SNES
+rank each subpopulation and adopt its winning representative. Random sampling
+uses ranks within each sampling batch. At completion, **all evaluated samples,
+including the initial image**, are ranked together to select `best_all.jpg`.
+Tied final ensemble scores select the earliest sample. Adam rejects ensemble
+mode because exact ranks have no usable gradients. GOMEA also rejects it because
+its current callback caches fitness values that cannot be reranked together.
+
+`ensemble_samples.csv` records each sample's raw verifier scores, selection
+cohort, within-cohort rank (`selection_ensemble_score`), final run-wide rank
+(`ensemble_score`), and whether it was selected. `ensemble_best.json` records the
+selected sample and metrics. Final `fitness_results.csv` reports generation
+means/standard deviations and the best-so-far score on the common run-wide rank
+scale in `*_ensemble_score` and fitness columns; these final ranks can differ
+from the local ranks used during optimization. Ranks are relative to the sample
+pool and are not absolute quality measurements across runs. Temporary candidate
+JPEGs allow final selection even with `save_gens: false`; they are removed when
+the run ends. Scoring uses the generated tensors, before JPEG compression.
+Ensemble runs have a metric-specific output-folder suffix.
+
+Experiment aggregation includes ensemble scores. Image grids can display them
+by adding `ensemble` to their metric list.

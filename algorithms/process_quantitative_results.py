@@ -12,6 +12,7 @@ import importlib.util
 import os
 import re
 import sys
+from itertools import combinations
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -487,6 +488,77 @@ def summarize_experiment(prompt_values: pd.DataFrame, metadata: dict) -> Tuple[L
     return long_rows, wide_row
 
 
+PAIRWISE_COLUMNS = [
+    "model", "model_backend", "target_variable", "algorithm_a", "algorithm_b",
+    "experiment_a", "experiment_b", "metric", "matched_prompt_count",
+    "median_paired_difference_a_minus_b", "statistic", "p_value",
+    "p_value_holm", "significant", "status",
+]
+
+
+def pairwise_comparisons(prompt_values: pd.DataFrame, metric_names: Sequence[str],
+                         alpha: float = 0.05) -> pd.DataFrame:
+    """Compare experiments on shared prompts; Holm family is the entire table.
+
+    Differences are A minus B in original metric units. Wilcoxon tests a
+    symmetric zero-centered difference distribution, not equality of means.
+    Prompts must be independent blocks; repeated seeds need prior aggregation.
+    """
+    from scipy.stats import wilcoxon
+
+    if not 0 < alpha < 1:
+        raise ValueError("statistics.alpha must be between 0 and 1")
+    rows = []
+    group_columns = ["model", "model_backend", "target_variable"]
+    for group_key, group in prompt_values.groupby(group_columns, dropna=False, sort=True):
+        experiments = []
+        for path, frame in group.groupby("results_folder_path", sort=True):
+            frame = frame.copy()
+            frame["prompt"] = frame["prompt"].fillna("").astype(str).str.strip()
+            if frame["prompt"].eq("").any():
+                raise ValueError(f"Statistical pairing requires nonempty prompt text: {path}")
+            if frame["prompt"].duplicated().any():
+                raise ValueError(f"Duplicate prompt identities in {path}; aggregate repeated seeds first.")
+            experiments.append((path, frame.set_index("prompt")))
+        for (path_a, a), (path_b, b) in combinations(experiments, 2):
+            for metric in metric_names:
+                if metric not in a or metric not in b:
+                    continue
+                paired = pd.concat([a[metric].rename("a"), b[metric].rename("b")],
+                                   axis=1, join="inner")
+                paired = paired.replace([np.inf, -np.inf], np.nan).dropna()
+                differences = paired["a"].to_numpy() - paired["b"].to_numpy()
+                n = len(differences)
+                statistic, p_value = np.nan, np.nan
+                status = "insufficient_pairs" if n < 2 else "ok"
+                if n >= 2:
+                    if np.all(differences == 0):
+                        statistic, p_value = 0.0, 1.0
+                        status = "all_differences_zero"
+                    else:
+                        result = wilcoxon(differences, alternative="two-sided",
+                                          zero_method="wilcox", method="auto")
+                        statistic, p_value = float(result.statistic), float(result.pvalue)
+                rows.append({
+                    **dict(zip(group_columns, group_key)),
+                    "algorithm_a": a["algorithm"].iloc[0],
+                    "algorithm_b": b["algorithm"].iloc[0],
+                    "experiment_a": path_a, "experiment_b": path_b, "metric": metric,
+                    "matched_prompt_count": n,
+                    "median_paired_difference_a_minus_b": float(np.median(differences)) if n else np.nan,
+                    "statistic": statistic, "p_value": p_value,
+                    "p_value_holm": np.nan, "significant": False, "status": status,
+                })
+    result = pd.DataFrame(rows, columns=PAIRWISE_COLUMNS)
+    valid = result["p_value"].dropna().sort_values(kind="stable")
+    if len(valid):
+        adjusted = np.minimum(1.0, np.maximum.accumulate(
+            valid.to_numpy() * np.arange(len(valid), 0, -1)))
+        result.loc[valid.index, "p_value_holm"] = adjusted
+        result.loc[valid.index, "significant"] = adjusted <= alpha
+    return result
+
+
 def output_paths(config: dict) -> Tuple[Path, Path]:
     if config.get("output_excel"):
         excel_path = resolve_path(config["output_excel"])
@@ -545,10 +617,21 @@ def build_quantitative_results(config: dict) -> Tuple[Path, pd.DataFrame, pd.Dat
     summary_wide = pd.DataFrame(wide_rows)
     prompt_values = pd.concat(prompt_value_frames, ignore_index=True) if prompt_value_frames else pd.DataFrame()
 
+    statistics_config = config.get("statistics", {})
+    comparisons = None
+    if statistics_config.get("enabled", False):
+        comparisons = pairwise_comparisons(
+            prompt_values, sorted(summary_long["metric"].unique()),
+            float(statistics_config.get("alpha", 0.05)),
+        )
+
     out_dir, excel_path = output_paths(config)
     summary_long.to_csv(out_dir / "quantitative_summary_long.csv", index=False, na_rep="nan")
     summary_wide.to_csv(out_dir / "quantitative_summary_wide.csv", index=False, na_rep="nan")
     prompt_values.to_csv(out_dir / "quantitative_prompt_values.csv", index=False, na_rep="nan")
+
+    if comparisons is not None:
+        comparisons.to_csv(out_dir / "quantitative_pairwise_tests.csv", index=False, na_rep="nan")
 
     if importlib.util.find_spec("openpyxl") is None:
         raise RuntimeError(
@@ -561,6 +644,9 @@ def build_quantitative_results(config: dict) -> Tuple[Path, pd.DataFrame, pd.Dat
         summary_wide.to_excel(writer, sheet_name="summary", index=False)
         summary_long.to_excel(writer, sheet_name="summary_by_metric", index=False)
         prompt_values.to_excel(writer, sheet_name="prompt_values", index=False)
+        if comparisons is not None:
+            comparisons.to_excel(writer, sheet_name="pairwise_tests", index=False)
+            autosize_excel_columns(writer, "pairwise_tests", comparisons)
         autosize_excel_columns(writer, "summary", summary_wide)
         autosize_excel_columns(writer, "summary_by_metric", summary_long)
         autosize_excel_columns(writer, "prompt_values", prompt_values)

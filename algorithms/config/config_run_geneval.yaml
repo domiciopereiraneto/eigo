@@ -1,0 +1,47 @@
+# Paths are relative to this YAML file. Install GenEval separately (see README).
+geneval_repo: ../../external/geneval
+metadata_file: null # Defaults to <geneval_repo>/prompts/evaluation_metadata.jsonl
+base_config: config_run_experiments.yaml
+results_folder: ../../results_geneval
+seeds: [42] # One independent optimization/best image per seed and prompt
+prompt_index_range: null # All prompts; [0, 6] for a small smoke run
+
+evaluation:
+  python: python # Or absolute path to the Python executable in the GenEval environment
+  model_path: ../../external/geneval/models
+  model_config: null # Use GenEval's default Mask2Former configuration
+  options: {} # Optional official evaluator settings, e.g. {threshold: 0.3}
+
+# Inherited EIGO settings can be overridden here or per algorithm below.
+defaults:
+  # Inherits ensemble_list from base_config; override here or per algorithm.
+  # ensemble_list: [clip_score, image_reward_score, hpsv2_score]
+  model_id: stable-diffusion-v1-5/stable-diffusion-v1-5
+  model_backend: sd
+  optimization_target: prompt_embeddings
+  num_generations: 15
+  pop_size: 16
+  save_gens: false
+  time_limit_seconds: null
+  aesthetic_score_weight: 0.0
+  clip_score_weight: 0.0
+  image_reward_score_weight: 0.0
+  hpsv2_score_weight: 1.0
+  pickscore_score_weight: 0.0
+  jpeg_size_weight: 0.0
+  evaluate_zero_weight_metrics: false
+
+algorithms:
+  - name: SD15-sep-CMA-ES-HPSv2
+    parameters:
+      optimization_method: cmaes
+      cmaes_variant: sep
+      sigma: 0.1
+  # Add entries with any Eigo config parameters, for example:
+  # - name: SD15-sep-CMA-ES-CLIP
+  #   parameters:
+  #     optimization_method: cmaes
+  #     cmaes_variant: sep
+  #     sigma: 0.1
+  #     hpsv2_score_weight: 0.0
+  #     clip_score_weight: 1.0

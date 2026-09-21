@@ -297,6 +297,7 @@ def _load_result_runs(experiment_dir):
                 "hpsv2": _numeric_values(df, "hpsv2_score"),
                 "pickscore": _numeric_values(df, "pickscore_score"),
                 "jpeg_size": _numeric_values(df, "jpeg_size_kb"),
+                "ensemble": _numeric_values(df, "ensemble_score"),
                 "objective": _numeric_values(df, "combined_loss"),
                 "vram": _numeric_values(df, "peak_vram_mb"),
                 "population_metrics": None,
@@ -325,6 +326,7 @@ def _load_result_runs(experiment_dir):
                 "hpsv2": _numeric_values(df, "max_hpsv2_score"),
                 "pickscore": _numeric_values(df, "max_pickscore_score"),
                 "jpeg_size": _numeric_values(df, "min_jpeg_size_kb"),
+                "ensemble": _numeric_values(df, "max_ensemble_score"),
                 "objective": _numeric_values(df, "max_fitness"),
                 "vram": _numeric_values(df, "peak_vram_mb"),
                 "population_metrics": {
@@ -334,6 +336,7 @@ def _load_result_runs(experiment_dir):
                     "hpsv2": _numeric_values(df, "avg_hpsv2_score"),
                     "pickscore": _numeric_values(df, "avg_pickscore_score"),
                     "jpeg_size": _numeric_values(df, "avg_jpeg_size_kb"),
+                    "ensemble": _numeric_values(df, "avg_ensemble_score"),
                     "objective": _numeric_values(df, "avg_fitness"),
                 },
                 "objective_name": "fitness",
@@ -354,6 +357,7 @@ def _load_result_runs(experiment_dir):
                 "hpsv2",
                 "pickscore",
                 "jpeg_size",
+                "ensemble",
                 "objective",
                 "vram",
             )
@@ -540,6 +544,7 @@ def _grid_metric_lines(run, index, objective_name, max_width, draw, font):
         ("HPS", "hpsv2"),
         ("Pick", "pickscore"),
         ("JPEG KB", "jpeg_size"),
+        ("Ensemble", "ensemble"),
     ]
     parts = []
     for label, key in metric_specs:
@@ -660,6 +665,7 @@ def _summary_rows(df, group_name):
         "hpsv2",
         "pickscore",
         "jpeg_size",
+        "ensemble",
         "objective",
         "peak_vram_mb",
         "cosine_similarity",
@@ -714,6 +720,7 @@ def _final_metrics_workbook_frames(runs, objective_name):
         "hpsv2": "hpsv2",
         "pickscore": "pickscore",
         "jpeg_size": "jpeg_size_kb",
+        "ensemble": "ensemble_score",
         "objective": objective_name,
     }
     value_rows = []
@@ -799,6 +806,7 @@ def _aggregate_one_experiment(experiment_dir):
         ("hpsv2", "hpsv2"),
         ("pickscore", "pickscore"),
         ("jpeg_size", "jpeg_size_kb"),
+        ("ensemble", "ensemble_score"),
         ("objective", objective_name),
         ("vram", "peak_vram_mb"),
     ]
@@ -840,6 +848,7 @@ def _aggregate_one_experiment(experiment_dir):
             "hpsv2": float(run["hpsv2"][-1]),
             "pickscore": float(run["pickscore"][-1]),
             "jpeg_size": float(run["jpeg_size"][-1]),
+            "ensemble": float(run["ensemble"][-1]),
             "objective": float(run["objective"][-1]),
             "peak_vram_mb": float(np.nanmax(run["vram"])) if np.isfinite(run["vram"]).any() else np.nan,
             "cosine_similarity": cos_sim,

@@ -87,6 +87,8 @@ METRIC_SPECS = {
     "pick_score": ("Pick", "pickscore_score", "max_pickscore_score"),
     "pickscore_score": ("Pick", "pickscore_score", "max_pickscore_score"),
     "max_pickscore_score": ("Pick", "pickscore_score", "max_pickscore_score"),
+    "ensemble": ("Ensemble", "ensemble_score", "max_ensemble_score"),
+    "ensemble_score": ("Ensemble", "ensemble_score", "max_ensemble_score"),
     "jpeg": ("JPEG", "jpeg_size_kb", "min_jpeg_size_kb"),
     "jpeg_size_kb": ("JPEG", "jpeg_size_kb", "min_jpeg_size_kb"),
     "min_jpeg_size_kb": ("JPEG", "jpeg_size_kb", "min_jpeg_size_kb"),

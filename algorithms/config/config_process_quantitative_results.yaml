@@ -9,23 +9,21 @@
 # Each item can be an experiment folder containing results_* prompt folders, or a
 # parent folder to search recursively for experiment folders.
 experiment_folders:
-- results_sanasprint/results_adam_sanasprint_clip
-- results_sanasprint/results_adam_sanasprint_imagereward
-- results_sanasprint/results_cosyne_sanasprint_clip
-- results_sanasprint/results_cosyne_sanasprint_hpsv2
-- results_sanasprint/results_cosyne_sanasprint_imagereward
-- results_sanasprint/results_ga_sanasprint_clip
-- results_sanasprint/results_ga_sanasprint_hpsv2
-- results_sanasprint/results_ga_sanasprint_imagereward
-- results_sanasprint/results_sepcmaes_sanasprint_clip
-- results_sanasprint/results_sepcmaes_sanasprint_hpsv2
-- results_sanasprint/results_sepcmaes_sanasprint_imagereward
-- results_sanasprint/results_snes_sanasprint_clip
-- results_sanasprint/results_snes_sanasprint_hpsv2
-- results_sanasprint/results_snes_sanasprint_imagereward
+- results_new/results_ccsepcmaes_sd15_noise_embeddings_clip
+- results_new/results_ccsepcmaes_sd15_noise_embeddings_hpsv2
+- results_new/results_ccsepcmaes_sd15_noise_embeddings_imagereward
+- results_new/results_ccsnes_sd15_noise_embeddings_clip
+- results_new/results_ccsnes_sd15_noise_embeddings_hpsv2
+- results_new/results_ccsnes_sd15_noise_embeddings_imagereward
+- results_new/results_sepcmaes_sd15_noise_embeddings_clip
+- results_new/results_sepcmaes_sd15_noise_embeddings_hpsv2
+- results_new/results_sepcmaes_sd15_noise_embeddings_imagereward
+- results_new/results_snes_sd15_noise_embeddings_clip
+- results_new/results_snes_sd15_noise_embeddings_hpsv2
+- results_new/results_snes_sd15_noise_embeddings_imagereward
 
 # Output workbook. CSV mirrors are written beside this file.
-output_excel: results_quantitative_sanasprint_1/quantitative_results_sanasprint_1.xlsx
+output_excel: results_quantitative_sd15/quantitative_results_sd15.xlsx
 
 # Which row to use from each prompt-level CSV before aggregating across prompts:
 #   last: final row in the CSV
@@ -38,3 +36,13 @@ row_selector: best
 # those columns exist. Use auto to summarize every numeric CSV column except basic
 # metadata/step columns, or provide a list of metric names/columns.
 metrics: canonical
+
+# Two-sided paired Wilcoxon tests on shared prompt text, grouped by model,
+# backend and optimization objective (target_variable). Requires unique prompts
+# per experiment. Missing/nonfinite metric pairs are excluded per comparison.
+# Holm correction covers ALL valid tests in the output, across metrics/objectives.
+# Differences are A minus B; positive means A is numerically higher, not always better.
+# Outputs: pairwise_tests Excel sheet and quantitative_pairwise_tests.csv.
+statistics:
+  enabled: true
+  alpha: 0.05
