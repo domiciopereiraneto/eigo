@@ -1,17 +1,18 @@
-# Token experiment reporting.
-experiment_folders:
+# Re-score saved images for skipped metrics: algorithms/fill_zero_weight_metrics.py.
+# Token-search options; see README.md for the search-space and output conventions.
+experiment_folders:  # Experiment directories containing results_* prompt folders, or parent directories to search.
 - results_ga_tokens
 - results_gomea_tokens
 - results_random_sampler_tokens
-base_config: algorithms/config/config_run_experiments.yaml
-overwrite: true
-output_suffix: _completed
-backup_original: false
-aggregate_csv_name: aggregate_final_metrics_completed.csv
-aggregate_excel_name: aggregate_final_metrics_completed.xlsx
-cuda: 1
-scorer_results_folder: /tmp/eigo_zero_weight_backfill
-metrics_to_calculate:
+base_config: algorithms/config/config_run_experiments.yaml  # Fallback experiment config when a prompt run has no config.yaml.
+overwrite: true  # true replaces original result CSVs; false writes separate files using output_suffix.
+output_suffix: _completed  # Suffix before .csv when overwrite is false, e.g. _completed.
+backup_original: false  # true saves an original CSV backup before overwriting it.
+aggregate_csv_name: aggregate_final_metrics_completed.csv  # Filename for completed experiment-level CSV summaries.
+aggregate_excel_name: aggregate_final_metrics_completed.xlsx  # Filename for completed experiment-level Excel summaries.
+cuda: 1  # GPU index or cpu; null uses each run config's cuda value.
+scorer_results_folder: /tmp/eigo_zero_weight_backfill  # Scratch output directory created during scorer initialization; images/results are read from experiment_folders.
+metrics_to_calculate:  # all or a list: aesthetic_score, clip_score, image_reward_score, hpsv2_score, pickscore_score, jpeg_size_kb; short aliases accepted.
 - clip_score
 - image_reward_score
 - hpsv2_score

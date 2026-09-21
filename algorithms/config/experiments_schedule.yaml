@@ -1,8 +1,9 @@
-# Discrete text encoder token experiments. See README.md for parameter semantics.
-runs:
-- optimization_method: ga
-  results_folder: results_ga_tokens
-- optimization_method: gomea
-  results_folder: results_gomea_tokens
-- optimization_method: random_sampler
-  results_folder: results_random_sampler_tokens
+# Batch schedule: algorithms/experiments_schedule.py; overrides config_run_experiments.yaml.
+# Token-search options; see README.md for the search-space and output conventions.
+runs:  # Ordered override mappings, recursively merged with the base config; jobs run sequentially.
+- optimization_method: ga  # Options: ga, gomea, random_sampler.
+  results_folder: results_ga_tokens  # Root output directory; model/method and prompt run folders are created beneath it.
+- optimization_method: gomea  # Options: ga, gomea, random_sampler.
+  results_folder: results_gomea_tokens  # Root output directory; model/method and prompt run folders are created beneath it.
+- optimization_method: random_sampler  # Options: ga, gomea, random_sampler.
+  results_folder: results_random_sampler_tokens  # Root output directory; model/method and prompt run folders are created beneath it.

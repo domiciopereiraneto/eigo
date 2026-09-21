@@ -20,6 +20,11 @@ class TokenSpace:
     """
     def __init__(self, engine, prompt):
         self.engine, self.prompt = engine, prompt
+        self.max_tokens = getattr(engine, 'parameters', {}).get('max_tokens')
+        if self.max_tokens is not None and (
+                isinstance(self.max_tokens, bool) or not isinstance(self.max_tokens, int)
+                or self.max_tokens < 1):
+            raise ValueError('max_tokens must be a positive integer or null.')
         self.parts = []
         handles = []
         try:
@@ -35,8 +40,10 @@ class TokenSpace:
                         ids = kwargs.get('input_ids', args[0] if args else None)
                         if ids is None or ids.ndim != 2 or ids.shape[0] != 1:
                             raise ValueError('Expected one tokenized positive prompt per encoder.')
+                        mask = kwargs.get('attention_mask')
+                        self._limit_tokens(ids, mask, part['tokenizer'])
                         part['ids'] = ids.detach().clone()
-                        part['mask'] = kwargs.get('attention_mask')
+                        part['mask'] = None if mask is None else mask.detach().clone()
                 handles.append(encoder.register_forward_pre_hook(capture, with_kwargs=True))
             with torch.no_grad():
                 engine._encode_prompt_embeddings(prompt)
@@ -67,6 +74,28 @@ class TokenSpace:
         self.initial = np.asarray(initial, dtype=np.int64)
         if not len(self.initial):
             raise ValueError('Prompt has no mutable non-special tokens.')
+
+    def _limit_tokens(self, ids, mask, tokenizer):
+        if self.max_tokens is None:
+            return
+        special_ids = set(tokenizer.all_special_ids)
+        positions = [i for i, token in enumerate(ids[0].tolist())
+                     if token not in special_ids and (mask is None or mask[0, i].item())]
+        removed = set(positions[self.max_tokens:])
+        if not removed:
+            return
+        pad_id = getattr(tokenizer, 'pad_token_id', None)
+        if pad_id is None:
+            raise ValueError('max_tokens truncation requires a tokenizer pad_token_id.')
+        keep = [i for i in range(ids.shape[1]) if i not in removed]
+        # Compact the sequence so EOS and other special tokens retain their order.
+        limited = torch.full_like(ids, pad_id)
+        limited[:, :len(keep)] = ids[:, keep]
+        ids.copy_(limited)
+        if mask is not None:
+            limited_mask = torch.zeros_like(mask)
+            limited_mask[:, :len(keep)] = mask[:, keep]
+            mask.copy_(limited_mask)
 
     def validate(self, vector):
         vector = np.asarray(vector)
@@ -103,6 +132,9 @@ class TokenSpace:
                         return
                     seen.add(part['name'])
                     ids = self.token_ids(vector, part)
+                    if part['mask'] is not None and kwargs.get('attention_mask') is not None:
+                        # Pipelines may also return this mask alongside embeddings.
+                        kwargs['attention_mask'].copy_(part['mask'])
                     if 'input_ids' in kwargs:
                         kwargs = dict(kwargs, input_ids=ids)
                     else:

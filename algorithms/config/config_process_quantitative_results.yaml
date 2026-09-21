@@ -1,8 +1,9 @@
-# Discrete text encoder token experiments. See README.md for parameter semantics.
-experiment_folders:
+# Metric workbooks and CSV summaries: algorithms/process_quantitative_results.py.
+# Token-search options; see README.md for the search-space and output conventions.
+experiment_folders:  # Experiment directories containing results_* prompt folders, or parent directories to search.
 - results_ga_tokens
 - results_gomea_tokens
 - results_random_sampler_tokens
-output_excel: results_quantitative_sanasprint_1/quantitative_results_sanasprint_1.xlsx
-row_selector: best
-metrics: canonical
+output_excel: results_quantitative_sanasprint_1/quantitative_results_sanasprint_1.xlsx  # Output workbook path; CSV mirrors are written alongside it.
+row_selector: best  # Options: first, last, best (highest objective row; max_fitness for token-run CSVs).
+metrics: canonical  # canonical for standard metrics, auto for numeric CSV fields, or an explicit list of metric/column names.

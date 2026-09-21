@@ -1,88 +1,108 @@
-# Discrete text encoder token experiments. See README.md for parameter semantics.
-selected_prompts:
+# Cartesian hyperparameter search: algorithms/eigo_grid_search.py.
+# Token-search options; see README.md for the search-space and output conventions.
+selected_prompts:  # Non-empty list of prompts; each enabled method and grid combination runs on every prompt.
 - an astronaut riding a horse on mars
 - a serene mountain landscape with a tranquil lake at sunset
 - a futuristic cyberpunk city with neon lights and flying cars
 - a cozy library with ancient books and warm candlelight
 - a vibrant underwater coral reef with colorful tropical fish
-test_ga: true
-test_gomea: true
-test_random_sampler: true
-seed: 42
-cuda: 2
-aesthetic_predictor: 2
-num_inference_steps: 1
-guidance_scale: 0
-lcm_origin_steps: 50
-height: 512
-width: 512
-aesthetic_score_weight: 0.5
-clip_score_weight: 0.5
-image_reward_score_weight: 0.0
-hpsv2_score_weight: 0.0
-pickscore_score_weight: 0.0
-jpeg_size_weight: 0.0
-max_aesthetic_score: 10
-max_clip_score: 0.5
-max_image_reward_score: 1.0
-max_hpsv2_score: 1.0
-max_pickscore_score: 1.0
-max_jpeg_size_kb: 1024.0
-jpeg_quality: 95
-image_reward_model: ImageReward-v1.0
-clip_model_name: ViT-L/14
-hpsv2_version: v2.1
-pickscore_model: yuvalkirstain/PickScore_v1
-pickscore_processor: laion/CLIP-ViT-H-14-laion2B-s32B-b79K
-evaluate_zero_weight_metrics: false
-optimization_target: text_tokens
-model_id: stabilityai/sdxl-turbo
-model_backend: auto
-base_model_id: null
-unet_model_id: null
-unet_subfolder: unet
-torch_dtype: float32
-max_sequence_length: 256
-use_safetensors: true
-use_multi_gpu: false
-pipeline_device_map: balanced
-max_memory: null
-enable_attention_slicing: false
-enable_vae_slicing: false
-enable_vae_tiling: false
-results_folder: results_eigo_grid_search_tokens
-num_generations: 50
-pop_size: 50
-save_gens: false
-ga_elite_count: 2
-ga_crossover_operator: uniform
-ga_crossover_rate: 0.8
-ga_mutation_operator: replacement
-ga_mutation_rate: 0.1
-num_images_to_generate: 20
-gomea_num_generations: 50
-gomea_pop_size: 50
-gomea_linkage_model: linkage_tree
-gomea_bmp_block_size: 2
-gomea_max_evaluations: null
-time_limit_seconds: null
-grid:
-  ga:
-    ga_mutation_rate:
+test_ga: true  # true includes ga in this search; false excludes it.
+test_gomea: true  # true includes gomea in this search; false excludes it.
+test_random_sampler: true  # true includes random_sampler in this search; false excludes it.
+seed: 42  # Integer seed for reproducibility; the diffusion seed stays fixed across token candidates in a run.
+cuda: 2  # GPU index (0, 1, ...), or cpu; falls back to CPU when CUDA is unavailable.
+aesthetic_predictor: 2  # Options: 0 = Simulacra, 1 = LAION V1, 2 = LAION V2.
+num_inference_steps: 1  # Diffusion denoising steps per image; choose a count appropriate to the model (LCM commonly uses 1-8).
+guidance_scale: 0  # Model-specific guidance strength; SD/SDXL CFG is enabled above 1.0. Use the model's recommended setting.
+lcm_origin_steps: 50  # Positive original diffusion step count for LCM; ignored by other backends.
+height: 512  # Generated image height in pixels; must satisfy the selected pipeline's size constraints.
+width: 512  # Generated image width in pixels; must satisfy the selected pipeline's size constraints.
+
+# Scoring objectives and normalization
+aesthetic_score_weight: 0.5  # Objective weight; positive values favor higher aesthetic scores, 0 removes this objective contribution.
+clip_score_weight: 0.5  # Objective weight; positive values favor higher clip scores, 0 removes this objective contribution.
+image_reward_score_weight: 0.0  # Objective weight; positive values favor higher image reward scores, 0 removes this objective contribution.
+hpsv2_score_weight: 0.0  # Objective weight; positive values favor higher hpsv2 scores, 0 removes this objective contribution.
+pickscore_score_weight: 0.0  # Objective weight; positive values favor higher pickscore scores, 0 removes this objective contribution.
+jpeg_size_weight: 0.0  # JPEG-size penalty weight; positive values favor smaller files, 0 disables its objective contribution.
+max_aesthetic_score: 10  # Positive score-normalization divisor; this scales the objective and does not clip the score.
+max_clip_score: 0.5  # Positive score-normalization divisor; this scales the objective and does not clip the score.
+max_image_reward_score: 1.0  # Positive score-normalization divisor; this scales the objective and does not clip the score.
+max_hpsv2_score: 1.0  # Positive score-normalization divisor; this scales the objective and does not clip the score.
+max_pickscore_score: 1.0  # Positive score-normalization divisor; this scales the objective and does not clip the score.
+max_jpeg_size_kb: 1024.0  # Positive JPEG-size normalization divisor in KiB (bytes / 1024).
+jpeg_quality: 95  # Integer from 1 to 100; used for saved JPEGs and JPEG-size scoring.
+image_reward_model: ImageReward-v1.0  # ImageReward checkpoint name (e.g. ImageReward-v1.0); null disables this scorer.
+clip_model_name: ViT-L/14  # OpenAI CLIP name, e.g. ViT-B/32 or ViT-L/14; required for CLIP scoring and LAION aesthetic predictors.
+hpsv2_version: v2.1  # HPSv2 checkpoint version (v2.0 or v2.1); null disables this scorer.
+pickscore_model: yuvalkirstain/PickScore_v1  # PickScore checkpoint repository; null disables this scorer.
+pickscore_processor: laion/CLIP-ViT-H-14-laion2B-s32B-b79K  # Processor repository matching the PickScore model; null disables PickScore.
+evaluate_zero_weight_metrics: false  # true also loads/evaluates configured zero-weight scorers; false saves scorer memory and computation.
+optimization_target: text_tokens  # Only text_tokens is supported; optimizes integer IDs independently for each text encoder.
+
+# Model examples (choose a compatible backend and inference settings):
+# SD: stable-diffusion-v1-5/stable-diffusion-v1-5; DPO: mhdang/dpo-sd1.5-text2image-v1
+# SDXL: stabilityai/sdxl-turbo; FLUX: black-forest-labs/FLUX.1-schnell
+# PixArt: PixArt-alpha/PixArt-XL-2-1024-MS; LCM: SimianLuo/LCM_Dreamshaper_v7
+# Sana: Efficient-Large-Model/Sana_1600M_1024px_diffusers
+# Sana Sprint: Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers
+model_id: stabilityai/sdxl-turbo  # Diffusion checkpoint repository or local path; backend-specific examples are listed above.
+model_backend: auto  # Options: auto (infer from model_id), sd, sdxl, flux, pixart, lcm, sana, sana_sprint.
+base_model_id: null  # Optional SD base pipeline for a component repository; null uses model_id or the DPO SD1.5 default.
+unet_model_id: null  # Optional replacement SD UNet repository; null automatically uses model_id for DPO SD1.5.
+unet_subfolder: unet  # Subfolder containing replacement UNet weights; used with unet_model_id.
+torch_dtype: float32  # Options: auto, float32, float16, bfloat16. auto chooses bfloat16 for FLUX/Sana on CUDA, otherwise float32.
+max_sequence_length: 256  # Text-encoding length for FLUX, Sana and Sana Sprint; SD/SDXL/PixArt/LCM use pipeline defaults.
+use_safetensors: true  # true requests safetensors model weights; false allows the loader's alternative weight format.
+use_multi_gpu: false  # true shards the diffusion pipeline when multiple CUDA devices are available.
+pipeline_device_map: balanced  # Device-map strategy passed to the loader when sharding, e.g. balanced; supported strategies depend on the pipeline.
+max_memory: null  # null for automatic limits, or a map such as {0: "22GiB", 1: "22GiB", cpu: "64GiB"}.
+enable_attention_slicing: false  # true enables attention slicing when supported to reduce VRAM use, potentially at a speed cost.
+enable_vae_slicing: false  # true enables VAE slicing when supported to reduce decoding memory.
+enable_vae_tiling: false  # true enables tiled VAE decoding when supported, useful for large images and limited VRAM.
+results_folder: results_eigo_grid_search_tokens  # Root output directory; model/method and prompt run folders are created beneath it.
+
+# Population search and saved candidates
+num_generations: 50  # Positive GA generation count; GOMEA uses gomea_num_generations, random sampling uses its image budget.
+pop_size: 50  # Integer >= 2; GA population size and random-sampler reporting group size.
+save_gens: false  # true retains gen_N/id_M.jpg candidate images; baseline, best images and token artifacts are always saved.
+
+# GA token crossover and mutation
+ga_elite_count: 2  # Unchanged survivors per GA generation; integer >= 1 and strictly smaller than pop_size.
+ga_crossover_operator: uniform  # Options: uniform (independent parent choice per token), one_point (one split between parents).
+ga_crossover_rate: 0.8  # Range [0, 1]: probability of inheriting parent A's token in uniform crossover; ignored by one_point.
+ga_mutation_operator: replacement  # Options: replacement (draw a valid vocabulary ID), none (disable mutation).
+ga_mutation_rate: 0.1  # Range [0, 1]: per-token replacement probability; ignored when ga_mutation_operator is none.
+
+# Random-token sampling and shared search limits
+num_images_to_generate: 20  # Positive random-token candidate budget, excluding baseline; all candidates use the same diffusion seed.
+
+# GOMEA token mixing
+gomea_num_generations: 50  # Positive GOMEA generation limit; may stop sooner on convergence, deadline or evaluation budget.
+gomea_pop_size: 50  # GOMEA population size; integer >= 2.
+# linkage_tree learns categorical token associations each generation; static_linkage_tree learns once.
+# univariate mixes single tokens; full mixes the whole vector; block_marginal_product mixes fixed blocks.
+gomea_linkage_model: linkage_tree  # Options: linkage_tree, static_linkage_tree, univariate, full, block_marginal_product.
+gomea_bmp_block_size: 2  # Positive number of token coordinates per block; only used by block_marginal_product.
+gomea_max_evaluations: null  # Positive candidate-evaluation cap excluding baseline, or null for the generation limit; mixing can exceed pop_size evaluations per generation.
+time_limit_seconds: null  # null disables the deadline, or seconds checked between candidate evaluations; an in-flight call may finish later.
+grid:  # Cartesian products of parameter lists for each enabled method; scalar values also represent one choice.
+  ga:  # GA-specific overrides/search space; omitted parameters retain the shared defaults.
+    ga_mutation_rate:  # Range [0, 1]: per-token replacement probability; ignored when ga_mutation_operator is none.
     - 0.05
     - 0.1
     - 0.2
-    token_init_rate:
+    token_init_rate:  # Range [0, 1]: per-token replacement probability when initializing GA/GOMEA; the original candidate is also included.
     - 0.1
     - 0.3
-  gomea:
-    gomea_linkage_model:
+  gomea:  # GOMEA-specific overrides/search space; omitted parameters retain the shared defaults.
+    gomea_linkage_model:  # Options: linkage_tree, static_linkage_tree, univariate, full, block_marginal_product.
     - univariate
     - linkage_tree
-    token_init_rate:
+    token_init_rate:  # Range [0, 1]: per-token replacement probability when initializing GA/GOMEA; the original candidate is also included.
     - 0.1
     - 0.3
-  random_sampler:
-    num_images_to_generate:
+  random_sampler:  # Random-sampler overrides/search space; {} uses shared defaults.
+    num_images_to_generate:  # Positive random-token candidate budget, excluding baseline; all candidates use the same diffusion seed.
     - 240
-token_init_rate: 0.1
+token_init_rate: 0.1  # Range [0, 1]: per-token replacement probability when initializing GA/GOMEA; the original candidate is also included.

@@ -46,6 +46,7 @@ validation.
 | Parameter | Meaning |
 | --- | --- |
 | `token_init_rate` | Probability of replacing each token when initializing GA/GOMEA populations (0–1). The original prompt is included. |
+| `max_tokens` | Optional positive integer limiting content tokens per encoder for every individual, including the initial candidate. Excludes padding and special tokens. Longer sequences are truncated; shorter sequences are not extended. `null` (default) keeps the prompt length. Scoring still uses the original prompt. |
 | `num_generations`, `pop_size` | GA generations and population size; `pop_size` also groups random samples for reporting. |
 | `ga_mutation_rate` | Independent probability of vocabulary replacement per token. |
 | `ga_mutation_operator` | `replacement` or `none`. |

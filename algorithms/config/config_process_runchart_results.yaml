@@ -1,26 +1,28 @@
-experiment_folders:
+# Metric curves against elapsed time and diffusion compute: algorithms/process_runchart_results.py.
+# Token-search options; see README.md for the search-space and output conventions.
+experiment_folders:  # Experiment directories containing results_* prompt folders, or parent directories to search.
 - results_ga_tokens
 - results_gomea_tokens
 - results_random_sampler_tokens
-experiment_labels:
+experiment_labels:  # Optional labels in experiment_folders order; null infers labels, otherwise one label per entry.
 - GA
 - GOMEA
 - Random sampler
-experiment_markers:
+experiment_markers:  # Optional Matplotlib markers in experiment_folders order, e.g. o, s, ^; null uses defaults.
 - o
 - s
 - ^
-constant_experiment_folders: null
-constant_labels: null
-save_folder: results_runcharts_tokens
-clean_output: false
-metrics:
+constant_experiment_folders: null  # Optional baseline folders drawn as horizontal lines from mean final prompt scores; null disables.
+constant_labels: null  # Optional labels corresponding to constant_experiment_folders; null uses inferred labels.
+save_folder: results_runcharts_tokens  # Parent output directory; curve figures and CSV files go in its runcharts/ subfolder.
+clean_output: false  # true removes matching *_by_progress, *_by_nfe and *_by_time plot and CSV outputs in save_folder/runcharts before plotting; false retains them.
+metrics:  # List of canonical metrics or CSV columns, e.g. objective, clip_score, hpsv2_score, jpeg_size_kb, peak_vram_mb.
 - hpsv2_score
-best_so_far: true
-nfe_xscale: linear
-time_limit: 500
-label_template: '{algorithm}'
-figure_width: 6.0
-figure_height: 6.0
-font_size: 13
-marker_size: 6.0
+best_so_far: true  # true accumulates the best value per prompt before averaging; JPEG size is minimized.
+nfe_xscale: linear  # Options: linear, log. Token-run NFE = (evaluations + 1 baseline) * num_inference_steps.
+time_limit: 500  # null plots full coverage, shortest uses the shortest experiment coverage, or a nonnegative number of seconds.
+label_template: '{algorithm}'  # Fallback label format, e.g. {algorithm}, {model}, {target_variable}, {optimization_target}.
+figure_width: 6.0  # Figure width in inches.
+figure_height: 6.0  # Figure height in inches.
+font_size: 13  # Plot font size in points.
+marker_size: 6.0  # Plot marker size in points.

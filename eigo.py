@@ -1214,6 +1214,13 @@ class Eigo:
         start = time.monotonic()
         self._reset_peak_vram()
         best_image, best_value = None, float('inf')
+        total_generations = int(self.parameters.get(
+            'gomea_num_generations' if method == 'gomea' else 'num_generations', 15))
+        evaluation_budget = self.parameters.get('gomea_max_evaluations') if method == 'gomea' else None
+        if method == 'random_sampler':
+            evaluation_budget = int(self.parameters.get('num_images_to_generate', 240))
+            population_size = int(self.parameters.get('pop_size', 16))
+            total_generations = (evaluation_budget + population_size - 1) // population_size
 
         def evaluate(vector, generation):
             nonlocal best_image, best_value
@@ -1245,6 +1252,10 @@ class Eigo:
             row = {'generation': generation, 'prompt': prompt if generation == 0 else '',
                    'elapsed_time': time.monotonic() - start, 'peak_vram_mb': self._peak_vram_mb(),
                    'evaluations': evaluations, 'best_fitness': -best_score}
+            for i, part in enumerate(space.parts):
+                column = 'decoded_prompt' if i == 0 else f'decoded_prompt_{part["name"]}'
+                row[column] = part['tokenizer'].decode(
+                    space.token_ids(best, part)[0].cpu().tolist(), skip_special_tokens=True)
             names = ['fitness', 'aesthetic_score', 'clip_score', 'image_reward_score',
                      'hpsv2_score', 'pickscore_score', 'jpeg_size_kb']
             for i, name in enumerate(names):
@@ -1262,8 +1273,30 @@ class Eigo:
             with (folder / 'candidates.jsonl').open('a' if generation else 'w') as stream:
                 for candidate in candidate_rows:
                     stream.write(json.dumps(candidate) + '\n')
+            # Exclude baseline evaluation from the observed search throughput.
+            elapsed = time.monotonic() - start
+            search_elapsed = max(0.0, elapsed - rows[0]['elapsed_time'])
+            estimates = []
+            if generation:
+                estimates.append(search_elapsed / generation * max(0, total_generations - generation))
+            if evaluation_budget is not None and evaluations:
+                estimates.append(search_elapsed / evaluations * max(0, int(evaluation_budget) - evaluations))
+            time_limit = self.parameters.get('time_limit_seconds')
+            if time_limit is not None:
+                estimates.append(max(0.0, float(time_limit) - elapsed))
+            remaining = self.format_time(min(estimates)) if estimates else 'estimating...'
+            labels = ['fitness', 'aesthetic score', 'CLIP score', 'ImageReward score',
+                      'HPSv2 score', 'PickScore', 'JPEG size (KB)']
+            summary = [f'Generation {generation}/{total_generations}',
+                       f'Best fitness: {-best_score:.6f}', f'Evaluations: {evaluations}']
+            for i, (name, label) in enumerate(zip(names, labels)):
+                maximum = max(m[i] for m in metrics) if metrics else np.nan
+                summary.extend([f'Max {label}: {maximum:.6f}',
+                                f'Avg {label}: {row["avg_" + name]:.6f}'])
+            summary.append(f'Min JPEG size (KB): {row["min_jpeg_size_kb"]:.6f}')
+            summary.append(f'Estimated time remaining: {remaining}')
+            print(', '.join(summary), flush=True)
             metrics.clear(); candidate_rows.clear()
-            print(f'Generation {generation}: best fitness {-best_score:.6f}, evaluations {evaluations}')
 
         optimize(space, method, self.parameters, seed, evaluate, record)
         self._save_population_plot_results(pd.DataFrame(rows), str(folder))

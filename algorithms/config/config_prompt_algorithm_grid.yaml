@@ -1,13 +1,14 @@
-# Token experiment reporting.
-layout: algorithm_x_prompt
-algorithms:
-- label: GA
-  folder: results_ga_tokens
-- label: GOMEA
-  folder: results_gomea_tokens
-- label: Random sampler
-  folder: results_random_sampler_tokens
-prompt_indices:
+# Prompt/algorithm comparison grids: algorithms/create_prompt_algorithm_grid.py.
+# Token-search options; see README.md for the search-space and output conventions.
+layout: algorithm_x_prompt  # Options: algorithm_x_prompt (algorithms as columns), prompt_x_algorithm (prompts as columns).
+algorithms:  # List of {label, folder} entries; each folder must resolve to one experiment with prompt runs.
+- label: GA  # Displayed algorithm label.
+  folder: results_ga_tokens  # Experiment directory, or a parent that resolves to exactly one experiment.
+- label: GOMEA  # Displayed algorithm label.
+  folder: results_gomea_tokens  # Experiment directory, or a parent that resolves to exactly one experiment.
+- label: Random sampler  # Displayed algorithm label.
+  folder: results_random_sampler_tokens  # Experiment directory, or a parent that resolves to exactly one experiment.
+prompt_indices:  # Prompt-folder numeric suffixes to include, e.g. results_LAIONV2_42_2 has index 2.
 - 118
 - 133
 - 152
@@ -18,26 +19,26 @@ prompt_indices:
 - 200
 - 70
 - 93
-best_image_name: best_all
-fallback_to_latest: true
-image_metrics:
+best_image_name: best_all  # Preferred image stem, normally best_all; the script resolves supported image extensions.
+fallback_to_latest: true  # true falls back to the latest numbered best_N/it_N image when the preferred image is missing.
+image_metrics:  # Caption metrics; [] disables. Aliases: objective, aesthetic, clip, image_reward, hpsv2, pickscore, jpeg; CSV columns also accepted.
 - hpsv2
-metric_row_selector: last
-baseline_metric_row_selector: first
-metric_font_size: 12
-metric_precision: 3
-metric_gap: 4
-include_baseline: true
-baseline_label: Initial Generation
-output: results_image_grids/prompt_x_algorithm_best_sanasprint_hpsv2.jpg
-tile_size: 160x160
-algorithm_label_width: 90
-prompt_header_height: 86
-prompt_label_width: 180
-algorithm_header_height: 70
-column_gap: 10
-row_gap: 3
-margin: 12
-prompt_font_size: 14
-algorithm_font_size: 16
-rotate_algorithm_labels: true
+metric_row_selector: last  # Options: first, last, best (highest objective CSV row); generation metrics need not describe best_all.jpg.
+baseline_metric_row_selector: first  # Options: first, last, best; first matches the baseline row.
+metric_font_size: 12  # Metric font size in pixels.
+metric_precision: 3  # Number of decimal places in metric captions.
+metric_gap: 4  # Metric gap in pixels.
+include_baseline: true  # true includes the initial it_0.jpg image.
+baseline_label: Initial Generation  # Caption for the baseline taken from the first configured algorithm.
+output: results_image_grids/prompt_x_algorithm_best_sanasprint_hpsv2.jpg  # Output image path for the combined prompt/algorithm grid.
+tile_size: 160x160  # Image tile size as WIDTHxHEIGHT, e.g. 160x160.
+algorithm_label_width: 90  # Algorithm label width in pixels.
+prompt_header_height: 86  # Prompt header height in pixels.
+prompt_label_width: 180  # Prompt label width in pixels.
+algorithm_header_height: 70  # Algorithm header height in pixels.
+column_gap: 10  # Column gap in pixels.
+row_gap: 3  # Row gap in pixels.
+margin: 12  # Margin in pixels.
+prompt_font_size: 14  # Prompt font size in pixels.
+algorithm_font_size: 16  # Algorithm font size in pixels.
+rotate_algorithm_labels: true  # true rotates row labels in prompt_x_algorithm layout.

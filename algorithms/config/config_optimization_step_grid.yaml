@@ -1,27 +1,28 @@
-# Token experiment reporting.
-experiment_folders:
+# Generation image grids: algorithms/create_optimization_step_grid.py.
+# Token-search options; see README.md for the search-space and output conventions.
+experiment_folders:  # Experiment directories containing results_* prompt folders, or parent directories to search.
 - results_ga_tokens
 - results_gomea_tokens
 - results_random_sampler_tokens
-prompt_indices:
+prompt_indices:  # Prompt-folder numeric suffixes to include, e.g. results_LAIONV2_42_2 has index 2.
 - 145
 - 55
 - 6
 - 58
-steps:
+steps:  # Generation numbers: best_N.jpg with use_best, otherwise gen_N/id_M.jpg.
 - 5
 - 10
 - 15
-population_ids: null
-use_best: true
-include_baseline: true
-output_folder: results_image_grids
-output: null
-tile_size: 128x128
-prompt_width: 150
-column_gap: 3
-row_gap: 3
-margin: 10
-header_height: 42
-prompt_font_size: 14
-header_font_size: 14
+population_ids: null  # Candidate IDs to display, or null to infer them from a selected generation; ignored when use_best is true.
+use_best: true  # true shows one best_N.jpg per generation; false shows generation-by-candidate columns.
+include_baseline: true  # true includes the initial it_0.jpg image.
+output_folder: results_image_grids  # Directory for generated grids when output is null.
+output: null  # Output image path; null creates one image per experiment under output_folder.
+tile_size: 128x128  # Image tile size as WIDTHxHEIGHT, e.g. 160x160.
+prompt_width: 150  # Prompt width in pixels.
+column_gap: 3  # Column gap in pixels.
+row_gap: 3  # Row gap in pixels.
+margin: 10  # Margin in pixels.
+header_height: 42  # Header height in pixels.
+prompt_font_size: 14  # Prompt font size in pixels.
+header_font_size: 14  # Header font size in pixels.

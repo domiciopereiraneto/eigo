@@ -1,23 +1,24 @@
-# Discrete text encoder token experiments. See README.md for parameter semantics.
-runs:
-- test_ga: true
-  test_gomea: false
-  test_random_sampler: false
-  results_folder: results_optuna_ga_tokens
-  optuna:
-    study_name: ga_tokens
-    storage: sqlite:///results_optuna_ga_tokens/optuna.db
-- test_ga: false
-  test_gomea: true
-  test_random_sampler: false
-  results_folder: results_optuna_gomea_tokens
-  optuna:
-    study_name: gomea_tokens
-    storage: sqlite:///results_optuna_gomea_tokens/optuna.db
-- test_ga: false
-  test_gomea: false
-  test_random_sampler: true
-  results_folder: results_optuna_random_sampler_tokens
-  optuna:
-    study_name: random_sampler_tokens
-    storage: sqlite:///results_optuna_random_sampler_tokens/optuna.db
+# Study schedule: algorithms/optuna_schedule.py; overrides config_eigo_optuna_search.yaml.
+# Token-search options; see README.md for the search-space and output conventions.
+runs:  # Ordered override mappings, recursively merged with the base config; jobs run sequentially.
+- test_ga: true  # true includes ga in this search; false excludes it.
+  test_gomea: false  # true includes gomea in this search; false excludes it.
+  test_random_sampler: false  # true includes random_sampler in this search; false excludes it.
+  results_folder: results_optuna_ga_tokens  # Root output directory; model/method and prompt run folders are created beneath it.
+  optuna:  # Optuna study settings; schedules recursively merge these with the base config.
+    study_name: ga_tokens  # Study identifier; use distinct names for independent studies.
+    storage: sqlite:///results_optuna_ga_tokens/optuna.db  # Optuna storage URL (e.g. sqlite:///path/optuna.db), or null for an in-memory study.
+- test_ga: false  # true includes ga in this search; false excludes it.
+  test_gomea: true  # true includes gomea in this search; false excludes it.
+  test_random_sampler: false  # true includes random_sampler in this search; false excludes it.
+  results_folder: results_optuna_gomea_tokens  # Root output directory; model/method and prompt run folders are created beneath it.
+  optuna:  # Optuna study settings; schedules recursively merge these with the base config.
+    study_name: gomea_tokens  # Study identifier; use distinct names for independent studies.
+    storage: sqlite:///results_optuna_gomea_tokens/optuna.db  # Optuna storage URL (e.g. sqlite:///path/optuna.db), or null for an in-memory study.
+- test_ga: false  # true includes ga in this search; false excludes it.
+  test_gomea: false  # true includes gomea in this search; false excludes it.
+  test_random_sampler: true  # true includes random_sampler in this search; false excludes it.
+  results_folder: results_optuna_random_sampler_tokens  # Root output directory; model/method and prompt run folders are created beneath it.
+  optuna:  # Optuna study settings; schedules recursively merge these with the base config.
+    study_name: random_sampler_tokens  # Study identifier; use distinct names for independent studies.
+    storage: sqlite:///results_optuna_random_sampler_tokens/optuna.db  # Optuna storage URL (e.g. sqlite:///path/optuna.db), or null for an in-memory study.
