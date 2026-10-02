@@ -34,12 +34,20 @@ from eigo import Eigo
 parser = argparse.ArgumentParser(description='Run optimization with configuration file')
 parser.add_argument('--config', type=str, default="algorithms/config/config_run_experiments.yaml",
                    help='Path to configuration YAML file')
+parser.add_argument('--resume_experiment', '--resume-experiment',
+                   action=argparse.BooleanOptionalAction, default=None,
+                   help='Extend checkpointed runs to the new configured total')
 args = parser.parse_args()
 
 config_path = args.config
 
 with open(config_path, 'r') as file:
     config = yaml.safe_load(file)
+
+if args.resume_experiment is not None:
+    config['resume_experiment'] = args.resume_experiment
+if not isinstance(config.get('resume_experiment', False), bool):
+    raise ValueError('resume_experiment must be a boolean.')
 
 SEED = config['seed']
 SEED_PATH = config['seed_path']

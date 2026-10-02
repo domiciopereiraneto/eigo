@@ -25,16 +25,16 @@ selected_prompts:
 # optimizer itself becomes a categorical trial parameter.
 test_adam: false
 test_ga: false
-test_cmaes: true
+test_cmaes: false
 test_random_sampler: false
 test_zero_order: false
-test_snes: false
+test_snes: true
 test_cosyne: false
 test_gomea: false
 
 # General parameters (copied from config_eigo.yaml)
 seed: 42
-cuda: 0
+cuda: 3
 aesthetic_predictor: 2
 num_inference_steps: 50
 batch_size: 8
@@ -44,15 +44,15 @@ height: 512
 width: 512
 # Equal-weight metric ranks replace the weighted objective when nonempty.
 # Example: [clip_score, image_reward_score, hpsv2_score]. Adam/GOMEA require [].
-ensemble_list: [image_reward_score, clip_score, hpsv2_score]  # [] or null disables the ensemble; ensemble_score is 0
+ensemble_list: []  # [] or null disables the ensemble; ensemble_score is 0
 aesthetic_score_weight: 0.0
 clip_score_weight: 0.0
 image_reward_score_weight: 0.0
-hpsv2_score_weight: 0.0
+hpsv2_score_weight: 1.0
 pickscore_score_weight: 0.0
 jpeg_size_weight: 0.0
 max_aesthetic_score: 10
-max_clip_score: 0.5
+max_clip_score: 1.0
 max_image_reward_score: 1.0
 max_hpsv2_score: 1.0
 max_pickscore_score: 1.0
@@ -80,10 +80,10 @@ enable_gradient_checkpointing: false
 enable_attention_slicing: false
 enable_vae_slicing: false
 enable_vae_tiling: false
-results_folder: "results_optuna_sd15_sepcmaes_ensemble"
+results_folder: "results_optuna_sd15_snes_flat_hpsv2"
 
 # CMA-ES defaults (used if not overridden by optuna.search_space.cmaes)
-num_generations: 15
+num_generations: 30
 pop_size: 16
 cmaes_variant: "sep"  # "cmaes", "sep", "vd", "cc", "cc_sep", or "cc_vd"; CC variants require noise_embeddings_cc
 sigma: 0.5
@@ -92,7 +92,7 @@ cc_noise_sigma: null  # CC latent-noise sigma; null falls back to sigma for CMA-
 save_gens: false
 
 # SNES defaults (used if not overridden by optuna.search_space.snes)
-snes_num_generations: 15
+snes_num_generations: 30
 snes_pop_size: 16
 snes_sigma: 0.5
 snes_eta_mu: 1.0
@@ -156,10 +156,16 @@ optuna:
   n_trials: 30
   direction: "maximize"
   metric: "auto"  # auto -> combined_score for Adam, max_fitness for population methods
-  study_name: "results_optuna_sd15_sepcmaes_ensemble"
-  storage: "sqlite:///results_optuna_sd15_sepcmaes_ensemble/optuna.db"
+  study_name: "results_optuna_sd15_snes_flat_hpsv2"
+  storage: "sqlite:///results_optuna_sd15_snes_flat_hpsv2/optuna.db"
   load_if_exists: true
   catch_trial_errors: true
+  # Run the experiment YAML after tuning, using the best trial's optimizer
+  # and sampled parameters. Other settings come from the experiment YAML.
+  follow_up_experiment:
+    enabled: false
+    config_path: "algorithms/config/config_run_experiments.yaml"  # Relative to working directory
+
   sampler:
     name: "tpe"  # tpe or random
     seed: 42

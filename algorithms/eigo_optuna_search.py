@@ -13,6 +13,7 @@ import json
 import math
 import os
 import random
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -300,6 +301,7 @@ def validate_optuna_config(config):
             raise ValueError(f"'optuna.search_space.{method}' must be a dictionary.")
 
     _get_enabled_plot_names(_get_plot_config(config))
+    get_follow_up_experiment_config(config)
 
 
 def _suggest_categorical(trial, name, values):
@@ -635,6 +637,68 @@ def run_optuna_search(config, dry_run=False):
     return study, trial_rows
 
 
+def get_follow_up_experiment_config(config):
+    """Validate the optional experiment before spending time on the study."""
+    settings = get_optuna_config(config).get("follow_up_experiment")
+    if settings is None:
+        return None
+    if not isinstance(settings, dict):
+        raise ValueError("'optuna.follow_up_experiment' must be a dictionary.")
+    enabled = settings.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise ValueError("'optuna.follow_up_experiment.enabled' must be a boolean.")
+    if not enabled:
+        return None
+    config_path = settings.get("config_path")
+    if not isinstance(config_path, str) or not config_path.strip():
+        raise ValueError("Enabled follow-up experiments require 'config_path'.")
+    # Like other runner paths, relative paths are resolved from the working directory.
+    return load_yaml(Path(config_path).resolve())
+
+
+def run_follow_up_experiment(config, study, dry_run=False):
+    """Run the experiment YAML with the best completed trial's parameters."""
+    experiment_config = get_follow_up_experiment_config(config)
+    if experiment_config is None:
+        return None
+    if dry_run:
+        print("Follow-up experiment enabled; would apply the best trial and run "
+              f"{get_optuna_config(config)['follow_up_experiment']['config_path']}")
+        return None
+    best = _best_trial_payload(study)
+    if best is None:
+        print("Skipping follow-up experiment: the study has no completed trials.")
+        return None
+    method = best["user_attrs"].get("method") or best["params"].get("method")
+    if method is None:
+        methods = get_enabled_methods(config)
+        if len(methods) == 1:
+            method = methods[0]
+    if method not in SUPPORTED_METHODS:
+        raise ValueError("Cannot determine the best trial's optimizer for the follow-up experiment.")
+    prefix = f"{method}."
+    overrides = {
+        key[len(prefix):]: value
+        for key, value in best["params"].items()
+        if key.startswith(prefix)
+    }
+    experiment_config.update(overrides)
+    experiment_config["optimization_method"] = method
+    output_dir = Path(str(config["results_folder"]))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    config_path = (output_dir / "best_trial_experiment_config.yaml").resolve()
+    with config_path.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(experiment_config, f, sort_keys=False)
+    print(f"Running follow-up experiment with trial {best['number']} ({method}).")
+    print(f"Experiment config saved to: {config_path}")
+    subprocess.run(
+        [sys.executable, str(Path(__file__).with_name("run_experiments.py").resolve()),
+         "--config", str(config_path)],
+        check=True,
+    )
+    return config_path
+
+
 def _best_trial_payload(study):
     if study is None:
         return None
@@ -813,6 +877,7 @@ def main():
     study, trial_rows = run_optuna_search(config, dry_run=args.dry_run)
     save_summary(config, study, trial_rows)
     save_optuna_plots(config, study)
+    run_follow_up_experiment(config, study, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":

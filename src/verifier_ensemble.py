@@ -121,10 +121,13 @@ def ensemble_run(method):
     def wrapped(self, *args, **kwargs):
         if getattr(self, "_ensemble_run", None) is not None:
             return method(self, *args, **kwargs)
+        self._experiment_skipped = False
         run = EnsembleRun(self) if self.ensemble_list else None
         self._ensemble_run = run
         try:
             folder = method(self, *args, **kwargs)
+            if self._experiment_skipped:
+                return folder
             if run is not None:
                 run.finish(folder)
             else:

@@ -48,6 +48,7 @@ from io import BytesIO
 from contextlib import nullcontext
 from pathlib import Path
 from transformers import AutoModel, AutoProcessor
+from src.experiment_resume import ExperimentResumeMixin
 from src.verifier_ensemble import (
     METRICS, ensemble_run, ensemble_scores, normalize_ensemble_list,
 )
@@ -235,7 +236,7 @@ class CooperativeSynapseNeuroevolution:
     def stop(self):
         return self.generation >= self.max_generations
 
-class Eigo:
+class Eigo(ExperimentResumeMixin):
     _MODEL_CACHE = {}
     _ACTIVE_CACHE_KEY = None
 
@@ -263,6 +264,9 @@ class Eigo:
     def __init__(self, config_parameters):
         cls = type(self)
         self.parameters = config_parameters
+        self._resume_parameters = dict(config_parameters)
+        if not isinstance(config_parameters.get("resume_experiment", False), bool):
+            raise ValueError("resume_experiment must be a boolean.")
         self.ensemble_list = normalize_ensemble_list(config_parameters.get("ensemble_list"))
         if self.ensemble_list and config_parameters.get("optimization_method") in {"adam", "gomea"}:
             raise ValueError(
@@ -2039,6 +2043,9 @@ class Eigo:
         results_folder = f"{self.OUTPUT_FOLDER}/results_{self.model_name}_{seed}"
         if prompt_number is not None:
             results_folder += f"_{prompt_number}"
+        checkpoint = self._load_experiment_checkpoint(results_folder, seed, selected_prompt)
+        if checkpoint is not None and checkpoint.get("skip"):
+            return results_folder
         os.makedirs(results_folder, exist_ok=True)
         self._save_run_config(results_folder, seed, selected_prompt, category=category, prompt_number=prompt_number)
 
@@ -2065,103 +2072,180 @@ class Eigo:
                 f"noise_eta_sigma={noise_eta_sigma}"
             )
 
-        self._reset_peak_vram()
-        with torch.no_grad():
-            target_state = self._build_optimization_target_state(selected_prompt, seed)
-            initial_image = self.generate_image_from_tensors_cmaes(
-                target_state["prompt_embeds"].clone(),
-                target_state["pooled_prompt_embeds"].clone(),
-                seed,
-                latents=target_state["latents"].clone(),
-            )
-            self._save_jpeg(initial_image, f"{results_folder}/it_0.jpg")
-
-        embedding_vector = np.asarray(target_state["initial_embedding_vector"], dtype=np.float64).copy()
-        noise_vector = np.asarray(target_state["initial_noise_vector"], dtype=np.float64).copy()
-        initial_vector = cc_components_to_vector(embedding_vector, noise_vector)
-
-        initial_fitness, initial_aesthetic_score, initial_clip_score, initial_image_reward_score, initial_hpsv2_score, initial_pickscore_score, initial_jpeg_size_kb, _ = (
-            self.evaluate(initial_vector, seed, target_state, selected_prompt)
+        checkpoint_names = (
+            "target_state",
+            "embedding_es",
+            "noise_es",
+            "best_embedding_vector",
+            "best_noise_vector",
+            "representative_fitness",
+            "best_fitness_overall",
+            "best_vector_overall",
+            "generation",
+            "avg_aesthetic_score_list",
+            "avg_clip_score_list",
+            "avg_fit_list",
+            "avg_hpsv2_score_list",
+            "avg_image_reward_score_list",
+            "avg_jpeg_size_kb_list",
+            "avg_pickscore_score_list",
+            "max_aesthetic_score_list",
+            "max_clip_score_list",
+            "max_fit_list",
+            "max_hpsv2_score_list",
+            "max_image_reward_score_list",
+            "max_pickscore_score_list",
+            "min_jpeg_size_kb_list",
+            "peak_vram_mb_list",
+            "std_aesthetic_score_list",
+            "std_clip_score_list",
+            "std_fit_list",
+            "std_hpsv2_score_list",
+            "std_image_reward_score_list",
+            "std_jpeg_size_kb_list",
+            "std_pickscore_score_list",
+            "time_list",
         )
-
-        if cc_method == "snes":
-            embedding_es = SeparableNaturalEvolutionStrategy(
-                embedding_vector,
-                embedding_sigma,
-                pop_size,
-                num_generations,
-                seed=seed,
-                eta_mu=embedding_eta_mu,
-                eta_sigma=embedding_eta_sigma,
-            )
-            noise_es = SeparableNaturalEvolutionStrategy(
-                noise_vector,
-                noise_sigma,
-                pop_size,
-                num_generations,
-                seed=seed + 1,
-                eta_mu=noise_eta_mu,
-                eta_sigma=noise_eta_sigma,
-            )
-        else:
-            embedding_es = cma.CMAEvolutionStrategy(
-                embedding_vector,
-                embedding_sigma,
-                self._cmaes_options_for_variant(
-                    variant,
+        if checkpoint is None:
+            self._reset_peak_vram()
+            with torch.no_grad():
+                target_state = self._build_optimization_target_state(selected_prompt, seed)
+                initial_image = self.generate_image_from_tensors_cmaes(
+                    target_state["prompt_embeds"].clone(),
+                    target_state["pooled_prompt_embeds"].clone(),
                     seed,
-                    pop_size,
-                    num_generations,
-                    results_folder,
-                    "outcmaes_embeddings",
-                ),
-            )
-            noise_es = cma.CMAEvolutionStrategy(
-                noise_vector,
-                noise_sigma,
-                self._cmaes_options_for_variant(
-                    variant,
-                    seed + 1,
-                    pop_size,
-                    num_generations,
-                    results_folder,
-                    "outcmaes_noise",
-                ),
+                    latents=target_state["latents"].clone(),
+                )
+                self._save_jpeg(initial_image, f"{results_folder}/it_0.jpg")
+
+            embedding_vector = np.asarray(target_state["initial_embedding_vector"], dtype=np.float64).copy()
+            noise_vector = np.asarray(target_state["initial_noise_vector"], dtype=np.float64).copy()
+            initial_vector = cc_components_to_vector(embedding_vector, noise_vector)
+
+            initial_fitness, initial_aesthetic_score, initial_clip_score, initial_image_reward_score, initial_hpsv2_score, initial_pickscore_score, initial_jpeg_size_kb, _ = (
+                self.evaluate(initial_vector, seed, target_state, selected_prompt)
             )
 
-        best_embedding_vector = embedding_vector.copy()
-        best_noise_vector = noise_vector.copy()
-        representative_fitness = -initial_fitness
-        best_fitness_overall = -initial_fitness
-        best_vector_overall = initial_vector.copy()
+            if cc_method == "snes":
+                embedding_es = SeparableNaturalEvolutionStrategy(
+                    embedding_vector,
+                    embedding_sigma,
+                    pop_size,
+                    num_generations,
+                    seed=seed,
+                    eta_mu=embedding_eta_mu,
+                    eta_sigma=embedding_eta_sigma,
+                )
+                noise_es = SeparableNaturalEvolutionStrategy(
+                    noise_vector,
+                    noise_sigma,
+                    pop_size,
+                    num_generations,
+                    seed=seed + 1,
+                    eta_mu=noise_eta_mu,
+                    eta_sigma=noise_eta_sigma,
+                )
+            else:
+                embedding_es = cma.CMAEvolutionStrategy(
+                    embedding_vector,
+                    embedding_sigma,
+                    self._cmaes_options_for_variant(
+                        variant,
+                        seed,
+                        pop_size,
+                        num_generations,
+                        results_folder,
+                        "outcmaes_embeddings",
+                    ),
+                )
+                noise_es = cma.CMAEvolutionStrategy(
+                    noise_vector,
+                    noise_sigma,
+                    self._cmaes_options_for_variant(
+                        variant,
+                        seed + 1,
+                        pop_size,
+                        num_generations,
+                        results_folder,
+                        "outcmaes_noise",
+                    ),
+                )
 
-        time_list = [0.0]
-        peak_vram_mb_list = [self._peak_vram_mb()]
-        max_fit_list = [-initial_fitness]
-        avg_fit_list = [-initial_fitness]
-        std_fit_list = [0.0]
-        max_aesthetic_score_list = [initial_aesthetic_score]
-        avg_aesthetic_score_list = [initial_aesthetic_score]
-        std_aesthetic_score_list = [0.0]
-        max_clip_score_list = [initial_clip_score]
-        avg_clip_score_list = [initial_clip_score]
-        std_clip_score_list = [0.0]
-        max_image_reward_score_list = [initial_image_reward_score]
-        avg_image_reward_score_list = [initial_image_reward_score]
-        std_image_reward_score_list = [0.0]
-        max_hpsv2_score_list = [initial_hpsv2_score]
-        avg_hpsv2_score_list = [initial_hpsv2_score]
-        std_hpsv2_score_list = [0.0]
-        max_pickscore_score_list = [initial_pickscore_score]
-        avg_pickscore_score_list = [initial_pickscore_score]
-        std_pickscore_score_list = [0.0]
-        min_jpeg_size_kb_list = [initial_jpeg_size_kb]
-        avg_jpeg_size_kb_list = [initial_jpeg_size_kb]
-        std_jpeg_size_kb_list = [0.0]
+            best_embedding_vector = embedding_vector.copy()
+            best_noise_vector = noise_vector.copy()
+            representative_fitness = -initial_fitness
+            best_fitness_overall = -initial_fitness
+            best_vector_overall = initial_vector.copy()
 
-        start_time = time.time()
-        generation = 0
+            time_list = [0.0]
+            peak_vram_mb_list = [self._peak_vram_mb()]
+            max_fit_list = [-initial_fitness]
+            avg_fit_list = [-initial_fitness]
+            std_fit_list = [0.0]
+            max_aesthetic_score_list = [initial_aesthetic_score]
+            avg_aesthetic_score_list = [initial_aesthetic_score]
+            std_aesthetic_score_list = [0.0]
+            max_clip_score_list = [initial_clip_score]
+            avg_clip_score_list = [initial_clip_score]
+            std_clip_score_list = [0.0]
+            max_image_reward_score_list = [initial_image_reward_score]
+            avg_image_reward_score_list = [initial_image_reward_score]
+            std_image_reward_score_list = [0.0]
+            max_hpsv2_score_list = [initial_hpsv2_score]
+            avg_hpsv2_score_list = [initial_hpsv2_score]
+            std_hpsv2_score_list = [0.0]
+            max_pickscore_score_list = [initial_pickscore_score]
+            avg_pickscore_score_list = [initial_pickscore_score]
+            std_pickscore_score_list = [0.0]
+            min_jpeg_size_kb_list = [initial_jpeg_size_kb]
+            avg_jpeg_size_kb_list = [initial_jpeg_size_kb]
+            std_jpeg_size_kb_list = [0.0]
 
+            start_time = time.time()
+            generation = 0
+
+        else:
+            target_state = checkpoint["state"]["target_state"]
+            embedding_es = checkpoint["state"]["embedding_es"]
+            noise_es = checkpoint["state"]["noise_es"]
+            best_embedding_vector = checkpoint["state"]["best_embedding_vector"]
+            best_noise_vector = checkpoint["state"]["best_noise_vector"]
+            representative_fitness = checkpoint["state"]["representative_fitness"]
+            best_fitness_overall = checkpoint["state"]["best_fitness_overall"]
+            best_vector_overall = checkpoint["state"]["best_vector_overall"]
+            generation = checkpoint["state"]["generation"]
+            avg_aesthetic_score_list = checkpoint["state"]["avg_aesthetic_score_list"]
+            avg_clip_score_list = checkpoint["state"]["avg_clip_score_list"]
+            avg_fit_list = checkpoint["state"]["avg_fit_list"]
+            avg_hpsv2_score_list = checkpoint["state"]["avg_hpsv2_score_list"]
+            avg_image_reward_score_list = checkpoint["state"]["avg_image_reward_score_list"]
+            avg_jpeg_size_kb_list = checkpoint["state"]["avg_jpeg_size_kb_list"]
+            avg_pickscore_score_list = checkpoint["state"]["avg_pickscore_score_list"]
+            max_aesthetic_score_list = checkpoint["state"]["max_aesthetic_score_list"]
+            max_clip_score_list = checkpoint["state"]["max_clip_score_list"]
+            max_fit_list = checkpoint["state"]["max_fit_list"]
+            max_hpsv2_score_list = checkpoint["state"]["max_hpsv2_score_list"]
+            max_image_reward_score_list = checkpoint["state"]["max_image_reward_score_list"]
+            max_pickscore_score_list = checkpoint["state"]["max_pickscore_score_list"]
+            min_jpeg_size_kb_list = checkpoint["state"]["min_jpeg_size_kb_list"]
+            peak_vram_mb_list = checkpoint["state"]["peak_vram_mb_list"]
+            std_aesthetic_score_list = checkpoint["state"]["std_aesthetic_score_list"]
+            std_clip_score_list = checkpoint["state"]["std_clip_score_list"]
+            std_fit_list = checkpoint["state"]["std_fit_list"]
+            std_hpsv2_score_list = checkpoint["state"]["std_hpsv2_score_list"]
+            std_image_reward_score_list = checkpoint["state"]["std_image_reward_score_list"]
+            std_jpeg_size_kb_list = checkpoint["state"]["std_jpeg_size_kb_list"]
+            std_pickscore_score_list = checkpoint["state"]["std_pickscore_score_list"]
+            time_list = checkpoint["state"]["time_list"]
+            self._restore_experiment_rng(checkpoint)
+            start_time = time.time() - checkpoint["elapsed"]
+            self._extend_population_optimizer(embedding_es)
+            self._extend_population_optimizer(noise_es)
+
+        completed_steps = checkpoint["step"] if checkpoint is not None else 0
+        if checkpoint is None:
+            self._save_experiment_checkpoint(results_folder, seed, selected_prompt,
+                0, time.time() - start_time, locals(), checkpoint_names)
         while generation < num_generations:
             if cc_method == "snes" and (embedding_es.stop() or noise_es.stop()):
                 break
@@ -2349,6 +2433,9 @@ class Eigo:
                 f"Estimated time remaining: {formatted_time_remaining}"
             )
 
+            self._save_experiment_checkpoint(results_folder, seed, selected_prompt,
+                generation, time.time() - start_time, locals(), checkpoint_names)
+
         with torch.no_grad():
             best_overall_pe, best_overall_ppe, best_overall_latents = tensors_from_vector(
                 best_vector_overall,
@@ -2423,116 +2510,192 @@ class Eigo:
         if prompt_number is not None:
             results_folder += f"_{prompt_number}"
 
+        checkpoint = self._load_experiment_checkpoint(results_folder, seed, selected_prompt)
+        if checkpoint is not None and checkpoint.get("skip"):
+            return results_folder
         os.makedirs(results_folder, exist_ok=True)
         self._save_run_config(results_folder, seed, selected_prompt, category=category, prompt_number=prompt_number)
 
-        save_path = None
-
-        self._reset_peak_vram()
-        with torch.no_grad():
-            target_state = self._build_optimization_target_state(selected_prompt, seed)
-
-        # Set population optimizer options
-        es_options = self._cmaes_options_for_variant(
-            variant,
-            seed,
-            self.parameters["pop_size"],
-            self.parameters["num_generations"],
-            results_folder,
-            "outcmaes",
+        checkpoint_names = (
+            "target_state",
+            "es",
+            "best_aesthetic_score_overall",
+            "best_clip_score_overall",
+            "best_fitness_overall",
+            "best_text_embeddings_overall",
+            "generation",
+            "avg_aesthetic_score_list",
+            "avg_clip_score_list",
+            "avg_fit_list",
+            "avg_hpsv2_score_list",
+            "avg_image_reward_score_list",
+            "avg_jpeg_size_kb_list",
+            "avg_pickscore_score_list",
+            "max_aesthetic_score_list",
+            "max_clip_score_list",
+            "max_fit_list",
+            "max_hpsv2_score_list",
+            "max_image_reward_score_list",
+            "max_pickscore_score_list",
+            "min_jpeg_size_kb_list",
+            "peak_vram_mb_list",
+            "std_aesthetic_score_list",
+            "std_clip_score_list",
+            "std_fit_list",
+            "std_hpsv2_score_list",
+            "std_image_reward_score_list",
+            "std_jpeg_size_kb_list",
+            "std_pickscore_score_list",
+            "time_list",
         )
+        if checkpoint is None:
+            save_path = None
 
-        if self.parameters["optimization_method"] == "snes":
-            print("Using Separable Natural Evolution Strategy (SNES)")
-        elif self.parameters["optimization_method"] == "cosyne":
-            print("Using Cooperative Synapse Neuroevolution (CoSyNE)")
-        elif variant == "cmaes":
-            print("Using standard CMA-ES")
-        elif variant == "sep":
-            print("Using sep-CMA-ES")
-        elif variant == "vd":
-            print("Using VD-CMA-ES")
-        else:
-            raise ValueError(f"Unknown CMA-ES variant: {self.parameters['cmaes_variant']}")
+            self._reset_peak_vram()
+            with torch.no_grad():
+                target_state = self._build_optimization_target_state(selected_prompt, seed)
 
-        trainable_params_init = target_state["initial_vector"]
-
-        if self.parameters["optimization_method"] == "snes":
-            es = SeparableNaturalEvolutionStrategy(
-                trainable_params_init,
-                float(self.parameters.get("snes_sigma", self.parameters["sigma"])),
-                int(self.parameters.get("snes_pop_size", self.parameters["pop_size"])),
-                int(self.parameters.get("snes_num_generations", self.parameters["num_generations"])),
-                seed=seed,
-                eta_mu=float(self.parameters.get("snes_eta_mu", 1.0)),
-                eta_sigma=self.parameters.get("snes_eta_sigma"),
-            )
-            # Keep reporting and time-limit accounting aligned with SNES overrides.
-            self.parameters["pop_size"] = es.pop_size
-            self.parameters["num_generations"] = es.max_generations
-        elif self.parameters["optimization_method"] == "cosyne":
-            es = CooperativeSynapseNeuroevolution(
-                trainable_params_init,
-                float(self.parameters.get("cosyne_init_range", self.parameters["sigma"])),
-                int(self.parameters.get("cosyne_pop_size", self.parameters["pop_size"])),
-                int(self.parameters.get("cosyne_num_generations", self.parameters["num_generations"])),
-                mutation_probability=float(self.parameters.get("cosyne_mutation_probability", 0.3)),
-                mutation_scale=float(self.parameters.get("cosyne_mutation_scale", 0.3)),
-                parent_count=int(self.parameters.get("cosyne_parent_count", 4)),
-                offspring_count=int(self.parameters.get("cosyne_offspring_count", 4)),
-                seed=seed,
-            )
-            self.parameters["pop_size"] = es.pop_size
-            self.parameters["num_generations"] = es.max_generations
-        else:
-            es = cma.CMAEvolutionStrategy(trainable_params_init, self.parameters["sigma"], es_options)
-
-        with torch.no_grad():
-            initial_image = self.generate_image_from_tensors_cmaes(
-                target_state["prompt_embeds"].clone(),
-                target_state["pooled_prompt_embeds"].clone(),
+            # Set population optimizer options
+            es_options = self._cmaes_options_for_variant(
+                variant,
                 seed,
-                latents=None if target_state["latents"] is None else target_state["latents"].clone(),
+                self.parameters["pop_size"],
+                self.parameters["num_generations"],
+                results_folder,
+                "outcmaes",
             )
-            self._save_jpeg(initial_image, f"{results_folder}/it_0.jpg")
 
-            initial_fitness, initial_aesthetic_score, initial_clip_score, initial_image_reward_score, initial_hpsv2_score, initial_pickscore_score, initial_jpeg_size_kb, initial_components = self.evaluate(trainable_params_init, seed, target_state, selected_prompt)
+            if self.parameters["optimization_method"] == "snes":
+                print("Using Separable Natural Evolution Strategy (SNES)")
+            elif self.parameters["optimization_method"] == "cosyne":
+                print("Using Cooperative Synapse Neuroevolution (CoSyNE)")
+            elif variant == "cmaes":
+                print("Using standard CMA-ES")
+            elif variant == "sep":
+                print("Using sep-CMA-ES")
+            elif variant == "vd":
+                print("Using VD-CMA-ES")
+            else:
+                raise ValueError(f"Unknown CMA-ES variant: {self.parameters['cmaes_variant']}")
 
-        time_list = [0]
-        peak_vram_mb_list = [self._peak_vram_mb()]
-        best_aesthetic_score_overall = initial_aesthetic_score
-        best_clip_score_overall = initial_clip_score
-        best_fitness_overall = -initial_fitness
-        best_text_embeddings_overall = trainable_params_init.copy()
+            trainable_params_init = target_state["initial_vector"]
 
-        start_time = time.time()
-        generation = 0
+            if self.parameters["optimization_method"] == "snes":
+                es = SeparableNaturalEvolutionStrategy(
+                    trainable_params_init,
+                    float(self.parameters.get("snes_sigma", self.parameters["sigma"])),
+                    int(self.parameters.get("snes_pop_size", self.parameters["pop_size"])),
+                    int(self.parameters.get("snes_num_generations", self.parameters["num_generations"])),
+                    seed=seed,
+                    eta_mu=float(self.parameters.get("snes_eta_mu", 1.0)),
+                    eta_sigma=self.parameters.get("snes_eta_sigma"),
+                )
+                # Keep reporting and time-limit accounting aligned with SNES overrides.
+                self.parameters["pop_size"] = es.pop_size
+                self.parameters["num_generations"] = es.max_generations
+            elif self.parameters["optimization_method"] == "cosyne":
+                es = CooperativeSynapseNeuroevolution(
+                    trainable_params_init,
+                    float(self.parameters.get("cosyne_init_range", self.parameters["sigma"])),
+                    int(self.parameters.get("cosyne_pop_size", self.parameters["pop_size"])),
+                    int(self.parameters.get("cosyne_num_generations", self.parameters["num_generations"])),
+                    mutation_probability=float(self.parameters.get("cosyne_mutation_probability", 0.3)),
+                    mutation_scale=float(self.parameters.get("cosyne_mutation_scale", 0.3)),
+                    parent_count=int(self.parameters.get("cosyne_parent_count", 4)),
+                    offspring_count=int(self.parameters.get("cosyne_offspring_count", 4)),
+                    seed=seed,
+                )
+                self.parameters["pop_size"] = es.pop_size
+                self.parameters["num_generations"] = es.max_generations
+            else:
+                es = cma.CMAEvolutionStrategy(trainable_params_init, self.parameters["sigma"], es_options)
 
-        max_fit_list = [-initial_fitness]
-        avg_fit_list = [-initial_fitness]
-        std_fit_list = [0]
+            with torch.no_grad():
+                initial_image = self.generate_image_from_tensors_cmaes(
+                    target_state["prompt_embeds"].clone(),
+                    target_state["pooled_prompt_embeds"].clone(),
+                    seed,
+                    latents=None if target_state["latents"] is None else target_state["latents"].clone(),
+                )
+                self._save_jpeg(initial_image, f"{results_folder}/it_0.jpg")
 
-        max_aesthetic_score_list = [initial_aesthetic_score]
-        avg_aesthetic_score_list = [initial_aesthetic_score]
-        std_aesthetic_score_list = [0]
+                initial_fitness, initial_aesthetic_score, initial_clip_score, initial_image_reward_score, initial_hpsv2_score, initial_pickscore_score, initial_jpeg_size_kb, initial_components = self.evaluate(trainable_params_init, seed, target_state, selected_prompt)
 
-        max_clip_score_list = [initial_clip_score]
-        avg_clip_score_list = [initial_clip_score]
-        std_clip_score_list = [0]
+            time_list = [0]
+            peak_vram_mb_list = [self._peak_vram_mb()]
+            best_aesthetic_score_overall = initial_aesthetic_score
+            best_clip_score_overall = initial_clip_score
+            best_fitness_overall = -initial_fitness
+            best_text_embeddings_overall = trainable_params_init.copy()
 
-        max_image_reward_score_list = [initial_image_reward_score]
-        avg_image_reward_score_list = [initial_image_reward_score]
-        std_image_reward_score_list = [0]
-        max_hpsv2_score_list = [initial_hpsv2_score]
-        avg_hpsv2_score_list = [initial_hpsv2_score]
-        std_hpsv2_score_list = [0]
-        max_pickscore_score_list = [initial_pickscore_score]
-        avg_pickscore_score_list = [initial_pickscore_score]
-        std_pickscore_score_list = [0]
-        min_jpeg_size_kb_list = [initial_jpeg_size_kb]
-        avg_jpeg_size_kb_list = [initial_jpeg_size_kb]
-        std_jpeg_size_kb_list = [0]
+            start_time = time.time()
+            generation = 0
 
+            max_fit_list = [-initial_fitness]
+            avg_fit_list = [-initial_fitness]
+            std_fit_list = [0]
+
+            max_aesthetic_score_list = [initial_aesthetic_score]
+            avg_aesthetic_score_list = [initial_aesthetic_score]
+            std_aesthetic_score_list = [0]
+
+            max_clip_score_list = [initial_clip_score]
+            avg_clip_score_list = [initial_clip_score]
+            std_clip_score_list = [0]
+
+            max_image_reward_score_list = [initial_image_reward_score]
+            avg_image_reward_score_list = [initial_image_reward_score]
+            std_image_reward_score_list = [0]
+            max_hpsv2_score_list = [initial_hpsv2_score]
+            avg_hpsv2_score_list = [initial_hpsv2_score]
+            std_hpsv2_score_list = [0]
+            max_pickscore_score_list = [initial_pickscore_score]
+            avg_pickscore_score_list = [initial_pickscore_score]
+            std_pickscore_score_list = [0]
+            min_jpeg_size_kb_list = [initial_jpeg_size_kb]
+            avg_jpeg_size_kb_list = [initial_jpeg_size_kb]
+            std_jpeg_size_kb_list = [0]
+
+        else:
+            target_state = checkpoint["state"]["target_state"]
+            es = checkpoint["state"]["es"]
+            best_aesthetic_score_overall = checkpoint["state"]["best_aesthetic_score_overall"]
+            best_clip_score_overall = checkpoint["state"]["best_clip_score_overall"]
+            best_fitness_overall = checkpoint["state"]["best_fitness_overall"]
+            best_text_embeddings_overall = checkpoint["state"]["best_text_embeddings_overall"]
+            generation = checkpoint["state"]["generation"]
+            avg_aesthetic_score_list = checkpoint["state"]["avg_aesthetic_score_list"]
+            avg_clip_score_list = checkpoint["state"]["avg_clip_score_list"]
+            avg_fit_list = checkpoint["state"]["avg_fit_list"]
+            avg_hpsv2_score_list = checkpoint["state"]["avg_hpsv2_score_list"]
+            avg_image_reward_score_list = checkpoint["state"]["avg_image_reward_score_list"]
+            avg_jpeg_size_kb_list = checkpoint["state"]["avg_jpeg_size_kb_list"]
+            avg_pickscore_score_list = checkpoint["state"]["avg_pickscore_score_list"]
+            max_aesthetic_score_list = checkpoint["state"]["max_aesthetic_score_list"]
+            max_clip_score_list = checkpoint["state"]["max_clip_score_list"]
+            max_fit_list = checkpoint["state"]["max_fit_list"]
+            max_hpsv2_score_list = checkpoint["state"]["max_hpsv2_score_list"]
+            max_image_reward_score_list = checkpoint["state"]["max_image_reward_score_list"]
+            max_pickscore_score_list = checkpoint["state"]["max_pickscore_score_list"]
+            min_jpeg_size_kb_list = checkpoint["state"]["min_jpeg_size_kb_list"]
+            peak_vram_mb_list = checkpoint["state"]["peak_vram_mb_list"]
+            std_aesthetic_score_list = checkpoint["state"]["std_aesthetic_score_list"]
+            std_clip_score_list = checkpoint["state"]["std_clip_score_list"]
+            std_fit_list = checkpoint["state"]["std_fit_list"]
+            std_hpsv2_score_list = checkpoint["state"]["std_hpsv2_score_list"]
+            std_image_reward_score_list = checkpoint["state"]["std_image_reward_score_list"]
+            std_jpeg_size_kb_list = checkpoint["state"]["std_jpeg_size_kb_list"]
+            std_pickscore_score_list = checkpoint["state"]["std_pickscore_score_list"]
+            time_list = checkpoint["state"]["time_list"]
+            self._restore_experiment_rng(checkpoint)
+            start_time = time.time() - checkpoint["elapsed"]
+            self._extend_population_optimizer(es)
+            self.parameters["num_generations"] = self._experiment_limit()
+
+        completed_steps = checkpoint["step"] if checkpoint is not None else 0
+        if checkpoint is None:
+            self._save_experiment_checkpoint(results_folder, seed, selected_prompt,
+                0, time.time() - start_time, locals(), checkpoint_names)
         while not es.stop():
             elapsed_time = time.time() - start_time
             if self.parameters['time_limit_seconds'] is not None and elapsed_time >= self.parameters['time_limit_seconds']:
@@ -2704,6 +2867,9 @@ class Eigo:
             # Print stats
             print(f"Generation {generation}/{self.parameters['num_generations']}: Max fitness: {max_fit}, Avg fitness: {avg_fit}, Max aesthetic score: {max_aesthetic_score}, Avg aesthetic score: {avg_aesthetic_score}, Max clip score: {max_clip_score}, Avg clip score: {avg_clip_score}, Max ImageReward score: {max_image_reward_score}, Avg ImageReward score: {avg_image_reward_score}, Max HPSv2 score: {max_hpsv2_score}, Avg HPSv2 score: {avg_hpsv2_score}, Max PickScore: {max_pickscore_score}, Avg PickScore: {avg_pickscore_score}, Estimated time remaining: {formatted_time_remaining}")
 
+            self._save_experiment_checkpoint(results_folder, seed, selected_prompt,
+                generation, time.time() - start_time, locals(), checkpoint_names)
+
         # Save the overall best image
         with torch.no_grad():
             best_overall_pe, best_overall_ppe, best_overall_latents = tensors_from_vector(
@@ -2836,6 +3002,9 @@ class Eigo:
         results_folder = f"{self.OUTPUT_FOLDER}/results_{self.model_name}_{seed}"
         if prompt_number is not None:
             results_folder += f"_{prompt_number}"
+        checkpoint = self._load_experiment_checkpoint(results_folder, seed, selected_prompt)
+        if checkpoint is not None and checkpoint.get("skip"):
+            return results_folder
         os.makedirs(results_folder, exist_ok=True)
         self._save_run_config(results_folder, seed, selected_prompt, category=category, prompt_number=prompt_number)
 
@@ -3115,34 +3284,54 @@ class Eigo:
         results_folder = f"{self.OUTPUT_FOLDER}/results_{self.model_name}_{seed}"
         if prompt_number is not None:
             results_folder += f"_{prompt_number}"
+        checkpoint = self._load_experiment_checkpoint(results_folder, seed, selected_prompt)
+        if checkpoint is not None and checkpoint.get("skip"):
+            return results_folder
         os.makedirs(results_folder, exist_ok=True)
         self._save_run_config(results_folder, seed, selected_prompt, category=category, prompt_number=prompt_number)
 
-        self._reset_peak_vram()
-        with torch.no_grad():
-            target_state = self._build_optimization_target_state(selected_prompt, seed)
-        pivot = torch.as_tensor(target_state["initial_vector"], dtype=torch.float32)
-        initial = self.evaluate(pivot.numpy(), seed, target_state, selected_prompt)
-        initial_score = -initial[0]
-        pe, ppe, latents = tensors_from_vector(pivot.numpy(), target_state, self.device)
-        with torch.no_grad():
-            initial_image = self.generate_image_from_tensors_cmaes(pe, ppe, seed, latents=latents)
-        self._save_jpeg(initial_image, os.path.join(results_folder, "it_0.jpg"))
+        checkpoint_names = (
+            "target_state",
+            "pivot",
+            "rows",
+        )
+        if checkpoint is None:
+            self._reset_peak_vram()
+            with torch.no_grad():
+                target_state = self._build_optimization_target_state(selected_prompt, seed)
+            pivot = torch.as_tensor(target_state["initial_vector"], dtype=torch.float32)
+            initial = self.evaluate(pivot.numpy(), seed, target_state, selected_prompt)
+            initial_score = -initial[0]
+            pe, ppe, latents = tensors_from_vector(pivot.numpy(), target_state, self.device)
+            with torch.no_grad():
+                initial_image = self.generate_image_from_tensors_cmaes(pe, ppe, seed, latents=latents)
+            self._save_jpeg(initial_image, os.path.join(results_folder, "it_0.jpg"))
 
-        rows = [{
-            "generation": 0, "prompt": selected_prompt,
-            "avg_fitness": initial_score, "std_fitness": 0.0, "max_fitness": initial_score,
-            "avg_aesthetic_score": initial[1], "std_aesthetic_score": 0.0, "max_aesthetic_score": initial[1],
-            "avg_clip_score": initial[2], "std_clip_score": 0.0, "max_clip_score": initial[2],
-            "avg_image_reward_score": initial[3], "std_image_reward_score": 0.0, "max_image_reward_score": initial[3],
-            "avg_hpsv2_score": initial[4], "std_hpsv2_score": 0.0, "max_hpsv2_score": initial[4],
-            "avg_pickscore_score": initial[5], "std_pickscore_score": 0.0, "max_pickscore_score": initial[5],
-            "avg_jpeg_size_kb": initial[6], "std_jpeg_size_kb": 0.0, "min_jpeg_size_kb": initial[6],
-            "elapsed_time": 0.0, "peak_vram_mb": self._peak_vram_mb(),
-        }]
-        start_time = time.time()
+            rows = [{
+                "generation": 0, "prompt": selected_prompt,
+                "avg_fitness": initial_score, "std_fitness": 0.0, "max_fitness": initial_score,
+                "avg_aesthetic_score": initial[1], "std_aesthetic_score": 0.0, "max_aesthetic_score": initial[1],
+                "avg_clip_score": initial[2], "std_clip_score": 0.0, "max_clip_score": initial[2],
+                "avg_image_reward_score": initial[3], "std_image_reward_score": 0.0, "max_image_reward_score": initial[3],
+                "avg_hpsv2_score": initial[4], "std_hpsv2_score": 0.0, "max_hpsv2_score": initial[4],
+                "avg_pickscore_score": initial[5], "std_pickscore_score": 0.0, "max_pickscore_score": initial[5],
+                "avg_jpeg_size_kb": initial[6], "std_jpeg_size_kb": 0.0, "min_jpeg_size_kb": initial[6],
+                "elapsed_time": 0.0, "peak_vram_mb": self._peak_vram_mb(),
+            }]
+            start_time = time.time()
 
-        for generation in range(1, num_generations + 1):
+        else:
+            target_state = checkpoint["state"]["target_state"]
+            pivot = checkpoint["state"]["pivot"]
+            rows = checkpoint["state"]["rows"]
+            self._restore_experiment_rng(checkpoint)
+            start_time = time.time() - checkpoint["elapsed"]
+
+        completed_steps = checkpoint["step"] if checkpoint is not None else 0
+        if checkpoint is None:
+            self._save_experiment_checkpoint(results_folder, seed, selected_prompt,
+                0, time.time() - start_time, locals(), checkpoint_names)
+        for generation in range(completed_steps + 1, num_generations + 1):
             elapsed = time.time() - start_time
             limit = self.parameters.get("time_limit_seconds")
             if limit is not None and elapsed >= limit:
@@ -3213,6 +3402,9 @@ class Eigo:
                 f"Avg PickScore: {row['avg_pickscore_score']}, "
                 f"Estimated time remaining: {formatted_time_remaining}"
             )
+
+            self._save_experiment_checkpoint(results_folder, seed, selected_prompt,
+                generation, time.time() - start_time, locals(), checkpoint_names)
 
         pe, ppe, latents = tensors_from_vector(pivot.numpy(), target_state, self.device)
         with torch.no_grad():
@@ -3342,59 +3534,129 @@ class Eigo:
         results_folder = f"{self.OUTPUT_FOLDER}/results_{self.model_name}_{seed}"
         if prompt_number is not None:
             results_folder += f"_{prompt_number}"
+        checkpoint = self._load_experiment_checkpoint(results_folder, seed, selected_prompt)
+        if checkpoint is not None and checkpoint.get("skip"):
+            return results_folder
         os.makedirs(results_folder, exist_ok=True)
         self._save_run_config(results_folder, seed, selected_prompt, category=category, prompt_number=prompt_number)
 
-        self._reset_peak_vram()
-        with torch.no_grad():
-            target_state = self._build_optimization_target_state(selected_prompt, seed)
-            initial_image = self.generate_image_from_tensors_cmaes(
-                target_state["prompt_embeds"].clone(),
-                target_state["pooled_prompt_embeds"].clone(),
-                seed,
-                latents=None if target_state["latents"] is None else target_state["latents"].clone(),
-            )
-            self._save_jpeg(initial_image, f"{results_folder}/it_0.jpg")
-
-        trainable_params_init = target_state["initial_vector"]
-
-        initial_fitness, initial_aesthetic_score, initial_clip_score, initial_image_reward_score, initial_hpsv2_score, initial_pickscore_score, initial_jpeg_size_kb, initial_components = self.evaluate(
-            trainable_params_init, seed, target_state, selected_prompt
+        checkpoint_names = (
+            "target_state",
+            "population",
+            "rng",
+            "best_fitness_overall",
+            "best_text_embeddings_overall",
+            "avg_aesthetic_score_list",
+            "avg_clip_score_list",
+            "avg_fit_list",
+            "avg_hpsv2_score_list",
+            "avg_image_reward_score_list",
+            "avg_jpeg_size_kb_list",
+            "avg_pickscore_score_list",
+            "max_aesthetic_score_list",
+            "max_clip_score_list",
+            "max_fit_list",
+            "max_hpsv2_score_list",
+            "max_image_reward_score_list",
+            "max_pickscore_score_list",
+            "min_jpeg_size_kb_list",
+            "peak_vram_mb_list",
+            "std_aesthetic_score_list",
+            "std_clip_score_list",
+            "std_fit_list",
+            "std_hpsv2_score_list",
+            "std_image_reward_score_list",
+            "std_jpeg_size_kb_list",
+            "std_pickscore_score_list",
+            "time_list",
         )
+        if checkpoint is None:
+            self._reset_peak_vram()
+            with torch.no_grad():
+                target_state = self._build_optimization_target_state(selected_prompt, seed)
+                initial_image = self.generate_image_from_tensors_cmaes(
+                    target_state["prompt_embeds"].clone(),
+                    target_state["pooled_prompt_embeds"].clone(),
+                    seed,
+                    latents=None if target_state["latents"] is None else target_state["latents"].clone(),
+                )
+                self._save_jpeg(initial_image, f"{results_folder}/it_0.jpg")
 
-        population = np.repeat(trainable_params_init[None, :], pop_size, axis=0)
-        population += rng.normal(0.0, mutation_std, size=population.shape)
-        population[0] = trainable_params_init.copy()
+            trainable_params_init = target_state["initial_vector"]
 
-        best_fitness_overall = -initial_fitness
-        best_text_embeddings_overall = trainable_params_init.copy()
-        time_list = [0]
-        peak_vram_mb_list = [self._peak_vram_mb()]
-        start_time = time.time()
+            initial_fitness, initial_aesthetic_score, initial_clip_score, initial_image_reward_score, initial_hpsv2_score, initial_pickscore_score, initial_jpeg_size_kb, initial_components = self.evaluate(
+                trainable_params_init, seed, target_state, selected_prompt
+            )
 
-        max_fit_list = [best_fitness_overall]
-        avg_fit_list = [best_fitness_overall]
-        std_fit_list = [0]
-        max_aesthetic_score_list = [initial_aesthetic_score]
-        avg_aesthetic_score_list = [initial_aesthetic_score]
-        std_aesthetic_score_list = [0]
-        max_clip_score_list = [initial_clip_score]
-        avg_clip_score_list = [initial_clip_score]
-        std_clip_score_list = [0]
-        max_image_reward_score_list = [initial_image_reward_score]
-        avg_image_reward_score_list = [initial_image_reward_score]
-        std_image_reward_score_list = [0]
-        max_hpsv2_score_list = [initial_hpsv2_score]
-        avg_hpsv2_score_list = [initial_hpsv2_score]
-        std_hpsv2_score_list = [0]
-        max_pickscore_score_list = [initial_pickscore_score]
-        avg_pickscore_score_list = [initial_pickscore_score]
-        std_pickscore_score_list = [0]
-        min_jpeg_size_kb_list = [initial_jpeg_size_kb]
-        avg_jpeg_size_kb_list = [initial_jpeg_size_kb]
-        std_jpeg_size_kb_list = [0]
+            population = np.repeat(trainable_params_init[None, :], pop_size, axis=0)
+            population += rng.normal(0.0, mutation_std, size=population.shape)
+            population[0] = trainable_params_init.copy()
 
-        for generation in range(1, num_generations + 1):
+            best_fitness_overall = -initial_fitness
+            best_text_embeddings_overall = trainable_params_init.copy()
+            time_list = [0]
+            peak_vram_mb_list = [self._peak_vram_mb()]
+            start_time = time.time()
+
+            max_fit_list = [best_fitness_overall]
+            avg_fit_list = [best_fitness_overall]
+            std_fit_list = [0]
+            max_aesthetic_score_list = [initial_aesthetic_score]
+            avg_aesthetic_score_list = [initial_aesthetic_score]
+            std_aesthetic_score_list = [0]
+            max_clip_score_list = [initial_clip_score]
+            avg_clip_score_list = [initial_clip_score]
+            std_clip_score_list = [0]
+            max_image_reward_score_list = [initial_image_reward_score]
+            avg_image_reward_score_list = [initial_image_reward_score]
+            std_image_reward_score_list = [0]
+            max_hpsv2_score_list = [initial_hpsv2_score]
+            avg_hpsv2_score_list = [initial_hpsv2_score]
+            std_hpsv2_score_list = [0]
+            max_pickscore_score_list = [initial_pickscore_score]
+            avg_pickscore_score_list = [initial_pickscore_score]
+            std_pickscore_score_list = [0]
+            min_jpeg_size_kb_list = [initial_jpeg_size_kb]
+            avg_jpeg_size_kb_list = [initial_jpeg_size_kb]
+            std_jpeg_size_kb_list = [0]
+
+        else:
+            target_state = checkpoint["state"]["target_state"]
+            population = checkpoint["state"]["population"]
+            rng = checkpoint["state"]["rng"]
+            best_fitness_overall = checkpoint["state"]["best_fitness_overall"]
+            best_text_embeddings_overall = checkpoint["state"]["best_text_embeddings_overall"]
+            avg_aesthetic_score_list = checkpoint["state"]["avg_aesthetic_score_list"]
+            avg_clip_score_list = checkpoint["state"]["avg_clip_score_list"]
+            avg_fit_list = checkpoint["state"]["avg_fit_list"]
+            avg_hpsv2_score_list = checkpoint["state"]["avg_hpsv2_score_list"]
+            avg_image_reward_score_list = checkpoint["state"]["avg_image_reward_score_list"]
+            avg_jpeg_size_kb_list = checkpoint["state"]["avg_jpeg_size_kb_list"]
+            avg_pickscore_score_list = checkpoint["state"]["avg_pickscore_score_list"]
+            max_aesthetic_score_list = checkpoint["state"]["max_aesthetic_score_list"]
+            max_clip_score_list = checkpoint["state"]["max_clip_score_list"]
+            max_fit_list = checkpoint["state"]["max_fit_list"]
+            max_hpsv2_score_list = checkpoint["state"]["max_hpsv2_score_list"]
+            max_image_reward_score_list = checkpoint["state"]["max_image_reward_score_list"]
+            max_pickscore_score_list = checkpoint["state"]["max_pickscore_score_list"]
+            min_jpeg_size_kb_list = checkpoint["state"]["min_jpeg_size_kb_list"]
+            peak_vram_mb_list = checkpoint["state"]["peak_vram_mb_list"]
+            std_aesthetic_score_list = checkpoint["state"]["std_aesthetic_score_list"]
+            std_clip_score_list = checkpoint["state"]["std_clip_score_list"]
+            std_fit_list = checkpoint["state"]["std_fit_list"]
+            std_hpsv2_score_list = checkpoint["state"]["std_hpsv2_score_list"]
+            std_image_reward_score_list = checkpoint["state"]["std_image_reward_score_list"]
+            std_jpeg_size_kb_list = checkpoint["state"]["std_jpeg_size_kb_list"]
+            std_pickscore_score_list = checkpoint["state"]["std_pickscore_score_list"]
+            time_list = checkpoint["state"]["time_list"]
+            self._restore_experiment_rng(checkpoint)
+            start_time = time.time() - checkpoint["elapsed"]
+
+        completed_steps = checkpoint["step"] if checkpoint is not None else 0
+        if checkpoint is None:
+            self._save_experiment_checkpoint(results_folder, seed, selected_prompt,
+                0, time.time() - start_time, locals(), checkpoint_names)
+        for generation in range(completed_steps + 1, num_generations + 1):
             elapsed_time = time.time() - start_time
             if self.parameters['time_limit_seconds'] is not None and elapsed_time >= self.parameters['time_limit_seconds']:
                 print(
@@ -3577,6 +3839,10 @@ class Eigo:
             population = np.array(next_population[:pop_size], dtype=np.float32)
             population[0] = best_text_embeddings_overall.copy()
 
+            self._save_experiment_checkpoint(results_folder, seed, selected_prompt,
+                generation, time.time() - start_time, locals(), checkpoint_names)
+
+        generation = len(time_list) - 1
         with torch.no_grad():
             best_overall_pe, best_overall_ppe, best_overall_latents = tensors_from_vector(
                 best_text_embeddings_overall,
@@ -3675,90 +3941,153 @@ class Eigo:
         results_folder = f"{self.OUTPUT_FOLDER}/results_{self.model_name}_{seed}"
         if prompt_number is not None:
             results_folder += f"_{prompt_number}"
+        checkpoint = self._load_experiment_checkpoint(results_folder, seed, selected_prompt)
+        if checkpoint is not None and checkpoint.get("skip"):
+            return results_folder
         os.makedirs(results_folder, exist_ok=True)
         self._save_run_config(results_folder, seed, selected_prompt, category=category, prompt_number=prompt_number)
 
-        self._reset_peak_vram()
-        with torch.no_grad():
-            if self.optimization_target in {LATENT_NOISE, NOISE_EMBEDDINGS_FLAT}:
-                target_state = self._build_optimization_target_state(selected_prompt, seed)
-            else:
-                prompt_embeds, pooled_prompt_embeds = self._encode_prompt_embeddings(selected_prompt)
-                target_state = build_target_state(PROMPT_EMBEDDINGS, prompt_embeds, pooled_prompt_embeds)
-
-        trainable_params_init = target_state["initial_vector"]
-        sample_seeds = self._generate_sample_seeds(seed, num_images, excluded_seeds={seed})
-        random_sampler_uses_latents = self.optimization_target == LATENT_NOISE
-        random_sampler_uses_joint_vector = self.optimization_target == NOISE_EMBEDDINGS_FLAT
-        random_sampler_sigma = float(self.parameters.get("random_sampler_sigma", self.parameters.get("sigma", 0.1)))
-
-        sample_rows = []
-        sample_paths = []
-        sample_times = []
-        time_list = [0.0]
-        batch_ranges = [(0, 1)]
-        batch_elapsed_times = [0.0]
-        batch_peak_vram_values = []
-        batch_seed_ranges = [(seed, seed)]
-        start_time = time.time()
-
-        fitness_history = []
-        aesthetic_history = []
-        clip_history = []
-        image_reward_history = []
-        hpsv2_history = []
-        pickscore_history = []
-        jpeg_size_history = []
-
-        baseline_path = os.path.join(results_folder, "it_0.jpg")
-        initial_fitness, initial_aesthetic_score, initial_clip_score, initial_image_reward_score, initial_hpsv2_score, initial_pickscore_score, initial_jpeg_size_kb, _ = self.evaluate(
-            trainable_params_init,
-            seed,
-            target_state,
-            selected_prompt,
-            baseline_path,
+        checkpoint_names = (
+            "target_state",
+            "trainable_params_init",
+            "sample_rows",
+            "sample_paths",
+            "sample_times",
+            "batch_ranges",
+            "batch_elapsed_times",
+            "batch_peak_vram_values",
+            "batch_seed_ranges",
+            "fitness_history",
+            "aesthetic_history",
+            "clip_history",
+            "image_reward_history",
+            "hpsv2_history",
+            "pickscore_history",
+            "jpeg_size_history",
+            "best_fitness_overall",
+            "best_sample_path",
+            "baseline_path",
+            "random_sampler_uses_latents",
+            "random_sampler_uses_joint_vector",
+            "random_sampler_sigma",
+            "peak_vram_mb_list",
+            "time_list",
         )
-        initial_positive_fitness = float(-initial_fitness)
-        initial_aesthetic_score = float(initial_aesthetic_score)
-        initial_clip_score = float(initial_clip_score)
-        initial_image_reward_score = float(initial_image_reward_score)
-        initial_hpsv2_score = float(initial_hpsv2_score)
-        initial_pickscore_score = float(initial_pickscore_score)
-        initial_jpeg_size_kb = float(initial_jpeg_size_kb)
-        peak_vram_mb_list = [self._peak_vram_mb()]
-        batch_peak_vram_values.append(peak_vram_mb_list[0])
+        if checkpoint is None:
+            self._reset_peak_vram()
+            with torch.no_grad():
+                if self.optimization_target in {LATENT_NOISE, NOISE_EMBEDDINGS_FLAT}:
+                    target_state = self._build_optimization_target_state(selected_prompt, seed)
+                else:
+                    prompt_embeds, pooled_prompt_embeds = self._encode_prompt_embeddings(selected_prompt)
+                    target_state = build_target_state(PROMPT_EMBEDDINGS, prompt_embeds, pooled_prompt_embeds)
 
-        best_fitness_overall = initial_positive_fitness
-        best_sample_path = baseline_path
+            trainable_params_init = target_state["initial_vector"]
+            sample_seeds = self._generate_sample_seeds(seed, num_images, excluded_seeds={seed})
+            random_sampler_uses_latents = self.optimization_target == LATENT_NOISE
+            random_sampler_uses_joint_vector = self.optimization_target == NOISE_EMBEDDINGS_FLAT
+            random_sampler_sigma = float(self.parameters.get("random_sampler_sigma", self.parameters.get("sigma", 0.1)))
 
-        fitness_history.append(initial_positive_fitness)
-        aesthetic_history.append(initial_aesthetic_score)
-        clip_history.append(initial_clip_score)
-        image_reward_history.append(initial_image_reward_score)
-        hpsv2_history.append(initial_hpsv2_score)
-        pickscore_history.append(initial_pickscore_score)
-        jpeg_size_history.append(initial_jpeg_size_kb)
+            sample_rows = []
+            sample_paths = []
+            sample_times = []
+            time_list = [0.0]
+            batch_ranges = [(0, 1)]
+            batch_elapsed_times = [0.0]
+            batch_peak_vram_values = []
+            batch_seed_ranges = [(seed, seed)]
+            start_time = time.time()
 
-        sample_rows.append({
-            "sample": 0,
-            "generation": 0,
-            "seed": seed,
-            "generation_seed": seed,
-            "sample_target": self.optimization_target,
-            "prompt": selected_prompt,
-            "fitness": initial_positive_fitness,
-            "aesthetic_score": initial_aesthetic_score,
-            "clip_score": initial_clip_score,
-            "image_reward_score": initial_image_reward_score,
-            "hpsv2_score": initial_hpsv2_score,
-            "pickscore_score": initial_pickscore_score,
-            "jpeg_size_kb": initial_jpeg_size_kb,
-            "elapsed_time": 0.0,
-            "peak_vram_mb": peak_vram_mb_list[0],
-        })
-        if category is not None:
-            sample_rows[-1]["category"] = category
+            fitness_history = []
+            aesthetic_history = []
+            clip_history = []
+            image_reward_history = []
+            hpsv2_history = []
+            pickscore_history = []
+            jpeg_size_history = []
 
+            baseline_path = os.path.join(results_folder, "it_0.jpg")
+            initial_fitness, initial_aesthetic_score, initial_clip_score, initial_image_reward_score, initial_hpsv2_score, initial_pickscore_score, initial_jpeg_size_kb, _ = self.evaluate(
+                trainable_params_init,
+                seed,
+                target_state,
+                selected_prompt,
+                baseline_path,
+            )
+            initial_positive_fitness = float(-initial_fitness)
+            initial_aesthetic_score = float(initial_aesthetic_score)
+            initial_clip_score = float(initial_clip_score)
+            initial_image_reward_score = float(initial_image_reward_score)
+            initial_hpsv2_score = float(initial_hpsv2_score)
+            initial_pickscore_score = float(initial_pickscore_score)
+            initial_jpeg_size_kb = float(initial_jpeg_size_kb)
+            peak_vram_mb_list = [self._peak_vram_mb()]
+            batch_peak_vram_values.append(peak_vram_mb_list[0])
+
+            best_fitness_overall = initial_positive_fitness
+            best_sample_path = baseline_path
+
+            fitness_history.append(initial_positive_fitness)
+            aesthetic_history.append(initial_aesthetic_score)
+            clip_history.append(initial_clip_score)
+            image_reward_history.append(initial_image_reward_score)
+            hpsv2_history.append(initial_hpsv2_score)
+            pickscore_history.append(initial_pickscore_score)
+            jpeg_size_history.append(initial_jpeg_size_kb)
+
+            sample_rows.append({
+                "sample": 0,
+                "generation": 0,
+                "seed": seed,
+                "generation_seed": seed,
+                "sample_target": self.optimization_target,
+                "prompt": selected_prompt,
+                "fitness": initial_positive_fitness,
+                "aesthetic_score": initial_aesthetic_score,
+                "clip_score": initial_clip_score,
+                "image_reward_score": initial_image_reward_score,
+                "hpsv2_score": initial_hpsv2_score,
+                "pickscore_score": initial_pickscore_score,
+                "jpeg_size_kb": initial_jpeg_size_kb,
+                "elapsed_time": 0.0,
+                "peak_vram_mb": peak_vram_mb_list[0],
+            })
+            if category is not None:
+                sample_rows[-1]["category"] = category
+
+        else:
+            target_state = checkpoint["state"]["target_state"]
+            trainable_params_init = checkpoint["state"]["trainable_params_init"]
+            sample_rows = checkpoint["state"]["sample_rows"]
+            sample_paths = checkpoint["state"]["sample_paths"]
+            sample_times = checkpoint["state"]["sample_times"]
+            batch_ranges = checkpoint["state"]["batch_ranges"]
+            batch_elapsed_times = checkpoint["state"]["batch_elapsed_times"]
+            batch_peak_vram_values = checkpoint["state"]["batch_peak_vram_values"]
+            batch_seed_ranges = checkpoint["state"]["batch_seed_ranges"]
+            fitness_history = checkpoint["state"]["fitness_history"]
+            aesthetic_history = checkpoint["state"]["aesthetic_history"]
+            clip_history = checkpoint["state"]["clip_history"]
+            image_reward_history = checkpoint["state"]["image_reward_history"]
+            hpsv2_history = checkpoint["state"]["hpsv2_history"]
+            pickscore_history = checkpoint["state"]["pickscore_history"]
+            jpeg_size_history = checkpoint["state"]["jpeg_size_history"]
+            best_fitness_overall = checkpoint["state"]["best_fitness_overall"]
+            best_sample_path = checkpoint["state"]["best_sample_path"]
+            baseline_path = checkpoint["state"]["baseline_path"]
+            random_sampler_uses_latents = checkpoint["state"]["random_sampler_uses_latents"]
+            random_sampler_uses_joint_vector = checkpoint["state"]["random_sampler_uses_joint_vector"]
+            random_sampler_sigma = checkpoint["state"]["random_sampler_sigma"]
+            peak_vram_mb_list = checkpoint["state"]["peak_vram_mb_list"]
+            time_list = checkpoint["state"]["time_list"]
+            self._restore_experiment_rng(checkpoint)
+            start_time = time.time() - checkpoint["elapsed"]
+
+        completed_steps = checkpoint["step"] if checkpoint is not None else 0
+        if checkpoint is None:
+            self._save_experiment_checkpoint(results_folder, seed, selected_prompt,
+                0, time.time() - start_time, locals(), checkpoint_names)
+        sample_seeds = self._generate_sample_seeds(seed, num_images, excluded_seeds={seed})
         def build_random_sampler_results(histories):
             def batch_values(metric):
                 return [
@@ -3815,7 +4144,7 @@ class Eigo:
                 "peak_vram_mb": batch_peak_vram_values,
             })
 
-        for batch_start in range(0, len(sample_seeds), self.batch_size):
+        for batch_start in range(completed_steps, len(sample_seeds), self.batch_size):
             elapsed_time = time.time() - start_time
             if self.parameters['time_limit_seconds'] is not None and elapsed_time >= self.parameters['time_limit_seconds']:
                 print(
@@ -3958,6 +4287,9 @@ class Eigo:
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+
+            self._save_experiment_checkpoint(results_folder, seed, selected_prompt,
+                len(sample_paths), time.time() - start_time, locals(), checkpoint_names)
 
         shutil.copyfile(best_sample_path, f"{results_folder}/best_all.jpg")
 
@@ -4177,6 +4509,9 @@ class Eigo:
         results_folder = f"{self.OUTPUT_FOLDER}/results_{self.model_name}_{seed}"
         if prompt_number is not None:
             results_folder += f"_{prompt_number}"
+        checkpoint = self._load_experiment_checkpoint(results_folder, seed, selected_prompt)
+        if checkpoint is not None and checkpoint.get("skip"):
+            return results_folder
         os.makedirs(results_folder, exist_ok=True)
         self._save_run_config(results_folder, seed, selected_prompt, category=category, prompt_number=prompt_number)
 
@@ -4220,103 +4555,147 @@ class Eigo:
             else:
                 pickscore_text_inputs = None
 
-        target_state = self._build_optimization_target_state(selected_prompt, seed)
-        trainable_params, fixed_target_tensors = adam_parameters_from_state(target_state)
-        initial_prompt_embeds, initial_pooled_prompt_embeds, initial_latents = adam_tensors(
-            trainable_params,
-            fixed_target_tensors,
-            self.optimization_target,
+        checkpoint_names = (
+            "trainable_params",
+            "fixed_target_tensors",
+            "optimizer",
+            "grad_scaler",
+            "best_score",
+            "best_target_tensors",
+            "aesthetic_score_list",
+            "clip_score_list",
+            "combined_loss_list",
+            "combined_score_list",
+            "hpsv2_score_list",
+            "image_reward_score_list",
+            "jpeg_size_kb_list",
+            "peak_vram_mb_list",
+            "pickscore_score_list",
+            "time_list",
         )
-
-        with torch.no_grad():
-            with self._adam_autocast_context():
-                initial_image = self.generate_image_from_tensors_adam(
-                    initial_prompt_embeds,
-                    initial_pooled_prompt_embeds,
-                    seed,
-                    latents=initial_latents,
-                )
-            initial_jpeg_size_kb = self._save_jpeg(initial_image, f"{results_folder}/it_0.jpg")
-
-        aesthetic_score = self.aesthetic_evaluation(initial_image)
-
-        clip_score = self.evaluate_clip_score_adam(initial_image, text_features)
-        image_reward_score = self.evaluate_image_reward_adam(
-            initial_image,
-            image_reward_prompt_ids,
-            image_reward_attention_mask,
-        )
-        hpsv2_score = self.evaluate_hpsv2_adam(initial_image, hpsv2_text_tokens)
-        pickscore_score = self.evaluate_pickscore_adam(initial_image, pickscore_text_inputs)
-
-        initial_combined_score, _ = self._combine_metric_components({
-            "aesthetic_score": aesthetic_score,
-            "clip_score": clip_score,
-            "image_reward_score": image_reward_score,
-            "hpsv2_score": hpsv2_score,
-            "pickscore_score": pickscore_score,
-            "jpeg_size_kb": initial_jpeg_size_kb,
-        })
-        initial_combined_loss = 1 - initial_combined_score
-        if not torch.isfinite(initial_combined_loss):
-            raise RuntimeError(
-                "Initial ADAM objective is non-finite. Try lowering adam_lr or using a more stable torch_dtype."
+        if checkpoint is None:
+            target_state = self._build_optimization_target_state(selected_prompt, seed)
+            trainable_params, fixed_target_tensors = adam_parameters_from_state(target_state)
+            initial_prompt_embeds, initial_pooled_prompt_embeds, initial_latents = adam_tensors(
+                trainable_params,
+                fixed_target_tensors,
+                self.optimization_target,
             )
 
-        combined_score_list = [initial_combined_score.item()]
-        combined_loss_list = [initial_combined_loss.item()]
-        time_list = [0]
-        peak_vram_mb_list = [self._peak_vram_mb()]
-        best_score = initial_combined_score.item()
-        best_target_tensors = clone_best_adam_tensors(
-            trainable_params,
-            fixed_target_tensors,
-            self.optimization_target,
-        )
+            with torch.no_grad():
+                with self._adam_autocast_context():
+                    initial_image = self.generate_image_from_tensors_adam(
+                        initial_prompt_embeds,
+                        initial_pooled_prompt_embeds,
+                        seed,
+                        latents=initial_latents,
+                    )
+                initial_jpeg_size_kb = self._save_jpeg(initial_image, f"{results_folder}/it_0.jpg")
 
-        optimizer = torch.optim.AdamW(
-            trainable_params,
-            lr=adam_lr,
-            betas=(adam_beta1, adam_beta2),
-            weight_decay=adam_weight_decay,
-            eps=adam_eps,
-        )
-        use_fp16_grad_scaling = (
-            self.model_dtype == torch.float16
-            and str(self._pipeline_input_device()).startswith("cuda")
-        )
-        grad_scaler = torch.amp.GradScaler("cuda", enabled=use_fp16_grad_scaling)
+            aesthetic_score = self.aesthetic_evaluation(initial_image)
 
-        start_time = time.time()
-        elapsed_time = 0.0
+            clip_score = self.evaluate_clip_score_adam(initial_image, text_features)
+            image_reward_score = self.evaluate_image_reward_adam(
+                initial_image,
+                image_reward_prompt_ids,
+                image_reward_attention_mask,
+            )
+            hpsv2_score = self.evaluate_hpsv2_adam(initial_image, hpsv2_text_tokens)
+            pickscore_score = self.evaluate_pickscore_adam(initial_image, pickscore_text_inputs)
 
-        # Add lists to store the metrics
-        aesthetic_score_list = [aesthetic_score.item()]
-        clip_score_list = [clip_score.item()]
-        image_reward_score_list = [image_reward_score.item()]
-        hpsv2_score_list = [hpsv2_score.item()]
-        pickscore_score_list = [pickscore_score.item()]
-        jpeg_size_kb_list = [initial_jpeg_size_kb]
+            initial_combined_score, _ = self._combine_metric_components({
+                "aesthetic_score": aesthetic_score,
+                "clip_score": clip_score,
+                "image_reward_score": image_reward_score,
+                "hpsv2_score": hpsv2_score,
+                "pickscore_score": pickscore_score,
+                "jpeg_size_kb": initial_jpeg_size_kb,
+            })
+            initial_combined_loss = 1 - initial_combined_score
+            if not torch.isfinite(initial_combined_loss):
+                raise RuntimeError(
+                    "Initial ADAM objective is non-finite. Try lowering adam_lr or using a more stable torch_dtype."
+                )
 
-        runtime_results = pd.DataFrame({
-            "iteration": [0],
-            "prompt": [selected_prompt],
-            "combined_score": combined_score_list,
-            "combined_loss": combined_loss_list,
-            "aesthetic_score": aesthetic_score_list,
-            "clip_score": clip_score_list,
-            "image_reward_score": image_reward_score_list,
-            "hpsv2_score": hpsv2_score_list,
-            "pickscore_score": pickscore_score_list,
-            "jpeg_size_kb": jpeg_size_kb_list,
-            "elapsed_time": time_list,
-            "peak_vram_mb": peak_vram_mb_list,
-        })
-        if category is not None:
-            runtime_results["category"] = [category]
-        runtime_results.to_csv(f"{results_folder}/runtime_score_results.csv", index=False, na_rep='nan')
+            combined_score_list = [initial_combined_score.item()]
+            combined_loss_list = [initial_combined_loss.item()]
+            time_list = [0]
+            peak_vram_mb_list = [self._peak_vram_mb()]
+            best_score = initial_combined_score.item()
+            best_target_tensors = clone_best_adam_tensors(
+                trainable_params,
+                fixed_target_tensors,
+                self.optimization_target,
+            )
 
-        for iteration in range(1, num_iterations + 1):
+            optimizer = torch.optim.AdamW(
+                trainable_params,
+                lr=adam_lr,
+                betas=(adam_beta1, adam_beta2),
+                weight_decay=adam_weight_decay,
+                eps=adam_eps,
+            )
+            use_fp16_grad_scaling = (
+                self.model_dtype == torch.float16
+                and str(self._pipeline_input_device()).startswith("cuda")
+            )
+            grad_scaler = torch.amp.GradScaler("cuda", enabled=use_fp16_grad_scaling)
+
+            start_time = time.time()
+            elapsed_time = 0.0
+
+            # Add lists to store the metrics
+            aesthetic_score_list = [aesthetic_score.item()]
+            clip_score_list = [clip_score.item()]
+            image_reward_score_list = [image_reward_score.item()]
+            hpsv2_score_list = [hpsv2_score.item()]
+            pickscore_score_list = [pickscore_score.item()]
+            jpeg_size_kb_list = [initial_jpeg_size_kb]
+
+            runtime_results = pd.DataFrame({
+                "iteration": [0],
+                "prompt": [selected_prompt],
+                "combined_score": combined_score_list,
+                "combined_loss": combined_loss_list,
+                "aesthetic_score": aesthetic_score_list,
+                "clip_score": clip_score_list,
+                "image_reward_score": image_reward_score_list,
+                "hpsv2_score": hpsv2_score_list,
+                "pickscore_score": pickscore_score_list,
+                "jpeg_size_kb": jpeg_size_kb_list,
+                "elapsed_time": time_list,
+                "peak_vram_mb": peak_vram_mb_list,
+            })
+            if category is not None:
+                runtime_results["category"] = [category]
+            runtime_results.to_csv(f"{results_folder}/runtime_score_results.csv", index=False, na_rep='nan')
+
+        else:
+            trainable_params = checkpoint["state"]["trainable_params"]
+            fixed_target_tensors = checkpoint["state"]["fixed_target_tensors"]
+            optimizer = checkpoint["state"]["optimizer"]
+            grad_scaler = checkpoint["state"]["grad_scaler"]
+            best_score = checkpoint["state"]["best_score"]
+            best_target_tensors = checkpoint["state"]["best_target_tensors"]
+            aesthetic_score_list = checkpoint["state"]["aesthetic_score_list"]
+            clip_score_list = checkpoint["state"]["clip_score_list"]
+            combined_loss_list = checkpoint["state"]["combined_loss_list"]
+            combined_score_list = checkpoint["state"]["combined_score_list"]
+            hpsv2_score_list = checkpoint["state"]["hpsv2_score_list"]
+            image_reward_score_list = checkpoint["state"]["image_reward_score_list"]
+            jpeg_size_kb_list = checkpoint["state"]["jpeg_size_kb_list"]
+            peak_vram_mb_list = checkpoint["state"]["peak_vram_mb_list"]
+            pickscore_score_list = checkpoint["state"]["pickscore_score_list"]
+            time_list = checkpoint["state"]["time_list"]
+            self._restore_experiment_rng(checkpoint)
+            start_time = time.time() - checkpoint["elapsed"]
+
+        completed_steps = checkpoint["step"] if checkpoint is not None else 0
+        if checkpoint is None:
+            self._save_experiment_checkpoint(results_folder, seed, selected_prompt,
+                0, time.time() - start_time, locals(), checkpoint_names)
+        elapsed_time = time.time() - start_time
+        for iteration in range(completed_steps + 1, num_iterations + 1):
             if self.parameters['time_limit_seconds'] is not None and elapsed_time >= self.parameters['time_limit_seconds']:
                 print(
                     "Time limit reached before starting iteration "
@@ -4433,6 +4812,9 @@ class Eigo:
 
             # Print stats
             print(f"Iteration {iteration}/{num_iterations}: Combined Score: {combined_score.item()}, Aesthetic Score: {aesthetic_score.item()}, CLIP Score: {clip_score.item()}, ImageReward Score: {image_reward_score.item()}, HPSv2 Score: {hpsv2_score.item()}, PickScore: {pickscore_score.item()}, Estimated time remaining: {formatted_time_remaining}")
+
+            self._save_experiment_checkpoint(results_folder, seed, selected_prompt,
+                iteration, time.time() - start_time, locals(), checkpoint_names)
 
         # Save the overall best image
         with torch.no_grad():

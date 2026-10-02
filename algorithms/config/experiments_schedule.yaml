@@ -5,35 +5,44 @@
 # weights here, while keeping shared prompt/model defaults in the base config.
 
 runs:
-  - optimization_method: "cmaes"
-    cuda: 1
-    aesthetic_score_weight: 0.0
-    clip_score_weight: 0.0
-    image_reward_score_weight: 1.0
-    hpsv2_score_weight: 0.0
-    pickscore_score_weight: 0.0
-    jpeg_size_weight: 0.0
-    results_folder: "results_sepcmaes_sd15_noise_embeddings_imagereward"
-    sigma: 0.11594403956910003
+  # - optimization_method: "cmaes"
+  #   cuda: 0
+  #   image_reward_score_weight: 1.0
+  #   results_folder: "results_sepcmaes_sd15_imagereward"
+  #   sigma: 0.15355286838886856
+
+  # - optimization_method: "snes"
+  #   cuda: 0
+  #   image_reward_score_weight: 1.0
+  #   results_folder: "results_snes_sd15_imagereward"
+  #   snes_sigma: 0.08168455894760163
+  #   snes_eta_mu: 1.199246345950219
+  #   snes_eta_sigma: 0.002508115686045232
+
+  # - optimization_method: "cmaes"
+  #   cuda: 1
+  #   clip_score_weight: 1.0
+  #   results_folder: "results_sepcmaes_sd15_clip"
+  #   sigma: 0.10003705178628172
+
+  # - optimization_method: "snes"
+  #   cuda: 1
+  #   clip_score_weight: 1.0
+  #   results_folder: "results_snes_sd15_clip"
+  #   snes_sigma: 0.03729998154142411
+  #   snes_eta_mu: 1.493040174159214
+  #   snes_eta_sigma: 0.00601595525621118
 
   - optimization_method: "cmaes"
-    cuda: 1
-    aesthetic_score_weight: 0.0
-    clip_score_weight: 1.0
-    image_reward_score_weight: 0.0
-    hpsv2_score_weight: 0.0
-    pickscore_score_weight: 0.0
-    jpeg_size_weight: 0.0
-    results_folder: "results_sepcmaes_sd15_noise_embeddings_clip"
-    sigma: 0.05465965798510398
-
-  - optimization_method: "cmaes"
-    cuda: 1
-    aesthetic_score_weight: 0.0
-    clip_score_weight: 0.0
-    image_reward_score_weight: 0.0
+    cuda: 3
     hpsv2_score_weight: 1.0
-    pickscore_score_weight: 0.0
-    jpeg_size_weight: 0.0
-    results_folder: "results_sepcmaes_sd15_noise_embeddings_hpsv2"
+    results_folder: "results_sepcmaes_sd15_hpsv2"
     sigma: 0.07978542347074176
+
+  - optimization_method: "snes"
+    cuda: 3
+    hpsv2_score_weight: 1.0
+    results_folder: "results_snes_sd15_hpsv2"
+    snes_sigma: 0.13457977029634405
+    snes_eta_mu: 1.0658465926895686
+    snes_eta_sigma: 0.0010857583426874043

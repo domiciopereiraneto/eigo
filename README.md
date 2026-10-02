@@ -91,6 +91,52 @@ python algorithms/run_experiments.py --config algorithms/config/config_run_exper
 
 The batch runner samples prompts from `nateraw/parti-prompts` or `sayakpaul/drawbench`, or from another compatible Hugging Face dataset if `prompt_dataset_path` is provided. Use `use_entire_dataset`, `prompt_index_range`, `prompt_per_categorie`, `prompt_sample_seed`, `seed`, and `seed_path` to control prompt and seed selection.
 
+To extend an existing experiment, keep the same `results_folder`, prompts, seeds,
+and optimizer/scoring settings, set `resume_experiment: true`, and increase the
+active optimizer's total count. For example, changing `snes_num_generations` from
+15 to 30 runs generations 16–30; Adam uses `num_iterations`. A non-null
+`cc_snes_num_generations` overrides `snes_num_generations`; the other method-specific
+generation settings likewise take precedence over `num_generations`. Random
+sampling uses `num_images_to_generate`.
+
+```yaml
+resume_experiment: true
+snes_num_generations: 30
+```
+
+You can also override the boolean on the command line with `--resume-experiment`
+or `--no-resume-experiment` (underscore spellings are accepted). It defaults to
+false, retaining the existing fresh-run behavior. Missing runs start normally;
+existing runs with an equal or smaller requested total are skipped.
+
+Each supported run now writes `checkpoint.pt` after initialization and each
+completed generation, iteration, or sampling batch, even when resuming is disabled.
+Resuming restores optimizer state, random generators, best candidates, and metric
+history, then regenerates reports for the extended run. Keep the whole run folder;
+ensemble runs also need `checkpoint_ensemble/`. Existing time limits and optimizer
+stopping criteria still apply, and elapsed time is cumulative across extensions.
+Checkpoints use compact, lossless state snapshots: CMA-ES retains its distribution,
+adaptation paths, pending injections, best solution, and stopping history, without
+completed candidate archives or population caches. SNES saves its Gaussian state;
+GA and CoSyNE save the next population; Adam saves parameters, moments, step
+counters, and gradient-scaler state; zero-order saves its pivot; random sampling
+saves progress and the histories needed for reporting. RNG state is retained for
+all methods. Optimized target tensors and initialization vectors are not duplicated.
+CMA variants with a full covariance matrix still require quadratic storage; GA and
+CoSyNE require storage proportional to population size times vector dimension.
+
+Existing version-1 checkpoints remain readable and are replaced by the compact
+version-2 format when a resumed run next saves. Existing files are not rewritten
+in the background. No precision reduction is applied.
+
+Use checkpoints only from trusted local experiments and the same software/device
+environment.
+
+Runs created before checkpoint support cannot be extended from images/CSVs alone;
+requesting an extension raises an error without overwriting them. GOMEA's native
+optimizer currently does not expose checkpoint support in this integration, so
+GOMEA extensions also raise an error. Use a new results folder for those runs.
+
 To run several configured batches sequentially:
 
 ```bash
@@ -118,6 +164,25 @@ python algorithms/eigo_optuna_search.py \
 ```
 
 The `optuna` section controls the study name, SQLite storage, sampler, prompt source, objective metric, trial count, and per-method search spaces. Lists are categorical choices; dictionaries can define `float`, `int`, or `categorical` distributions. Conditional parameters use `depends_on`.
+
+To automatically run a dataset experiment after a study, enable the following in
+the Optuna config:
+
+```yaml
+optuna:
+  follow_up_experiment:
+    enabled: true
+    config_path: "algorithms/config/config_run_experiments.yaml"
+```
+
+The best completed trial's optimizer and sampled parameters override the experiment
+YAML. All other settings (including dataset, seeds, model, objective, optimization
+target, and results folder) come from that YAML. Paths are relative to the working
+directory. The merged configuration is saved as `best_trial_experiment_config.yaml`
+in the study results folder, then passed to `run_experiments.py`. Dry runs validate
+the experiment YAML without launching it. If no trials completed, the experiment is
+skipped; experiment failures propagate to the launcher. Schedule entries can override
+this section to select a different experiment YAML for each study.
 
 To run several Optuna studies sequentially:
 
