@@ -179,7 +179,9 @@ The best completed trial's optimizer and sampled parameters override the experim
 YAML. All other settings (including dataset, seeds, model, objective, optimization
 target, and results folder) come from that YAML. Paths are relative to the working
 directory. The merged configuration is saved as `best_trial_experiment_config.yaml`
-in the study results folder, then passed to `run_experiments.py`. Dry runs validate
+in the study results folder, then passed to `run_experiments.py`. The command-line
+launcher replaces the study process with the experiment runner, releasing the study's
+CUDA context and GPU allocations before the experiment starts. Dry runs validate
 the experiment YAML without launching it. If no trials completed, the experiment is
 skipped; experiment failures propagate to the launcher. Schedule entries can override
 this section to select a different experiment YAML for each study.

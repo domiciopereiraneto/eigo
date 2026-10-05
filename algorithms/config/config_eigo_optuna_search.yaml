@@ -23,22 +23,22 @@ selected_prompts:
 
 # Select which optimizers Optuna can sample. If more than one is enabled, the
 # optimizer itself becomes a categorical trial parameter.
-test_adam: false
+test_adam: true
 test_ga: false
 test_cmaes: false
 test_random_sampler: false
 test_zero_order: false
-test_snes: true
+test_snes: false
 test_cosyne: false
 test_gomea: false
 
 # General parameters (copied from config_eigo.yaml)
 seed: 42
-cuda: 3
+cuda: 0
 aesthetic_predictor: 2
-num_inference_steps: 50
-batch_size: 8
-guidance_scale: 7.5
+num_inference_steps: 1
+batch_size: 1
+guidance_scale: 0
 lcm_origin_steps: 50
 height: 512
 width: 512
@@ -64,13 +64,13 @@ hpsv2_version: "v2.1"  # Set to null to disable HPSv2 calculation
 pickscore_model: "yuvalkirstain/PickScore_v1"  # Set to null to disable PickScore calculation
 pickscore_processor: "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"  # Set to null to disable PickScore calculation
 evaluate_zero_weight_metrics: false  # Keep zero-weight scorer models/graphs out of Adam VRAM
-optimization_target: "noise_embeddings_flat"  # "prompt_embeddings", "latent_noise", "noise_embeddings_flat", or "noise_embeddings_cc" (CC-CMA-ES/CC-SNES only)
-model_id: "stable-diffusion-v1-5/stable-diffusion-v1-5" # Model ID (e.g., "mhdang/dpo-sd1.5-text2image-v1", "black-forest-labs/FLUX.1-schnell", "PixArt-alpha/PixArt-XL-2-1024-MS", "Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers", "Efficient-Large-Model/Sana_1600M_1024px_diffusers", "stabilityai/sdxl-turbo", "SimianLuo/LCM_Dreamshaper_v7")
+optimization_target: "prompt_embeddings"  # "prompt_embeddings", "latent_noise", "noise_embeddings_flat", or "noise_embeddings_cc" (CC-CMA-ES/CC-SNES only)
+model_id: "stabilityai/sdxl-turbo" # Model ID (e.g., "mhdang/dpo-sd1.5-text2image-v1", "black-forest-labs/FLUX.1-schnell", "PixArt-alpha/PixArt-XL-2-1024-MS", "Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers", "Efficient-Large-Model/Sana_1600M_1024px_diffusers", "stabilityai/sdxl-turbo", "SimianLuo/LCM_Dreamshaper_v7")
 model_backend: "auto" # "auto", "sd", "sdxl", "flux", "pixart", "lcm", "sana", or "sana_sprint"
 base_model_id: null  # Optional SD base pipeline when model_id is a component repo; DPO SD1.5 defaults to runwayml/stable-diffusion-v1-5
 unet_model_id: null  # Optional SD UNet replacement repo; DPO SD1.5 uses model_id automatically
 unet_subfolder: "unet"  # Subfolder for replacement UNet weights
-torch_dtype: "float16"
+torch_dtype: "float32"
 max_sequence_length: 256  # FLUX/Sana text encoder token limit
 use_safetensors: true
 use_multi_gpu: false
@@ -80,7 +80,7 @@ enable_gradient_checkpointing: false
 enable_attention_slicing: false
 enable_vae_slicing: false
 enable_vae_tiling: false
-results_folder: "results_optuna_sd15_snes_flat_hpsv2"
+results_folder: "results_optuna_adam_sdxlturbo_hpsv2"
 
 # CMA-ES defaults (used if not overridden by optuna.search_space.cmaes)
 num_generations: 30
@@ -127,7 +127,7 @@ zero_order_pop_size: 16
 zero_order_sigma: 0.5
 
 # Adam defaults (used if not overridden by optuna.search_space.adam)
-num_iterations: 50
+num_iterations: 240
 adam_lr: 5e-3
 adam_weight_decay: 0
 adam_eps: 1e-8
@@ -156,15 +156,15 @@ optuna:
   n_trials: 30
   direction: "maximize"
   metric: "auto"  # auto -> combined_score for Adam, max_fitness for population methods
-  study_name: "results_optuna_sd15_snes_flat_hpsv2"
-  storage: "sqlite:///results_optuna_sd15_snes_flat_hpsv2/optuna.db"
+  study_name: "results_optuna_adam_sdxlturbo_hpsv2"
+  storage: "sqlite:///results_optuna_adam_sdxlturbo_hpsv2/optuna.db"
   load_if_exists: true
   catch_trial_errors: true
   # Run the experiment YAML after tuning, using the best trial's optimizer
   # and sampled parameters. Other settings come from the experiment YAML.
   follow_up_experiment:
-    enabled: false
-    config_path: "algorithms/config/config_run_experiments.yaml"  # Relative to working directory
+    enabled: true
+    config_path: "algorithms/config/tmp/config_run_experiments_adam_sdxlturbo_hpsv2.yaml"  # Relative to working directory
 
   sampler:
     name: "tpe"  # tpe or random

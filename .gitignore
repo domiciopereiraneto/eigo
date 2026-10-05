@@ -5,3 +5,4 @@ aux_*
 .vscode
 .agents
 dependencies.yml
+algorithms/config/tmp*

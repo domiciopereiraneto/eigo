@@ -656,7 +656,7 @@ def get_follow_up_experiment_config(config):
     return load_yaml(Path(config_path).resolve())
 
 
-def run_follow_up_experiment(config, study, dry_run=False):
+def run_follow_up_experiment(config, study, dry_run=False, replace_process=False):
     """Run the experiment YAML with the best completed trial's parameters."""
     experiment_config = get_follow_up_experiment_config(config)
     if experiment_config is None:
@@ -691,11 +691,19 @@ def run_follow_up_experiment(config, study, dry_run=False):
         yaml.safe_dump(experiment_config, f, sort_keys=False)
     print(f"Running follow-up experiment with trial {best['number']} ({method}).")
     print(f"Experiment config saved to: {config_path}")
-    subprocess.run(
-        [sys.executable, str(Path(__file__).with_name("run_experiments.py").resolve()),
-         "--config", str(config_path)],
-        check=True,
-    )
+    command = [
+        sys.executable, str(Path(__file__).with_name("run_experiments.py").resolve()),
+        "--config", str(config_path),
+    ]
+    if replace_process:
+        # A waiting parent can retain CUDA allocations and model references.
+        # Replacing it releases the entire study process's CUDA context before
+        # the experiment initializes CUDA, including memory outside PyTorch's cache.
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.execv(sys.executable, command)
+    else:
+        subprocess.run(command, check=True)
     return config_path
 
 
@@ -877,7 +885,7 @@ def main():
     study, trial_rows = run_optuna_search(config, dry_run=args.dry_run)
     save_summary(config, study, trial_rows)
     save_optuna_plots(config, study)
-    run_follow_up_experiment(config, study, dry_run=args.dry_run)
+    run_follow_up_experiment(config, study, dry_run=args.dry_run, replace_process=True)
 
 
 if __name__ == "__main__":
