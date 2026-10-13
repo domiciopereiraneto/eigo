@@ -69,7 +69,7 @@ Most scripts are configured with YAML files in [algorithms/config](/home/posgrad
 
 For CC-CMA-ES, set `optimization_method: cmaes`, `optimization_target: noise_embeddings_cc`, and `cmaes_variant` to `cc`, `cc_sep`, or `cc_vd`. For CC-SNES, set `optimization_method: snes` and `optimization_target: noise_embeddings_cc`. Both CC implementations keep the noise and embedding vectors as separate sub-populations and evaluate both sub-populations once per generation. Use `cc_embedding_sigma` and `cc_noise_sigma` to set separate initial search scales; either can be `null` or omitted to fall back to `sigma` for CMA-ES or `snes_sigma` for SNES. For CC-SNES, `cc_embedding_eta_mu`, `cc_embedding_eta_sigma`, `cc_noise_eta_mu`, and `cc_noise_eta_sigma` can set separate SNES adaptation rates; `null` or omitted values fall back to the shared `snes_eta_mu` and `snes_eta_sigma` settings.
 
-Set `evaluate_zero_weight_metrics: false` to avoid loading scorer models whose weights are zero. This is useful for reducing AdamW memory use. Set it to `true` only when zero-weight metrics should still be logged for analysis.
+Set `evaluate_zero_weight_metrics: false` to avoid loading scorer models whose weights are zero. This is useful for reducing AdamW memory use. Set it to `true` when zero-weight metrics should still be logged for analysis, and use `zero_weight_metrics` to select them (for example, `[clip_score, image_reward_score]`). An omitted or `null` list selects all metrics; `[]` selects no extras. Metrics used by the weighted objective or `ensemble_list` are always evaluated.
 
 ## Single-Prompt Runs
 

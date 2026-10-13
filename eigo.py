@@ -350,6 +350,9 @@ class Eigo(ExperimentResumeMixin):
                 "Set jpeg_size_weight to 0 to record the metric without optimizing it."
             )
         self.evaluate_zero_weight_metrics = bool(config_parameters.get("evaluate_zero_weight_metrics", False))
+        self.zero_weight_metrics = self._normalize_zero_weight_metrics(
+            config_parameters.get("zero_weight_metrics")
+        )
         self._metric_scales = {
             "aesthetic_score": float(config_parameters.get("max_aesthetic_score", 1.0)),
             "clip_score": float(config_parameters.get("max_clip_score", 1.0)),
@@ -693,11 +696,25 @@ class Eigo(ExperimentResumeMixin):
             value = self.parameters[fallback_key]
         return float(value)
 
+    @staticmethod
+    def _normalize_zero_weight_metrics(value):
+        if value is None:
+            return tuple(METRICS)
+        if not isinstance(value, (list, tuple)):
+            raise ValueError("zero_weight_metrics must be a list of metric names or null.")
+        for name in value:
+            if not isinstance(name, str) or name not in METRICS:
+                raise ValueError(
+                    f"Unknown zero_weight_metrics entry {name!r}; choose from {', '.join(METRICS)}."
+                )
+        return tuple(dict.fromkeys(value))
+
     def _should_evaluate_metric(self, metric_name):
+        evaluate_extra = (
+            self.evaluate_zero_weight_metrics and metric_name in self.zero_weight_metrics
+        )
         if self.ensemble_list:
-            return metric_name in self.ensemble_list or self.evaluate_zero_weight_metrics
-        if self.evaluate_zero_weight_metrics:
-            return True
+            return metric_name in self.ensemble_list or evaluate_extra
         metric_weights = {
             "aesthetic_score": self.aesthetic_score_weight,
             "clip_score": self.clip_score_weight,
@@ -706,7 +723,7 @@ class Eigo(ExperimentResumeMixin):
             "pickscore_score": self.pickscore_score_weight,
             "jpeg_size_kb": self.jpeg_size_weight,
         }
-        return metric_weights.get(metric_name, 0.0) != 0.0
+        return metric_weights.get(metric_name, 0.0) != 0.0 or evaluate_extra
 
     @staticmethod
     def _resolve_model_backend(config_parameters):

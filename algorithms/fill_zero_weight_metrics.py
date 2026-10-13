@@ -199,6 +199,7 @@ class MetricBackfiller:
         config["_source_ensemble_list"] = config.get("ensemble_list")
         config["ensemble_list"] = []
         config["evaluate_zero_weight_metrics"] = True
+        config["zero_weight_metrics"] = list(self.metrics_to_calculate)
         config["metrics_to_calculate"] = ",".join(self.metrics_to_calculate)
         if "image_reward_score" not in self.metrics_set:
             config["image_reward_model"] = None
