@@ -517,6 +517,7 @@ def plot_stats(
     markers: Optional[Dict[str, str]] = None,
     y_multiplier: float = 1.0,
     y_decimal_places: Optional[int] = None,
+    vertical_line_x: Optional[float] = None,
 ) -> None:
     fig, ax = plt.subplots(figsize=(width, height))
     markers = markers or {}
@@ -552,6 +553,8 @@ def plot_stats(
             linewidth=2.4,
             label=label,
         )
+    if vertical_line_x is not None:
+        ax.axvline(vertical_line_x, color="red", linestyle="--", linewidth=2.0)
     ax.set_xlabel(x_label)
     ax.set_ylabel(y_label)
     ax.set_xscale(xscale)
@@ -577,6 +580,14 @@ def plot_stats(
 
 
 def build_runcharts(config: dict) -> List[Path]:
+    time_vertical_line_seconds = config.get("time_vertical_line_seconds")
+    if time_vertical_line_seconds is not None:
+        try:
+            time_vertical_line_seconds = float(time_vertical_line_seconds)
+        except (TypeError, ValueError):
+            raise ValueError("time_vertical_line_seconds must be a finite nonnegative number or null.") from None
+        if not np.isfinite(time_vertical_line_seconds) or time_vertical_line_seconds < 0:
+            raise ValueError("time_vertical_line_seconds must be a finite nonnegative number or null.")
     folder_values = as_list(config.get("experiment_folders", config.get("source_dirs", [])))
     if not folder_values:
         raise ValueError("Config must define experiment_folders or source_dirs.")
@@ -787,6 +798,7 @@ def build_runcharts(config: dict) -> List[Path]:
             markers=experiment_markers_by_label,
             y_multiplier=y_multiplier,
             y_decimal_places=y_decimal_places,
+            vertical_line_x=time_vertical_line_seconds,
         )
         written.extend([time_csv, time_png])
 

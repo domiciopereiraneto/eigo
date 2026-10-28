@@ -15,6 +15,7 @@ import os
 import shutil
 import json
 import yaml
+from pathlib import Path
 
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 # Add the project root so local project modules can be imported.
@@ -479,18 +480,20 @@ def _build_stats(axis, values, axis_name):
     })
 
 
-def _plot_evolution(stats_df, x_col, y_name, title, output_path):
-    x = stats_df[x_col].to_numpy(dtype=float)
-    mean = stats_df["avg"].to_numpy(dtype=float)
-    std = stats_df["std"].to_numpy(dtype=float)
-    min_v = stats_df["min"].to_numpy(dtype=float)
-    max_v = stats_df["max"].to_numpy(dtype=float)
-
+def _plot_evolution(stats_df, x_col, y_name, title, output_path, population_stats=None):
     plt.figure(figsize=(10, 6))
-    plt.plot(x, mean, label="avg")
-    plt.fill_between(x, mean - std, mean + std, alpha=0.25, label="avg ± std")
-    plt.plot(x, min_v, "--", label="min")
-    plt.plot(x, max_v, "--", label="max")
+    series = [("avg best", stats_df)]
+    if population_stats is not None:
+        series.insert(0, ("avg population", population_stats))
+    for label, stats in series:
+        x = stats[x_col].to_numpy(dtype=float)
+        mean = stats["avg"].to_numpy(dtype=float)
+        std = stats["std"].to_numpy(dtype=float)
+        line, = plt.plot(x, mean, label=label)
+        plt.fill_between(
+            x, mean - std, mean + std,
+            color=line.get_color(), alpha=0.25, label=f"{label} ± std",
+        )
     plt.xlabel(x_col.replace("_", " ").title())
     plt.ylabel(y_name.title())
     plt.title(title)
@@ -822,27 +825,50 @@ def _aggregate_one_experiment(experiment_dir):
         if not any(np.isfinite(run[metric]).any() for run in runs):
             print(f"Skipping {label} aggregation because no values were found.")
             continue
-        step_values = _stack_on_axis(runs, metric, "x", x_axis)
-        step_stats = _build_stats(x_axis, step_values, axis_name)
-        step_stats.to_csv(os.path.join(experiment_dir, f"{label}_evolution_by_{axis_name}.csv"), index=False)
-        _plot_evolution(
-            step_stats,
-            axis_name,
-            label,
-            f"{label.title()} evolution by {axis_name}",
-            os.path.join(experiment_dir, f"{label}_evolution_by_{axis_name}.jpg"),
-        )
+        # Keep population values at each step and accumulate the best observed
+        # score independently per run before calculating statistics across runs.
+        plot_runs = []
+        for run in runs:
+            population = run["population_metrics"]
+            population_values = (
+                population[metric] if population is not None and metric in population
+                else run[metric]
+            )
+            minimize = metric == "jpeg_size" or (metric == "objective" and objective_name == "loss")
+            best = pd.Series(run[metric])
+            if metric != "vram":
+                best = best.cummin() if minimize else best.cummax()
+                best = best.ffill()
+            plot_runs.append({
+                **run,
+                "best": best.to_numpy(dtype=float),
+                "population": population_values,
+            })
 
-        time_values = _stack_on_axis(runs, metric, "time", time_axis)
-        time_stats = _build_stats(time_axis, time_values, "elapsed_time_seconds")
-        time_stats.to_csv(os.path.join(experiment_dir, f"{label}_evolution_by_time.csv"), index=False)
-        _plot_evolution(
-            time_stats,
-            "elapsed_time_seconds",
-            label,
-            f"{label.title()} evolution by elapsed time",
-            os.path.join(experiment_dir, f"{label}_evolution_by_time.jpg"),
-        )
+        for axis_key, axis, column, suffix, title_axis in (
+            ("x", x_axis, axis_name, axis_name, axis_name),
+            ("time", time_axis, "elapsed_time_seconds", "time", "elapsed time"),
+        ):
+            best_stats = _build_stats(
+                axis, _stack_on_axis(plot_runs, "best", axis_key, axis), column,
+            )
+            population_stats = _build_stats(
+                axis, _stack_on_axis(plot_runs, "population", axis_key, axis), column,
+            )
+            # Preserve existing best-series CSV columns and add population stats.
+            output_stats = best_stats.copy()
+            for stat in ("count", "avg", "std", "min", "max"):
+                output_stats[f"population_{stat}"] = population_stats[stat]
+            stem = os.path.join(experiment_dir, f"{label}_evolution_by_{suffix}")
+            output_stats.to_csv(f"{stem}.csv", index=False)
+            _plot_evolution(
+                best_stats,
+                column,
+                label,
+                f"{label.title()} best-of-run evolution by {title_axis}",
+                f"{stem}.jpg",
+                population_stats=population_stats,
+            )
 
     cosine_similarity, ssim_vals = _compute_similarity_metrics(runs)
     final_rows = []
@@ -893,11 +919,41 @@ def aggregate_results(output_folder=None):
         _aggregate_one_experiment(experiment_dir)
 
 
+def _fill_deferred_metrics(experiment_dir, metrics):
+    """Fill selected non-objective metrics before producing aggregate outputs."""
+    from algorithms.fill_zero_weight_metrics import MetricBackfiller, prompt_dirs
+
+    backfiller = MetricBackfiller(config, metrics_to_calculate=metrics)
+    # This pass supplies diagnostics only; preserve optimization objectives.
+    backfiller.recompute_objective = False
+    try:
+        for prompt_dir in prompt_dirs(Path(experiment_dir)):
+            for csv_name, handler in (
+                ("score_results.csv", backfiller.backfill_score_csv),
+                ("fitness_results.csv", backfiller.backfill_fitness_csv),
+            ):
+                csv_path = prompt_dir / csv_name
+                if csv_path.exists():
+                    completed = handler(prompt_dir, csv_path)
+                    completed.to_csv(csv_path, index=False, na_rep="nan")
+                    print(f"Wrote deferred metrics: {csv_path}")
+    finally:
+        backfiller.engine = None
+        Eigo.clear_model_cache()
+
+
 if __name__ == "__main__":
     # Entry point for the script
     # Parses arguments, loads configuration, and starts the optimization process.
 
-    eigo_engine = Eigo(config)
+    optimization_config = dict(config, evaluate_zero_weight_metrics=False)
+    eigo_engine = Eigo(optimization_config)
+    deferred_metrics = (
+        tuple(metric for metric in eigo_engine.zero_weight_metrics
+              if not eigo_engine._should_evaluate_metric(metric))
+        if config.get("evaluate_zero_weight_metrics", False) else ()
+    )
+    experiment_dir = eigo_engine.OUTPUT_FOLDER
 
     seed_number = 1
     for seed in seed_list:
@@ -924,5 +980,11 @@ if __name__ == "__main__":
                 raise ValueError(f"Unknown optimization method: {config['optimization_method']}")
             print(f"Run with seed {seed} and prompt '{prompt}' finished!")
         seed_number += 1
+
+    if deferred_metrics:
+        print(f"Evaluating deferred metrics after all runs: {', '.join(deferred_metrics)}")
+        del eigo_engine
+        Eigo.clear_model_cache()
+        _fill_deferred_metrics(experiment_dir, deferred_metrics)
 
     aggregate_results()

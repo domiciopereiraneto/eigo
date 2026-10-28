@@ -422,9 +422,12 @@ def collect_prompt_values(
     experiment_dir: Path,
     row_selector: str,
     config_metrics,
+    time_limit: Optional[float] = None,
 ) -> Tuple[pd.DataFrame, dict]:
     rows = []
     prompt_configs = []
+    loaded_prompts = []
+    elapsed_frames = []
     for prompt_dir in prompt_dirs(experiment_dir):
         loaded = read_result_csv(prompt_dir)
         if loaded is None:
@@ -434,6 +437,36 @@ def collect_prompt_values(
         if df.empty:
             print(f"Warning: empty result CSV skipped: {csv_path}")
             continue
+
+        if time_limit is not None:
+            if "elapsed_time" not in df.columns:
+                raise ValueError(f"time_limit requires an elapsed_time column: {csv_path}")
+            if step_column not in df.columns:
+                raise ValueError(f"time_limit requires a {step_column} column: {csv_path}")
+            elapsed = pd.to_numeric(df["elapsed_time"], errors="coerce")
+            elapsed_frames.append(pd.DataFrame({
+                "step_column": step_column,
+                "step": df[step_column],
+                "elapsed_time": elapsed.where(np.isfinite(elapsed) & (elapsed >= 0)),
+            }))
+        loaded_prompts.append((prompt_dir, df, csv_path, kind, step_column))
+
+    # Compute the shared budget from full runs before selecting any prompt rows.
+    eligible_steps = {}
+    if time_limit is not None and elapsed_frames:
+        mean_elapsed = pd.concat(elapsed_frames, ignore_index=True).groupby(
+            ["step_column", "step"]
+        )["elapsed_time"].mean()
+        for step_column in mean_elapsed.index.get_level_values("step_column").unique():
+            means = mean_elapsed.xs(step_column, level="step_column")
+            eligible_steps[step_column] = means.index[means <= time_limit]
+
+    for prompt_dir, df, csv_path, kind, step_column in loaded_prompts:
+        if time_limit is not None:
+            df = df[df[step_column].isin(eligible_steps.get(step_column, []))]
+            if df.empty:
+                print(f"Warning: no steps with mean elapsed_time within time_limit={time_limit}s; skipped: {csv_path}")
+                continue
 
         prompt_config = load_prompt_config(prompt_dir)
         if prompt_config:
@@ -592,16 +625,30 @@ def build_quantitative_results(config: dict) -> Tuple[Path, pd.DataFrame, pd.Dat
 
     row_selector = str(config.get("row_selector", "last"))
     config_metrics = config.get("metrics", "canonical")
+    time_limit = config.get("time_limit")
+    if time_limit is not None:
+        try:
+            if isinstance(time_limit, bool):
+                raise ValueError
+            time_limit = float(time_limit)
+        except (TypeError, ValueError):
+            raise ValueError("time_limit must be a finite nonnegative number of seconds or null.") from None
+        if not np.isfinite(time_limit) or time_limit < 0:
+            raise ValueError("time_limit must be a finite nonnegative number of seconds or null.")
     long_rows = []
     wide_rows = []
     prompt_value_frames = []
 
     for experiment_dir in experiment_dirs:
-        prompt_values, run_config = collect_prompt_values(experiment_dir, row_selector, config_metrics)
+        prompt_values, run_config = collect_prompt_values(
+            experiment_dir, row_selector, config_metrics, time_limit
+        )
         if prompt_values.empty:
             print(f"Warning: no prompt values parsed for {experiment_dir}")
             continue
         metadata = experiment_metadata(experiment_dir, run_config)
+        if time_limit is not None:
+            metadata["time_limit_seconds"] = time_limit
         exp_long, exp_wide = summarize_experiment(prompt_values, metadata)
         long_rows.extend(exp_long)
         wide_rows.append(exp_wide)
