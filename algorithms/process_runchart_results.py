@@ -366,16 +366,15 @@ def resolve_time_limit(experiments: Sequence[ExperimentCurves], configured) -> O
     if isinstance(configured, str) and configured.lower() == "shortest":
         experiment_limits = []
         for experiment in experiments:
-            curve_limits = [final_elapsed_time(curve) for curve in experiment.curves]
-            curve_limits = [limit for limit in curve_limits if np.isfinite(limit)]
-            if curve_limits:
-                experiment_limits.append(min(curve_limits))
+            stats = native_time_stats(experiment, None)
+            if not stats.empty:
+                experiment_limits.append(float(stats["elapsed_time_seconds"].max()))
         if not experiment_limits:
             return None
         return float(min(experiment_limits))
     limit = float(configured)
-    if limit < 0:
-        raise ValueError("time_limit must be >= 0, 'shortest', or null.")
+    if not np.isfinite(limit) or limit < 0:
+        raise ValueError("time_limit must be finite and >= 0, 'shortest', or null.")
     return limit
 
 
@@ -405,9 +404,12 @@ def native_nfe_stats(experiment: ExperimentCurves) -> pd.DataFrame:
 def native_time_stats(experiment: ExperimentCurves, time_limit: Optional[float]) -> pd.DataFrame:
     rows = []
     for curve in experiment.curves:
-        valid = np.isfinite(curve.nfe) & np.isfinite(curve.elapsed_time) & np.isfinite(curve.value)
-        if time_limit is not None:
-            valid &= curve.elapsed_time <= time_limit
+        valid = (
+            np.isfinite(curve.nfe)
+            & np.isfinite(curve.elapsed_time)
+            & (curve.elapsed_time >= 0)
+            & np.isfinite(curve.value)
+        )
         rows.extend(
             {"nfe": float(nfe), "elapsed_time": float(elapsed), "value": float(value)}
             for nfe, elapsed, value in zip(curve.nfe[valid], curve.elapsed_time[valid], curve.value[valid])
@@ -415,7 +417,7 @@ def native_time_stats(experiment: ExperimentCurves, time_limit: Optional[float])
     if not rows:
         return pd.DataFrame(columns=["elapsed_time_seconds", "mean", "std", "count", "nfe"])
     values = pd.DataFrame(rows)
-    return (
+    stats = (
         values.groupby("nfe", as_index=False)
         .agg(
             elapsed_time_seconds=("elapsed_time", "mean"),
@@ -426,6 +428,11 @@ def native_time_stats(experiment: ExperimentCurves, time_limit: Optional[float])
         .sort_values("elapsed_time_seconds")
         .reset_index(drop=True)
     )
+    # Apply the budget to shared points after averaging across prompts. A slow
+    # prompt still contributes when the point's mean elapsed time is in budget.
+    if time_limit is not None:
+        stats = stats[stats["elapsed_time_seconds"] <= time_limit]
+    return stats.reset_index(drop=True)
 
 
 def discover_dirs_with_optional_labels(

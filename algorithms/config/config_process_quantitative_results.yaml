@@ -9,27 +9,30 @@
 # Each item can be an experiment folder containing results_* prompt folders, or a
 # parent folder to search recursively for experiment folders.
 experiment_folders:
-  - results_sdxlturbo/results_adam_sdxlturbo_clip
-  - results_sdxlturbo/results_adam_sdxlturbo_hpsv2
-  - results_sdxlturbo/results_adam_sdxlturbo_imagereward
-  - results_sdxlturbo/results_cosyne_sdxlturbo_clip
-  - results_sdxlturbo/results_cosyne_sdxlturbo_hpsv2
-  - results_sdxlturbo/results_cosyne_sdxlturbo_imagereward
-  - results_sdxlturbo/results_ga_sdxlturbo_clip
-  - results_sdxlturbo/results_ga_sdxlturbo_hpsv2
-  - results_sdxlturbo/results_ga_sdxlturbo_image_reward
-  - results_sdxlturbo/results_sepcmaes_sdxlturbo_clip
-  - results_sdxlturbo/results_sepcmaes_sdxlturbo_hpsv2
-  - results_sdxlturbo/results_sepcmaes_sdxlturbo_imagereward
-  - results_sdxlturbo/results_snes_sdxlturbo_clip
-  - results_sdxlturbo/results_snes_sdxlturbo_hpsv2
-  - results_sdxlturbo/results_snes_sdxlturbo_imagereward
-  - results_sdxlturbo/results_zeroorder_sdxlturbo_clip
-  - results_sdxlturbo/results_zeroorder_sdxlturbo_hpsv2
-  - results_sdxlturbo/results_zeroorder_sdxlturbo_image_reward
+  - results_sanasprint/results_adam_sanasprint_clip
+  - results_sanasprint/results_adam_sanasprint_hpsv2
+  - results_sanasprint/results_adam_sanasprint_imagereward
+  - results_sanasprint/results_cmaes_sanasprint_clip
+  - results_sanasprint/results_cmaes_sanasprint_hpsv2
+  - results_sanasprint/results_cmaes_sanasprint_imagereward
+  - results_sanasprint/results_cosyne_sanasprint_clip
+  - results_sanasprint/results_cosyne_sanasprint_hpsv2
+  - results_sanasprint/results_cosyne_sanasprint_imagereward
+  - results_sanasprint/results_ga_sanasprint_clip
+  - results_sanasprint/results_ga_sanasprint_hpsv2
+  - results_sanasprint/results_ga_sanasprint_imagereward
+  #- results_sanasprint/results_snes_sanasprint_clip
+  - results_sanasprint/results_snes_sanasprint_clip_extended
+  #- results_sanasprint/results_snes_sanasprint_hpsv2
+  - results_sanasprint/results_snes_sanasprint_hpsv2_extended
+  #- results_sanasprint/results_snes_sanasprint_imagereward
+  - results_sanasprint/results_snes_sanasprint_imagereward_extended
+  - results_sanasprint/results_zeroorder_sanasprint_clip
+  - results_sanasprint/results_zeroorder_sanasprint_hpsv2
+  - results_sanasprint/results_zeroorder_sanasprint_imagereward
 
 # Output workbook. CSV mirrors are written beside this file.
-output_excel: results_quantitative_sdxlturbo/quantitative_results_sdxlturbo.xlsx
+output_excel: results_quantitative_sanasprint/quantitative_results_sanasprint_truncated.xlsx
 
 # Which row to use from each prompt-level CSV before aggregating across prompts:
 #   last: final row in the CSV
@@ -46,7 +49,7 @@ row_selector: best
 # skipped with a warning; missing elapsed_time or step columns raise an error.
 # Summaries and pairwise tests use the selected rows within this budget.
 # Example: time_limit: 60. Set null to use the full runs.
-time_limit: null
+time_limit: 130
 
 # canonical summarizes objective, aesthetic_score, clip_score, image_reward_score,
 # hpsv2_score, pickscore_score, jpeg_size_kb, elapsed_time, and peak_vram_mb when

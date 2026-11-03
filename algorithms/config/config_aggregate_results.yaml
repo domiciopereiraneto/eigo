@@ -1,0 +1,15 @@
+# Regenerate the Excel workbook, summary/evolution CSVs, plots, and image grids
+# produced at the end of run_experiments.py. Existing outputs are overwritten.
+# Run: python algorithms/aggregate_results.py --config algorithms/config/config_aggregate_results.yaml
+#
+# List experiment folders containing results_* prompt directories, or parent
+# folders to search recursively. Overlapping entries are processed only once.
+# Relative paths are resolved from the repository root; absolute paths work too.
+# Outputs are written inside each discovered experiment folder.
+# Uses saved score_results.csv / fitness_results.csv and it_0 / best_all images;
+# it does not backfill metrics in the input CSVs. Similarity evaluation uses
+# CLIP ViT-B/32 (CPU or CUDA); if unavailable, similarity values are NaN.
+experiment_folders:
+  - results_sanasprint/results_adam_sanasprint_clip
+  - results_sanasprint/results_adam_sanasprint_hpsv2
+  - results_sanasprint/results_adam_sanasprint_imagereward

@@ -205,6 +205,20 @@ python algorithms/process_quantitative_results.py \
 
 This writes `quantitative_summary_long.csv`, `quantitative_summary_wide.csv`, `quantitative_prompt_values.csv`, and an Excel workbook.
 
+To regenerate the Excel workbook, evolution plots, summary CSVs, similarity
+boxplot, and image grids normally produced at the end of `run_experiments.py`,
+set `experiment_folders` in `algorithms/config/config_aggregate_results.yaml`:
+
+```bash
+python algorithms/aggregate_results.py --config algorithms/config/config_aggregate_results.yaml
+```
+
+Entries can be experiment folders or parent folders searched recursively.
+Relative paths are resolved from the repository root. Outputs are overwritten
+inside each discovered experiment folder using its saved CSVs and images.
+Similarity metrics require CLIP and scikit-image; unavailable similarity metrics
+are filled with NaN, as in the experiment runner.
+
 Runcharts:
 
 ```bash

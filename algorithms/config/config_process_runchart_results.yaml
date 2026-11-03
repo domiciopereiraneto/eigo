@@ -9,25 +9,27 @@
 # Each item can be an experiment folder containing results_* prompt folders, or a
 # parent folder to search recursively for experiment folders.
 experiment_folders:
-  #- results_sdxlturbo/results_adam_sdxlturbo_clip
-  - results_sdxlturbo/results_adam_sdxlturbo_hpsv2
-  #- results_sdxlturbo/results_adam_sdxlturbo_imagereward
-  #- results_sdxlturbo/results_zeroorder_sdxlturbo_clip
-  - results_sdxlturbo/results_zeroorder_sdxlturbo_hpsv2
-  #- results_sdxlturbo/results_zeroorder_sdxlturbo_image_reward
-  #- results_sdxlturbo/results_cosyne_sdxlturbo_clip
-  - results_sdxlturbo/results_cosyne_sdxlturbo_hpsv2
-  #- results_sdxlturbo/results_cosyne_sdxlturbo_imagereward
-  #- results_sdxlturbo/results_ga_sdxlturbo_clip
-  - results_sdxlturbo/results_ga_sdxlturbo_hpsv2
-  #- results_sdxlturbo/results_ga_sdxlturbo_image_reward
-  #- results_sdxlturbo/results_sepcmaes_sdxlturbo_clip
-  - results_sdxlturbo/results_sepcmaes_sdxlturbo_hpsv2
-  #- results_sdxlturbo/results_sepcmaes_sdxlturbo_imagereward
-  #- results_sdxlturbo/results_snes_sdxlturbo_clip
-  - results_sdxlturbo/results_snes_sdxlturbo_hpsv2
-  #- results_sdxlturbo/results_snes_sdxlturbo_imagereward
-
+  #- results_sanasprint/results_adam_sanasprint_clip
+  #- results_sanasprint/results_adam_sanasprint_hpsv2
+  - results_sanasprint/results_adam_sanasprint_imagereward
+  #- results_sanasprint/results_zeroorder_sanasprint_clip
+  #- results_sanasprint/results_zeroorder_sanasprint_hpsv2
+  - results_sanasprint/results_zeroorder_sanasprint_imagereward
+  #- results_sanasprint/results_cosyne_sanasprint_clip
+  #- results_sanasprint/results_cosyne_sanasprint_hpsv2
+  - results_sanasprint/results_cosyne_sanasprint_imagereward
+  #- results_sanasprint/results_ga_sanasprint_clip
+  #- results_sanasprint/results_ga_sanasprint_hpsv2
+  - results_sanasprint/results_ga_sanasprint_imagereward
+  #- results_sanasprint/results_cmaes_sanasprint_clip
+  #- results_sanasprint/results_cmaes_sanasprint_hpsv2
+  - results_sanasprint/results_cmaes_sanasprint_imagereward
+  #- results_sanasprint/results_snes_sanasprint_clip
+  #- results_sanasprint/results_snes_sanasprint_hpsv2
+  - results_sanasprint/results_snes_sanasprint_imagereward
+  #- results_sanasprint/results_snes_sanasprint_clip_extended
+  - results_sanasprint/results_snes_sanasprint_imagereward_extended
+  #- results_sanasprint/results_snes_sanasprint_hpsv2_extended
 
 # Optional labels for experiment_folders. If provided, this list must have one
 # label for each active experiment_folders entry.
@@ -38,6 +40,7 @@ experiment_labels:
   - "GA"
   - "sep-CMA-ES"
   - "SNES"
+  - "SNES (extended)"
 
 
 # Optional matplotlib markers for experiment_folders. If provided, this list
@@ -45,6 +48,7 @@ experiment_labels:
 experiment_markers:
   - "^"
   - "^"
+  - "o"
   - "o"
   - "o"
   - "o"
@@ -60,7 +64,7 @@ constant_labels:
   # - "Best-of-N"
   # - "Best-of-N (DPO)"
 
-save_folder: results_runcharts_sdxlturbo
+save_folder: results_runcharts_sanasprint
 clean_output: false
 
 # Valid canonical metric names include:
@@ -68,8 +72,8 @@ clean_output: false
 # pickscore_score, jpeg_size_kb, elapsed_time, peak_vram_mb.
 metrics:
   #- clip_score
-  #- image_reward_score
-  - hpsv2_score
+  - image_reward_score
+  #- hpsv2_score
   #- pickscore_score
 
 # true plots the best-so-far value for each prompt run before aggregating.
@@ -90,14 +94,17 @@ nfe_xscale: linear
 # that experiment.
 
 # Time axis limit:
-#   shortest: use the shortest valid elapsed-time coverage across experiments
+# Aggregate prompts at each native NFE point first, then retain points whose
+# mean elapsed time is <= the limit. Individual prompt times may exceed it;
+# those prompts still contribute to the point's mean, std, and count.
+#   shortest: use the shortest aggregated elapsed-time coverage across experiments
 #   null: no truncation; plot through the longest available elapsed time
 #   number: use that many seconds
 time_limit: null
 
 # Draw a dashed red vertical line on time charts at this many seconds.
 # For example, use 400 to mark 400 seconds; null disables the line.
-time_vertical_line_seconds: 88
+time_vertical_line_seconds: 130
 
 label_template: "{algorithm}"
 figure_width: 6.0
