@@ -254,7 +254,9 @@ def read_metric_lines(
         return tuple(MetricCaption(metric, "n/a", None) for metric in metrics)
 
 
-def highlight_prompt_metric_maxima(cells_by_run: list[list[GridCell]]) -> list[list[GridCell]]:
+def highlight_prompt_metric_maxima(
+    cells_by_run: list[list[GridCell]], excluded_run_indices: Sequence[int] = (),
+) -> list[list[GridCell]]:
     if not cells_by_run:
         return cells_by_run
 
@@ -268,8 +270,9 @@ def highlight_prompt_metric_maxima(cells_by_run: list[list[GridCell]]) -> list[l
         for metric_pos in range(metric_count):
             values = [
                 row[prompt_pos].metric_lines[metric_pos].numeric_value
-                for row in highlighted
-                if prompt_pos < len(row)
+                for row_idx, row in enumerate(highlighted)
+                if row_idx not in excluded_run_indices
+                and prompt_pos < len(row)
                 and metric_pos < len(row[prompt_pos].metric_lines)
                 and row[prompt_pos].metric_lines[metric_pos].numeric_value is not None
             ]
@@ -277,6 +280,8 @@ def highlight_prompt_metric_maxima(cells_by_run: list[list[GridCell]]) -> list[l
                 continue
             max_value = max(values)
             for row_idx, row in enumerate(highlighted):
+                if row_idx in excluded_run_indices:
+                    continue
                 if prompt_pos >= len(row) or metric_pos >= len(row[prompt_pos].metric_lines):
                     continue
                 metric = row[prompt_pos].metric_lines[metric_pos]
@@ -365,10 +370,14 @@ def create_grid(
     metric_font_size: int,
     metric_precision: int,
     metric_gap: int,
+    prompt_row_labels: Optional[Sequence[str]] = None,
+    excluded_highlight_labels: Sequence[str] = (),
 ) -> tuple[int, int]:
     valid_layouts = {"prompt_x_algorithm", "algorithm_x_prompt"}
     if layout not in valid_layouts:
         raise ValueError(f"layout must be one of {sorted(valid_layouts)}, got: {layout}")
+    if prompt_row_labels is not None and len(prompt_row_labels) != len(prompt_indices):
+        raise ValueError("prompt_row_labels must have one label per prompt row.")
 
     prompt_texts: dict[int, str] = {}
     row_labels: list[str] = []
@@ -427,7 +436,10 @@ def create_grid(
         cells_by_run.append(row)
 
     if image_metrics:
-        cells_by_run = highlight_prompt_metric_maxima(cells_by_run)
+        cells_by_run = highlight_prompt_metric_maxima(
+            cells_by_run,
+            [idx for idx, label in enumerate(row_labels) if label in excluded_highlight_labels],
+        )
 
     tile_w, tile_h = tile_size
     prompt_font = load_font(prompt_font_size, bold=True)
@@ -514,7 +526,13 @@ def create_grid(
         y = margin + algorithm_header_height
         for prompt_idx, prompt_index in enumerate(prompt_indices):
             prompt_text = prompt_texts.get(prompt_index, str(prompt_index))
-            lines = wrap_text(draw, prompt_text, prompt_font, prompt_label_width - 10, max_lines=5)
+            lines = []
+            if prompt_row_labels is not None:
+                lines.extend(wrap_text(draw, prompt_row_labels[prompt_idx], prompt_font, prompt_label_width - 10))
+            lines.extend(wrap_text(
+                draw, prompt_text, prompt_font, prompt_label_width - 10,
+                max_lines=8 if prompt_row_labels is not None else 5,
+            ))
             text_h = sum(text_size(draw, line, prompt_font)[1] + 2 for line in lines)
             draw_centered_text(
                 draw,

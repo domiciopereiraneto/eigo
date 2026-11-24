@@ -19,6 +19,17 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = Path(__file__).resolve().parent / "config/config_aggregate_results.yaml"
+RUN_METRICS = (
+    "aesthetic",
+    "clip",
+    "image_reward",
+    "hpsv2",
+    "pickscore",
+    "jpeg_size",
+    "ensemble",
+    "objective",
+    "vram",
+)
 
 
 def _first_non_empty(series):
@@ -138,36 +149,52 @@ def _load_result_runs(experiment_dir):
     for run in runs:
         valid = np.isfinite(run["x"]) & np.isfinite(run["time"])
         valid = valid & np.isfinite(run["aesthetic"]) & np.isfinite(run["clip"]) & np.isfinite(run["objective"])
+        # The initial image (it_0 / step 0) is kept only for display; it never
+        # counts towards statistics or best-individual selection.
+        initial_rows = np.flatnonzero(valid & (run["x"] == 0))
+        initial = None
+        if initial_rows.size:
+            initial = {metric: float(run[metric][initial_rows[0]]) for metric in RUN_METRICS}
+        valid = valid & (run["x"] > 0)
         if valid.sum() == 0:
             continue
-        metric_values = {
-            metric: run[metric][valid]
-            for metric in (
-                "aesthetic",
-                "clip",
-                "image_reward",
-                "hpsv2",
-                "pickscore",
-                "jpeg_size",
-                "ensemble",
-                "objective",
-                "vram",
-            )
-        }
+        metric_values = {metric: run[metric][valid] for metric in RUN_METRICS}
         population_metrics = run["population_metrics"]
         if population_metrics is not None:
             population_metrics = {
                 metric: values[valid]
                 for metric, values in population_metrics.items()
             }
-        cleaned_runs.append({
+        cleaned = {
             **run,
             "x": run["x"][valid],
             "time": run["time"][valid],
             **metric_values,
             "population_metrics": population_metrics,
-        })
+            "initial": initial,
+        }
+        cleaned["best_so_far_idx"] = _best_so_far_indices(
+            cleaned["objective"], minimize=cleaned["objective_name"] == "loss"
+        )
+        cleaned["best_idx"] = int(cleaned["best_so_far_idx"][-1])
+        cleaned_runs.append(cleaned)
     return cleaned_runs
+
+
+def _best_so_far_indices(objective, minimize):
+    """Index of the best individual (by objective) seen up to each step."""
+    indices = np.empty(len(objective), dtype=int)
+    best = 0
+    for i, value in enumerate(objective):
+        if (value < objective[best]) if minimize else (value > objective[best]):
+            best = i
+        indices[i] = best
+    return indices
+
+
+def _best_value(run, metric):
+    """Metric value of the run's best individual (selected by objective)."""
+    return float(run[metric][run["best_idx"]])
 
 
 def _stack_on_axis(runs, key, axis_key, axis_values):
@@ -329,7 +356,8 @@ def _grid_draw_centered(draw, lines, font, x0, x1, y, fill=(25, 25, 25)):
     return len(lines) * line_height
 
 
-def _grid_metric_lines(run, index, objective_name, max_width, draw, font):
+def _grid_metric_lines(run, which, objective_name, max_width, draw, font):
+    """`which` is "initial" (it_0 values) or "best" (best individual)."""
     metric_specs = [
         (objective_name.title(), "objective"),
         ("Aes", "aesthetic"),
@@ -342,11 +370,14 @@ def _grid_metric_lines(run, index, objective_name, max_width, draw, font):
     ]
     parts = []
     for label, key in metric_specs:
-        value = float(run[key][index])
+        if which == "initial":
+            value = (run["initial"] or {}).get(key, np.nan)
+        else:
+            value = _best_value(run, key)
         if np.isfinite(value):
             parts.append(f"{label}: {value:.4g}")
 
-    if index == -1:
+    if which == "best":
         elapsed = float(run["time"][-1])
         if np.isfinite(elapsed):
             parts.append(f"Time: {elapsed:.2f}s")
@@ -415,10 +446,10 @@ def _save_aggregate_image_grids(runs, objective_name, experiment_dir, rows_per_p
                 heading = f"{heading} ({' | '.join(details)})"
             prompt_lines = _grid_wrap_text(scratch_draw, heading, prompt_font, grid_w)
             initial_lines = ["Initial"] + _grid_metric_lines(
-                run, 0, objective_name, tile_w, scratch_draw, metric_font
+                run, "initial", objective_name, tile_w, scratch_draw, metric_font
             )
             best_lines = ["Best"] + _grid_metric_lines(
-                run, -1, objective_name, tile_w, scratch_draw, metric_font
+                run, "best", objective_name, tile_w, scratch_draw, metric_font
             )
             title_line_count = max(len(initial_lines), len(best_lines))
             prompt_h = len(prompt_lines) * prompt_line_height
@@ -533,7 +564,7 @@ def _final_metrics_workbook_frames(runs, objective_name):
                 "peak_vram_mb": float(np.nanmax(run["vram"])) if np.isfinite(run["vram"]).any() else np.nan,
                 "metric": label,
                 "population": population_value,
-                "best_solution": float(run[metric][-1]),
+                "best_solution": _best_value(run, metric),
             })
             sample_values = _all_sample_metric_values(run, metric)
             for x_value, elapsed_time, sample_value in zip(run["x"], run["time"], sample_values):
@@ -589,9 +620,14 @@ def _aggregate_one_experiment(experiment_dir):
 
     axis_name = x_labels[0]
     objective_name = objective_names[0]
-    x_axis = np.arange(0, int(max(np.max(run["x"]) for run in runs)) + 1)
+    # Step 0 (the initial image) is excluded from the runs, so axes start after it.
+    x_axis = np.arange(
+        int(min(np.min(run["x"]) for run in runs)),
+        int(max(np.max(run["x"]) for run in runs)) + 1,
+    )
+    min_time = min(np.min(run["time"]) for run in runs)
     max_time = max(np.max(run["time"]) for run in runs)
-    time_axis = np.linspace(0, max_time, 200) if max_time > 0 else np.array([0.0])
+    time_axis = np.linspace(min_time, max_time, 200) if max_time > min_time else np.array([max_time])
 
     metric_labels = [
         ("aesthetic", "aesthetic"),
@@ -608,8 +644,8 @@ def _aggregate_one_experiment(experiment_dir):
         if not any(np.isfinite(run[metric]).any() for run in runs):
             print(f"Skipping {label} aggregation because no values were found.")
             continue
-        # Keep population values at each step and accumulate the best observed
-        # score independently per run before calculating statistics across runs.
+        # The "best" series follows the best individual so far (selected by
+        # objective), so every metric comes from the same individual.
         plot_runs = []
         for run in runs:
             population = run["population_metrics"]
@@ -617,14 +653,10 @@ def _aggregate_one_experiment(experiment_dir):
                 population[metric] if population is not None and metric in population
                 else run[metric]
             )
-            minimize = metric == "jpeg_size" or (metric == "objective" and objective_name == "loss")
-            best = pd.Series(run[metric])
-            if metric != "vram":
-                best = best.cummin() if minimize else best.cummax()
-                best = best.ffill()
+            best = run[metric] if metric == "vram" else run[metric][run["best_so_far_idx"]]
             plot_runs.append({
                 **run,
-                "best": best.to_numpy(dtype=float),
+                "best": np.asarray(best, dtype=float),
                 "population": population_values,
             })
 
@@ -659,14 +691,10 @@ def _aggregate_one_experiment(experiment_dir):
         final_rows.append({
             "prompt": run["prompt"],
             "category": run["category"],
-            "aesthetic": float(run["aesthetic"][-1]),
-            "clip": float(run["clip"][-1]),
-            "image_reward": float(run["image_reward"][-1]),
-            "hpsv2": float(run["hpsv2"][-1]),
-            "pickscore": float(run["pickscore"][-1]),
-            "jpeg_size": float(run["jpeg_size"][-1]),
-            "ensemble": float(run["ensemble"][-1]),
-            "objective": float(run["objective"][-1]),
+            **{
+                metric: _best_value(run, metric)
+                for metric in RUN_METRICS if metric != "vram"
+            },
             "peak_vram_mb": float(np.nanmax(run["vram"])) if np.isfinite(run["vram"]).any() else np.nan,
             "cosine_similarity": cos_sim,
             "ssim": ssim_value,
