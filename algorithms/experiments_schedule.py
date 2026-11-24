@@ -3,6 +3,12 @@
 
 Each schedule entry is recursively merged into the base run_experiments.py config,
 written to a temporary YAML file, and executed as one batch job.
+
+A schedule entry may set ``config_file`` to the path of another config YAML. That
+file is merged on top of the base config first, and the entry's remaining keys are
+then merged on top of it, so inline parameters always take precedence. Relative
+paths are resolved against the current working directory, falling back to the
+schedule file's directory.
 """
 
 import argparse
@@ -28,6 +34,38 @@ def deep_update(base: dict, updates: dict) -> dict:
         else:
             base[key] = value
     return base
+
+
+CONFIG_FILE_KEY = "config_file"
+
+
+def resolve_config_file(path_str, schedule_dir: Path) -> Path:
+    """Resolve a run's config_file path (cwd first, then schedule directory)."""
+    path = Path(path_str).expanduser()
+    if path.is_absolute():
+        candidates = [path]
+    else:
+        candidates = [Path.cwd() / path, schedule_dir / path]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.resolve()
+    raise FileNotFoundError(
+        f"Run config_file not found: {path_str} (tried: {', '.join(str(c) for c in candidates)})"
+    )
+
+
+def build_run_config(base_config: dict, override: dict, schedule_dir: Path) -> dict:
+    """Merge base config <- optional config_file <- inline overrides."""
+    run_config = copy.deepcopy(base_config)
+    override = dict(override)
+    config_file = override.pop(CONFIG_FILE_KEY, None)
+    if config_file:
+        config_path = resolve_config_file(config_file, schedule_dir)
+        file_config = load_yaml(config_path) or {}
+        if not isinstance(file_config, dict):
+            raise ValueError(f"Config file must load to a dictionary: {config_path}")
+        deep_update(run_config, copy.deepcopy(file_config))
+    return deep_update(run_config, copy.deepcopy(override))
 
 
 def parse_schedule(data):
@@ -76,7 +114,7 @@ def run_schedule(args):
         tmpdir_path = Path(tmpdir)
 
         for idx, override in enumerate(runs, start=1):
-            run_config = deep_update(copy.deepcopy(base_config), override)
+            run_config = build_run_config(base_config, override, schedule_path.parent)
             run_config_path = tmpdir_path / f"run_{idx:03d}.yaml"
 
             with run_config_path.open("w", encoding="utf-8") as f:

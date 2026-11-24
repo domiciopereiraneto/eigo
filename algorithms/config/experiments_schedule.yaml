@@ -3,6 +3,15 @@
 # Each item in runs is recursively merged onto config_run_experiments.yaml before
 # launching run_experiments.py. Put tuned algorithm parameters and objective
 # weights here, while keeping shared prompt/model defaults in the base config.
+#
+# Optionally set config_file to a config YAML path. Merge order for that run is:
+#   config_run_experiments.yaml -> config_file -> the run's other keys
+# so any parameter given inline still overrides the value in config_file.
+# Relative paths resolve from the cwd, falling back to this file's directory.
+#
+#  - config_file: "algorithms/config/my_other_config.yaml"
+#    cuda: 0
+#    results_folder: "results_from_other_config"
 
 runs:
   # - optimization_method: "cmaes"
